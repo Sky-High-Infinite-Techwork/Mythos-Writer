@@ -417,8 +417,15 @@ export default function BlockEditor({ scene, onBlocksChange, onDraftStateChange,
     if (!linkerState) return;
     const range = collectAutoLinkerRanges(editor.state.doc, linkerState.entities)
       .find((r) => r.from <= from && from < r.to && `[[${r.target}]]` === link);
-    const wikiNode = range && editor.schema.nodes['wikiLink']?.create({ target: range.target });
-    if (!range || !wikiNode) return;
+    if (!range) return;
+    // Alias and case-insensitive matches keep the author's text as the alias
+    // ([[Elara Voss|Elara]]), as autoLinkText's wikiLinkFor does.
+    const anchor = editor.state.doc.textBetween(range.from, range.to);
+    const wikiNode = editor.schema.nodes['wikiLink']?.create({
+      target: range.target,
+      alias: anchor !== range.target ? anchor : null,
+    });
+    if (!wikiNode) return;
     editor.view.dispatch(closeHistory(editor.state.tr.replaceWith(range.from, range.to, wikiNode)));
   };
 

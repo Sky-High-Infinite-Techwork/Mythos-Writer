@@ -11,6 +11,7 @@ import { WikiLink } from './WikiLinkExtension';
 import { installActWarningGuard } from './testActWarningGuard';
 import { __resetPrismStoresForTests, prismLiveStore, prismSettingsStore } from './prism/store';
 import { PRISM_RESCAN_DEBOUNCE_MS } from './prism/PrismExtension';
+import { getEditorMarkdown } from './lib/useRichEditor';
 
 installActWarningGuard();
 
@@ -568,6 +569,75 @@ describe('BlockEditor wiki-link hint Accept', () => {
     // Let Prism's debounced rescan land before cleanup unmounts the editor: an
     // unmount inside that window after any doc-shrinking edit trips a separate,
     // pre-existing Prism snippet bug (stale scan offsets on plugin-view rebuild).
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, PRISM_RESCAN_DEBOUNCE_MS + 50));
+    });
+  });
+
+  it.each([
+    ['an alias', 'Elara smiled.', '[[Elara Voss|Elara]] smiled.'],
+    ['a lowercase mention', 'elara voss smiled.', '[[Elara Voss|elara voss]] smiled.'],
+  ])('auto-linker Accept on %s keeps the visible text and links it as an alias', async (_case, prose, expected) => {
+    let editorApi: { getMarkdown: () => string } | undefined;
+    const { container } = render(
+      <BlockEditor
+        scene={sceneWith(prose)}
+        onBlocksChange={vi.fn()}
+        onDraftStateChange={vi.fn()}
+        onEditorReady={(api) => { editorApi = api; }}
+        autoLinkerEntities={[{ ...elara, aliases: ['Elara'] }]}
+      />
+    );
+
+    await waitFor(() => expect(container.querySelector('.archive-wl-hint')).not.toBeNull());
+    const visibleBefore = container.querySelector('.ProseMirror')!.textContent;
+
+    fireEvent.mouseOver(container.querySelector('.archive-wl-hint') as HTMLElement);
+    fireEvent.mouseDown(await screen.findByRole('button', { name: 'Accept wiki-link [[Elara Voss]]' }));
+
+    expect(editorApi!.getMarkdown()).toContain(expected);
+    expect(container.querySelector('.ProseMirror')!.textContent).toBe(visibleBefore);
+    // Same pre-existing Prism snippet bug as above: let the rescan land first.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, PRISM_RESCAN_DEBOUNCE_MS + 50));
+    });
+  });
+
+  it('auto-linker Accept right after typing is its own undo step', async () => {
+    let liveEditor: Editor | null = null;
+    render(
+      <BlockEditor
+        scene={sceneWith('Elara Voss')}
+        onBlocksChange={vi.fn()}
+        onDraftStateChange={vi.fn()}
+        onLiveEditorChange={(ed) => { liveEditor = ed; }}
+        autoLinkerEntities={[elara]}
+      />
+    );
+
+    await waitFor(() => expect(document.querySelector('.archive-wl-hint')).not.toBeNull());
+    fireEvent.mouseOver(document.querySelector('.archive-wl-hint') as HTMLElement);
+    const accept = await screen.findByRole('button', { name: 'Accept wiki-link [[Elara Voss]]' });
+    const ed = liveEditor as unknown as Editor;
+
+    // Type next to the name and Accept in the same tick: without closeHistory
+    // the two edits are adjacent and inside newGroupDelay, so they would share
+    // one undo step.
+    let nameEnd = -1;
+    ed.state.doc.descendants((node, pos) => {
+      if (nameEnd < 0 && node.isText && node.text?.includes('Elara Voss')) {
+        nameEnd = pos + node.text.indexOf('Elara Voss') + 'Elara Voss'.length;
+      }
+    });
+    act(() => {
+      ed.view.dispatch(ed.state.tr.insertText(' smiled.', nameEnd));
+      fireEvent.mouseDown(accept);
+    });
+    expect(getEditorMarkdown(ed)).toContain('[[Elara Voss]] smiled.');
+
+    act(() => { ed.commands.undo(); });
+    expect(getEditorMarkdown(ed)).toContain('Elara Voss smiled.');
+    expect(getEditorMarkdown(ed)).not.toContain('[[');
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, PRISM_RESCAN_DEBOUNCE_MS + 50));
     });
