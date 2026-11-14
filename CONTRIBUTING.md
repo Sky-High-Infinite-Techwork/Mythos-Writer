@@ -12,6 +12,21 @@ Full details: [`docs/code-review-rubric.md`](docs/code-review-rubric.md) · Sour
 
 ---
 
+## Claiming work (build order)
+
+Features are numbered in build order. The number is the label `order:NN` on the issue and the `Build order` field on the
+[Mythos Writer project](https://github.com/orgs/Sky-High-Infinite-Techwork/projects/1). Take the lowest number whose
+dependencies are merged. A bug has a number only when it must be fixed before that item.
+
+- **Assigned means building it right now.** An assignee with no open PR, branch commit or comment for 24 hours is
+  unassigned automatically. Do not claim a job to hold it.
+- **Work-in-progress cap per team:** Ivy's team 2 (one hot-file feature plus one side job), Killer's team 3.
+  Over the cap, finish or release one before you claim another.
+- **Ivy's team** items are assigned by the dispatcher when the previous item merges. **Killer's team** assigns itself.
+- Full rules: `TEAMWORK.md` and `docs/BUILD-ORDER-AND-DISPATCH.md` in the private Mythos-Ops repo.
+
+---
+
 ## Merge Policy
 
 All changes to `main` must go through a pull request that passes every required
