@@ -1,5 +1,8 @@
 # Mythos Writer — agent rules
 
+## Claude sessions (standing rule, Skyy 2026-11-14)
+Every Claude session starts from this line: *Use subagent fan-out liberally. Always use the right agent/model at the right effort for each job. You may use Fable 5.2 and Ultracode when necessary.* Opus 5.5 leads plans, builds, reviews, fixes and small jobs and hands cheap parts to Haiku or Sonnet subagents. Only the tiniest jobs (rebase, lint or format fix, one-line change, label or assign ops) run straight on Sonnet or Haiku. Claim an issue only while you are building it (see `CONTRIBUTING.md`, "Claiming work").
+
 ## Source of truth
 - The task's dispatch (plan slice + design delta) sets scope. Don't add surfaces it doesn't name.
 - Owner decisions: `plans/ProjectGoalOverView/00-decisions-log.md`. Design: `plans/design-handoff/v2/`; the prototype wins any disagreement with `FULL-SPEC.md`.
