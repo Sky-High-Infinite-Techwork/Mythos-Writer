@@ -1,7 +1,7 @@
 // Slice B — unified partner shell tests (replaces four-agent hub assertions).
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi, afterEach, beforeEach, describe, it, expect } from 'vitest';
-import AgentHubPanel, { resolveAgentStatus } from './AgentHubPanel';
+import AgentHubPanel, { NotesAndAnalysisTab, resolveAgentStatus } from './AgentHubPanel';
 import { __resetAgentSessionStores } from './lib/useAgentSessions';
 import { resetAiActivityForTests } from './agents/aiActivity';
 import { resetBrainstormActivityForTests } from './agents/brainstormActivity';
@@ -187,8 +187,8 @@ describe('AgentHubPanel — Slice B partner shell', () => {
     expect(screen.getByTestId('ahp-tab-notes-analysis')).toBeInTheDocument();
   });
 
-  it('widget shell (hidePageTabs): no Scenes or Notes & Analysis tab, and a continuity scan stays on the partner', async () => {
-    render(<AgentHubPanel scene={makeScene()} hidePageTabs />);
+  it('widget shell (hidePageTabs): no Scenes or Notes & Analysis tab, and the hub leaves a continuity scan to the edPanel', async () => {
+    const { rerender } = render(<AgentHubPanel scene={makeScene()} hidePageTabs />);
     expect(screen.getByTestId('ahp-tab-partner')).toBeInTheDocument();
     expect(screen.getByTestId('ahp-tab-suggestions')).toBeInTheDocument();
     expect(screen.queryByTestId('ahp-tab-scenes')).not.toBeInTheDocument();
@@ -197,6 +197,30 @@ describe('AgentHubPanel — Slice B partner shell', () => {
     expect(await screen.findByTestId('partner-card')).toBeInTheDocument();
     expect(screen.getByTestId('ahp-tab-partner')).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByTestId('ahp-notes-analysis')).not.toBeInTheDocument();
+    // The hub did not claim the scan (it opens in the edPanel's Notes & Analysis tab), so it kept its own tab.
+    rerender(<AgentHubPanel scene={makeScene()} />);
+    expect(screen.getByTestId('ahp-tab-partner')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByTestId('ahp-notes-analysis')).not.toBeInTheDocument();
+    // Flag off: the scan still lands on the hub's Notes & Analysis tab.
+    act(() => { window.dispatchEvent(new CustomEvent('mythos:open-continuity-scan')); });
+    expect(screen.getByTestId('ahp-tab-notes-analysis')).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByTestId('ahp-notes-analysis')).toBeInTheDocument();
+  });
+
+  it('NotesAndAnalysisTab (edPanel, widget shell) mounts the full hub content with its continuity panel', () => {
+    render(
+      <NotesAndAnalysisTab
+        scene={makeScene()}
+        referencesPanel={<div data-testid="refs-stub" />}
+        continuityPanel={<div data-testid="continuity-stub" />}
+      />,
+    );
+    const tab = screen.getByTestId('ahp-notes-analysis');
+    expect(within(tab).getByLabelText('Scene Analysis')).toBeInTheDocument();
+    expect(within(tab).getByTestId('view-full-analysis')).toBeInTheDocument();
+    expect(within(tab).getByTestId('questions-for-you')).toBeInTheDocument();
+    expect(within(tab).getByTestId('refs-stub')).toBeInTheDocument();
+    expect(within(tab).getByTestId('continuity-stub')).toBeInTheDocument();
   });
 
   it('widget shell (hidePageTabs) + AI off: no tabs and no page panels in the sidebar', () => {

@@ -230,9 +230,11 @@ test.describe('Shell relayout — M4 workspace tab strip visibility', () => {
 //
 // Widget shell beta flag ON (seeded `widgetShell: true`; W1 has no toggle and writes no settings):
 //   - Story Editor opens with the Story Navigator inside the page and a page-only inspector
-//     (`edPanel`: Scenes + Notes & Analysis; no Findings / Suggestions / partner).
+//     (`edPanel`: Scenes + the hub's full Notes & Analysis tab; no Findings / Suggestions / partner).
+//   - The toolbar Continuity scan expands `edPanel` on Notes & Analysis.
 //   - The right sidebar holds the global partner only (no Scenes / Notes & Analysis tabs); its Add
 //     menu splits Global vs This page, lists Findings as a full global panel, and never lists Beta.
+//     "On this page" counts only panels W1 renders there (other pages list theirs as inert).
 //   - Brainstorm shows the Idea Board with no page-level partner chat face.
 //   - Keyboard collapse works and the editor is never remounted (remount count 0).
 //   - Focus mode hides the inspector like the right sidebar.
@@ -355,6 +357,29 @@ test.describe('W1 widget shell ON — page panels open inside their page', () =>
     await inspector.getByRole('tab', { name: 'Notes & Analysis' }).click();
     await expect(inspector.getByRole('tab', { name: 'Notes & Analysis' })).toHaveAttribute('aria-selected', 'true');
     await expect(inspector.getByTestId('agent-hub-panel')).toHaveCount(0);
+    // It is the hub's full tab: scene analysis, the vault's open questions and the continuity panel.
+    const notesAnalysis = inspector.getByTestId('ahp-notes-analysis');
+    await expect(notesAnalysis).toBeVisible();
+    await expect(notesAnalysis.getByRole('region', { name: 'Scene Analysis' })).toBeVisible();
+    await expect(notesAnalysis.getByTestId('view-full-analysis')).toBeVisible();
+    await expect(notesAnalysis.getByTestId('questions-for-you')).toBeVisible();
+    await expect(notesAnalysis.getByTestId('cp-scan-scene-picker')).toBeVisible({ timeout: 6_000 });
+  });
+
+  test('toolbar Continuity scan expands the Editor inspector on Notes & Analysis', async () => {
+    const { page } = session!;
+    const inspector = editorInspector(page);
+    await inspector.getByRole('tab', { name: 'Scenes' }).click();
+    await inspector.getByRole('button', { name: 'Collapse Editor inspector' }).click();
+    await expect(inspector.getByRole('button', { name: 'Expand Editor inspector' })).toHaveAttribute('aria-expanded', 'false');
+
+    await page.getByTestId('msv-continuity-scan-btn').click();
+    await expect(inspector.getByRole('button', { name: 'Collapse Editor inspector' })).toHaveAttribute('aria-expanded', 'true');
+    await expect(inspector.getByRole('tab', { name: 'Notes & Analysis' })).toHaveAttribute('aria-selected', 'true');
+    await expect(inspector.getByTestId('ahp-notes-analysis').getByTestId('cp-scan-scene-picker')).toBeVisible({ timeout: 6_000 });
+    // The sidebar stays on the global partner; the scan never lands on a hidden hub tab.
+    await expect(sidebar(page).getByTestId('ahp-tab-partner')).toHaveAttribute('aria-selected', 'true');
+    await expect(sidebar(page).getByTestId('ahp-notes-analysis')).toHaveCount(0);
   });
 
   test('Add menu: Global vs This page sections, Findings as a full global panel, no Beta list', async () => {
@@ -375,6 +400,8 @@ test.describe('W1 widget shell ON — page panels open inside their page', () =>
     await expect(page.getByTestId('grs-add-panel-item-suggestions')).toHaveCount(0);
     await expect(globalSection.locator('[data-scope^="page:"]')).toHaveCount(0);
     await expect(pageSection.locator('[data-scope="global"]')).toHaveCount(0);
+    // The Editor renders both of its page panels (navEditor, edPanel), so none is offered.
+    await expect(pageSection).toContainText("This page's panels are already open.");
 
     expect(await axeViolations(page, '[data-testid="grs-add-panel-popover"]')).toEqual([]);
 
@@ -480,6 +507,24 @@ test.describe('W1 widget shell ON — page panels open inside their page', () =>
     // The partner stays global: the sidebar keeps it, and Brainstorm never claims the sidebar.
     await expect(sidebar(page).getByTestId('agent-hub-panel')).toBeVisible();
     await expect(sidebar(page).locator('.brainstorm-facts-col')).toHaveCount(0);
+  });
+
+  test('Add menu on a page W1 renders no dock for: its page panels are inert, not counted as open', async () => {
+    const { page } = session!;
+    await page.locator('nav[aria-label="Main navigation"] button[aria-label="Timeline"]').click();
+    await expect(page.locator('.shell-timeline')).toBeVisible({ timeout: 5_000 });
+
+    await sidebar(page).getByTestId('grs-add-panel-btn').click();
+    const pageSection = page.getByTestId('grs-add-panel-section-page');
+    await expect(pageSection).toBeVisible();
+    await expect(pageSection).not.toContainText("This page's panels are already open.");
+    for (const id of ['navTimeline', 'tlDetails']) {
+      const row = pageSection.getByTestId(`grs-add-panel-item-${id}`);
+      await expect(row).toBeDisabled();
+      await expect(row).toHaveAttribute('data-scope', 'page:timeline');
+    }
+    await expect(pageSection).toContainText('This page cannot open this panel yet.');
+    await page.keyboard.press('Escape');
   });
 });
 

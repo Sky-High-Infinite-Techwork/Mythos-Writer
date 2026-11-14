@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { configureAxe } from 'vitest-axe';
 import { describe, expect, it, vi } from 'vitest';
 import { AddPanelMenu, PageDock } from '../components/ui/PanelChrome';
-import { AI_OFF_REASON, buildAddCatalog, isPanelInert } from './globalCatalog';
+import { AI_OFF_REASON, PAGE_PANEL_UNAVAILABLE_REASON, buildAddCatalog, isPanelInert } from './globalCatalog';
 import { DESIGN_PANELS, type DesignPanelId } from './panelRegistry';
 import { EDITOR_INSPECTOR_TABS, defaultGlobalSidebars, pageChromeDefaults } from './pageShell';
 import { PAGE_VIEWS, type PageView } from './scopeModel';
@@ -64,6 +64,26 @@ describe('buildAddCatalog', () => {
     for (const view of PAGE_VIEWS) {
       expect(buildAddCatalog({ page: view, placed: freshPlaced(view), aiEnabled: true }).page).toEqual([]);
     }
+  });
+
+  it('lists a page panel that is not rendered on the page as inert when the shell cannot open it', () => {
+    // W1 on Notes: no page dock is rendered, so nothing counts as open and nothing can be opened from the menu.
+    const notes = buildAddCatalog({ page: 'notes', placed: defaultGlobalSidebars().right, aiEnabled: true, pageOpenable: [] });
+    expect(ids(notes.page)).toEqual(['navNotes', 'noteProps']);
+    for (const entry of notes.page) {
+      expect(entry.inert).toBe(true);
+      expect(entry.reason).toBe(PAGE_PANEL_UNAVAILABLE_REASON);
+    }
+    // Global rows are unaffected, and the AI Off reason wins on an AI page panel.
+    expect(notes.global.every((entry) => !entry.inert)).toBe(true);
+    const beta = buildAddCatalog({ page: 'beta', placed: [], aiEnabled: false, pageOpenable: [] });
+    expect(beta.page.map((entry) => [entry.id, entry.reason])).toEqual([
+      ['navBeta', PAGE_PANEL_UNAVAILABLE_REASON],
+      ['betaPanel', AI_OFF_REASON],
+    ]);
+    // A panel the shell can open stays addable.
+    const openable = buildAddCatalog({ page: 'notes', placed: [], aiEnabled: true, pageOpenable: ['noteProps'] });
+    expect(openable.page.find((entry) => entry.id === 'noteProps')).toMatchObject({ inert: false, reason: null });
   });
 
   it('skips panels the app cannot mount yet', () => {

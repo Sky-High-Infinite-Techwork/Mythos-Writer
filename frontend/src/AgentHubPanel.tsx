@@ -212,10 +212,12 @@ export default function AgentHubPanel({
   }, [aiEnabled]);
 
   useEffect(() => {
+    // W1 widget shell: Notes & Analysis is an edPanel page tab, so the shell opens the scan there, not here.
+    if (hidePageTabs) return undefined;
     const openContinuity = () => setActiveTab('notes-analysis');
     window.addEventListener('mythos:open-continuity-scan', openContinuity);
     return () => window.removeEventListener('mythos:open-continuity-scan', openContinuity);
-  }, [setActiveTab]);
+  }, [setActiveTab, hidePageTabs]);
 
   useEffect(() => {
     if (!pendingHubTab) return;
@@ -875,7 +877,8 @@ function UnifiedPartnerChat({
 
 // ── Notes & Analysis ────────────────────────────────────────────────────────
 
-function NotesAndAnalysisTab({
+/** Exported for the W1 widget shell: the Editor inspector (edPanel) mounts the same tab with the same props. */
+export function NotesAndAnalysisTab({
   scene,
   onOpenCoachPage,
   referencesPanel,
