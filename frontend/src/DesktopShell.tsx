@@ -7566,8 +7566,9 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
         {/* F2#16: BottomBar moved out of center column — spans full shell-panels width */}
       </div>
       {/* W1 widget shell (beta flag): the Story Editor's own inspector, inside the page window.
-          Its tabs are page tabs only (Scenes, Notes & Analysis); Findings and Suggestions are global. */}
-      {pageShellOn && (
+          Its tabs are page tabs only (Scenes, Notes & Analysis); Findings and Suggestions are global.
+          Hidden in Distraction-free and Focus modes, like the right sidebar. */}
+      {pageShellOn && !distractionFree && (writingMode !== 'focus' || focusPrefs.showRightSidebar) && (
         <PageDock
           panelId="edPanel"
           scope={pageScope('editor')}
@@ -7887,6 +7888,8 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
           story={selectedStory}
           pendingHubTab={pendingAgentHubTab}
           onPendingHubTabConsumed={() => setPendingAgentHubTab(null)}
+          // W1 widget shell (beta flag): Scenes / Notes & Analysis live in the page's edPanel, not the global sidebar.
+          hidePageTabs={pageShellOn}
           onOpenScenesFull={(board) => {
             if (board) { handleOpenBoard(board); return; }
             handleNavSectionChange('story');

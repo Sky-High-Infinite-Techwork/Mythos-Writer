@@ -1,5 +1,5 @@
 // Slice B — unified partner shell tests (replaces four-agent hub assertions).
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi, afterEach, beforeEach, describe, it, expect } from 'vitest';
 import AgentHubPanel, { resolveAgentStatus } from './AgentHubPanel';
 import { __resetAgentSessionStores } from './lib/useAgentSessions';
@@ -185,6 +185,27 @@ describe('AgentHubPanel — Slice B partner shell', () => {
     expect(screen.queryByTestId('ahp-tab-suggestions')).not.toBeInTheDocument();
     expect(screen.getByTestId('ahp-tab-scenes')).toBeInTheDocument();
     expect(screen.getByTestId('ahp-tab-notes-analysis')).toBeInTheDocument();
+  });
+
+  it('widget shell (hidePageTabs): no Scenes or Notes & Analysis tab, and a continuity scan stays on the partner', async () => {
+    render(<AgentHubPanel scene={makeScene()} hidePageTabs />);
+    expect(screen.getByTestId('ahp-tab-partner')).toBeInTheDocument();
+    expect(screen.getByTestId('ahp-tab-suggestions')).toBeInTheDocument();
+    expect(screen.queryByTestId('ahp-tab-scenes')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('ahp-tab-notes-analysis')).not.toBeInTheDocument();
+    act(() => { window.dispatchEvent(new CustomEvent('mythos:open-continuity-scan')); });
+    expect(await screen.findByTestId('partner-card')).toBeInTheDocument();
+    expect(screen.getByTestId('ahp-tab-partner')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByTestId('ahp-notes-analysis')).not.toBeInTheDocument();
+  });
+
+  it('widget shell (hidePageTabs) + AI off: no tabs and no page panels in the sidebar', () => {
+    setAiEnabled(false);
+    render(<AgentHubPanel scene={makeScene()} hidePageTabs />);
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Right panel tabs')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('ahp-notes-analysis')).not.toBeInTheDocument();
+    expect(screen.queryByText('Select a story to see its scene board.')).not.toBeInTheDocument();
   });
 
   it('Suggestions tab mounts SuggestionReview (full list)', async () => {

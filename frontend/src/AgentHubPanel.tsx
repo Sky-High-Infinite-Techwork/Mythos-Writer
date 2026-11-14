@@ -162,6 +162,8 @@ interface Props {
   /** Applied once on mount when GRS was collapsed (toolbar continuity scan). */
   pendingHubTab?: AgentHubTab | null;
   onPendingHubTabConsumed?: () => void;
+  /** W1 widget shell (beta flag): Scenes and Notes & Analysis are page tabs (edPanel), so the global sidebar drops them. */
+  hidePageTabs?: boolean;
 }
 
 export default function AgentHubPanel({
@@ -197,6 +199,7 @@ export default function AgentHubPanel({
   onOpenPartnerHistory,
   pendingHubTab = null,
   onPendingHubTabConsumed,
+  hidePageTabs = false,
 }: Props) {
   const aiEnabled = useAiEnabled();
   const partnerName = resolvePartnerDisplayName(agentNames);
@@ -237,31 +240,37 @@ export default function AgentHubPanel({
       { id: 'partner' as const, label: partnerName },
       { id: 'suggestions' as const, label: 'Suggestions' },
     ] : []),
-    { id: 'scenes', label: 'Scenes' },
-    { id: 'notes-analysis', label: 'Notes & Analysis' },
+    ...(hidePageTabs ? [] : [
+      { id: 'scenes' as const, label: 'Scenes' },
+      { id: 'notes-analysis' as const, label: 'Notes & Analysis' },
+    ]),
   ];
+  // A hidden tab (AI off, or a page tab under the widget shell) falls back to the first shown tab.
+  const shownTab: HubTab | null = TABS.some((t) => t.id === activeTab) ? activeTab : (TABS[0]?.id ?? null);
 
   return (
     <div className="ahp-root" data-testid="agent-hub-panel" data-partner-shell="true">
-      <nav className="ahp-tabs" aria-label="Right panel tabs">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            className={`ahp-tab${activeTab === t.id ? ' ahp-tab--active' : ''}`}
-            onClick={() => { setActiveTab(t.id); }}
-            aria-selected={activeTab === t.id}
-            role="tab"
-            data-testid={`ahp-tab-${t.id}`}
-            title={t.label}
-          >
-            <span className="ahp-tab-label">{t.label}</span>
-          </button>
-        ))}
-      </nav>
+      {TABS.length > 0 && (
+        <nav className="ahp-tabs" aria-label="Right panel tabs">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              className={`ahp-tab${shownTab === t.id ? ' ahp-tab--active' : ''}`}
+              onClick={() => { setActiveTab(t.id); }}
+              aria-selected={shownTab === t.id}
+              role="tab"
+              data-testid={`ahp-tab-${t.id}`}
+              title={t.label}
+            >
+              <span className="ahp-tab-label">{t.label}</span>
+            </button>
+          ))}
+        </nav>
+      )}
 
       <div className="ahp-body">
-        {activeTab === 'partner' && aiEnabled && (
+        {shownTab === 'partner' && aiEnabled && (
           <PartnerChatView
             partnerName={partnerName}
             partnerSessionStore={partnerSessionStore}
@@ -288,15 +297,15 @@ export default function AgentHubPanel({
             continuityItems={continuityItems}
           />
         )}
-        {activeTab === 'suggestions' && aiEnabled && (
+        {shownTab === 'suggestions' && aiEnabled && (
           <div className="ahp-suggestions-tab" data-testid="ahp-suggestions-tab">
             <SuggestionReview onOpenVaultPath={onOpenVaultPath} />
           </div>
         )}
-        {activeTab === 'scenes' && (
+        {shownTab === 'scenes' && (
           <ScenesPanel story={story} onOpenFull={onOpenScenesFull ?? (() => {})} onOpenNote={onOpenSceneNote} />
         )}
-        {activeTab === 'notes-analysis' && (
+        {shownTab === 'notes-analysis' && (
           <NotesAndAnalysisTab
             scene={scene}
             onOpenCoachPage={onOpenCoachPage}
