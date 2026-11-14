@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main, 'batch/**']
+  # GitHub merge queue: the required checks (ci, notes-windows) must report on the queue's
+  # temporary gh-readonly-queue/* commit. The queue run behaves like a PR run (no packaging
+  # jobs, no coverage); the push run on main after the merge still packages.
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 concurrency:
@@ -217,7 +222,7 @@ jobs:
       - name: Resolve coverage flag
         id: coverage-flag
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ "${{ github.event_name }}" = "pull_request" ] || [ "${{ github.event_name }}" = "merge_group" ]; then
             echo "flag=" >> "$GITHUB_OUTPUT"
           else
             echo "flag=--coverage" >> "$GITHUB_OUTPUT"
@@ -250,7 +255,7 @@ jobs:
         run: bash scripts/mythos-ops/pr-hygiene-rebase.test.sh
 
       - name: Upload coverage report
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -1179,7 +1184,7 @@ jobs:
     # runners. Report job was the only downstream consumer (now deleted), so the
     # skipped status issue from SKY-2421 no longer applies. Packaging steps still
     # guard at step level as a safety redundancy.
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
     needs: [setup]
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -1345,7 +1350,7 @@ jobs:
     # The windows-latest quota failure seen on PR #571 was a private-repo minutes
     # limit; the repo is now public (35507aea), so hosted Windows minutes are free
     # and native packaging is simpler and more reliable than a wine cross-build.
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
     needs: [setup]
     runs-on: windows-latest
     timeout-minutes: 40

@@ -144,6 +144,14 @@ function resolveRange(eventName, event, cwd) {
     if (!isHex(base) || !isHex(head)) return { fail: true };
     return { base, head };
   }
+  if (eventName === 'merge_group') {
+    // Merge queue commit: scan what the queue adds on top of the base branch tip.
+    const group = event && event.merge_group;
+    const base = group && group.base_sha;
+    const head = group && group.head_sha;
+    if (!isHex(base) || !isHex(head)) return { fail: true };
+    return { base, head };
+  }
   if (eventName === 'push') {
     let before = event && event.before;
     if (!isHex(before) || isZeroSha(before) || !hasCommit(cwd, before)) {
