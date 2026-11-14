@@ -8,6 +8,10 @@ name: screenshot-check
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review]
+  # Merge queue: this check is required on main, so it must report on the queue commit too.
+  # A queue run has no PR payload. The PR head already passed this check to enter the queue.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   pull-requests: read
@@ -23,6 +27,10 @@ jobs:
         uses: actions/github-script@v9
         with:
           script: |
+            if (context.eventName === 'merge_group') {
+              core.info('Merge queue run: the PR head passed this check to enter the queue. Nothing to verify here.');
+              return;
+            }
             const pr = context.payload.pull_request;
             const labels = pr.labels.map((l) => l.name.toLowerCase());
 

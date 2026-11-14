@@ -50,11 +50,38 @@ test('ci push branches stay main', () => {
   assert.deepEqual(on.push.branches, ['main']);
 });
 
-test('no workflow triggers merge_group', () => {
+// Merge queue: every workflow that reports a check required on main must also run on merge_group,
+// or a queued PR waits for a check that never reports. Only these two do. The rest are PR-only helpers.
+const MERGE_GROUP_WORKFLOWS = ['ci.yml', 'screenshot-check.yml'];
+
+test('only the workflows that report required checks trigger merge_group', () => {
   for (const name of workflowNames()) {
     const on = triggerOf(loadWorkflow(name)) || {};
-    assert.equal(JSON.stringify(on).includes('merge_group'), false, name);
+    const expected = MERGE_GROUP_WORKFLOWS.includes(name);
+    assert.equal(JSON.stringify(on).includes('merge_group'), expected, name);
   }
+});
+
+test('merge_group triggers use checks_requested only', () => {
+  for (const name of MERGE_GROUP_WORKFLOWS) {
+    const on = triggerOf(loadWorkflow(name));
+    assert.deepEqual(on.merge_group, { types: ['checks_requested'] }, name);
+  }
+});
+
+test('packaging jobs skip merge_group like pull_request', () => {
+  const jobs = loadWorkflow('ci.yml').jobs;
+  for (const job of ['build-linux', 'build-windows']) {
+    assert.match(jobs[job].if, /github\.event_name != 'pull_request'/, job);
+    assert.match(jobs[job].if, /github\.event_name != 'merge_group'/, job);
+  }
+});
+
+test('screenshot-check passes on a merge_group run without a PR payload', () => {
+  const text = fs.readFileSync(path.join(WORKFLOWS, 'screenshot-check.yml'), 'utf8');
+  const guard = text.indexOf("context.eventName === 'merge_group'");
+  const prRead = text.indexOf('context.payload.pull_request');
+  assert.ok(guard > -1 && guard < prRead, 'merge_group early return comes before the PR payload is read');
 });
 
 test('ci needs includes diff-guard', () => {

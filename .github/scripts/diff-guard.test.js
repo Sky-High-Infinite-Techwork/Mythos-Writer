@@ -284,6 +284,45 @@ test('pull_request scans base.sha to head.sha', () => {
   });
 });
 
+test('merge_group scans base_sha to head_sha', () => {
+  const key = fakes()[4][1];
+  withRepo((root) => {
+    writeFile(root, 'README.md', 'clean\n');
+    const base = commitAll(root, 'base');
+    writeFile(root, 'added.txt', `${key}\n`);
+    const head = commitAll(root, 'queue commit');
+    const result = runGuard(root, 'merge_group', {
+      merge_group: { base_sha: base, head_sha: head },
+    });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stdout, /^added\.txt:1 sk-proj$/m);
+    assertNoValue(result, key);
+  });
+});
+
+test('merge_group with a clean diff passes', () => {
+  withRepo((root) => {
+    writeFile(root, 'README.md', 'clean\n');
+    const base = commitAll(root, 'base');
+    writeFile(root, 'added.txt', 'fine\n');
+    const head = commitAll(root, 'queue commit');
+    const result = runGuard(root, 'merge_group', {
+      merge_group: { base_sha: base, head_sha: head },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), '');
+  });
+});
+
+test('a merge_group event with no shas fails closed', () => {
+  withRepo((root) => {
+    writeFile(root, 'README.md', 'clean\n');
+    commitAll(root, 'root');
+    const result = runGuard(root, 'merge_group', { merge_group: {} });
+    assert.equal(result.status, 1, result.stderr);
+  });
+});
+
 test('push uses before when it is in history, not only HEAD~1', () => {
   const key = fakes()[6][1];
   withRepo((root) => {
