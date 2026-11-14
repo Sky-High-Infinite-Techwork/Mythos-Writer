@@ -265,6 +265,9 @@ async function openShell({ widgetShell, aiEnabled }: ShellOptions): Promise<Shel
       agents: Record<string, Record<string, unknown>>;
     };
     settings.agents.brainstorm = { ...settings.agents.brainstorm, enabled: true };
+    // The Notes & Analysis continuity panel shows its scan toolbar (and scene picker) only while the
+    // Archive Agent is on; seedSceneUserData leaves every agent off. Same precondition as plan058-l7-partner.
+    settings.agents.archive = { ...settings.agents.archive, enabled: true };
     const patched = {
       ...settings,
       ai: { enabled: aiEnabled },
