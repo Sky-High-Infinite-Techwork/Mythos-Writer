@@ -171,13 +171,25 @@ import {
   settingsSet,
   settingsSetIfPresent,
 } from './frame/storageAdapter';
+// W1 widget shell (beta flag): page-owned panels open inside their page; sidebars hold global panels.
+import {
+  EDITOR_INSPECTOR_TABS,
+  defaultGlobalSidebars,
+  isWidgetShellOn,
+  pageViewFor,
+  type EditorInspectorTabId,
+} from './frame/pageShell';
+import { buildAddCatalog, isPanelInert } from './frame/globalCatalog';
+import { designPanel, type DesignPanelId } from './frame/panelRegistry';
+import { isGlobalScope, pageScope } from './frame/scopeModel';
+import { AddPanelMenu, PageDock } from './components/ui/PanelChrome';
 // SKY-1695: Panel content components for the unified sidebar renderer
 import StoryNavigator from './StoryNavigator';
 import EntityBrowser from './EntityBrowser';
 import SuggestionReview from './SuggestionReview';
 import VaultBrowser from './components/VaultBrowser';
 import ProgressDashboard from './ProgressDashboard';
-import AgentHubPanel, { type AgentHubTab } from './AgentHubPanel';
+import AgentHubPanel, { NotesAndAnalysisTab, type AgentHubTab } from './AgentHubPanel';
 import CoachPage from './coach/CoachPage';
 import ContinuityPanel from './ContinuityPanel';
 import type { InconsistencyItem } from './ContinuityPanel';
@@ -790,6 +802,11 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
   // M12.B3 (SKY-10738): full flag list — feeds the Archive chat view's
   // composer quick-action chips (generated from the current flag set).
   const [continuityItems, setContinuityItems] = useState<InconsistencyItem[]>([]);
+  // W1 widget shell (beta flag only). In memory: saving this layout is W3.
+  const [edPanelCollapsed, setEdPanelCollapsed] = useState(false);
+  const [edPanelTab, setEdPanelTab] = useState<EditorInspectorTabId>('scenes');
+  const [addedGlobalPanels, setAddedGlobalPanels] = useState<DesignPanelId[]>([]);
+  const [collapsedGlobalPanels, setCollapsedGlobalPanels] = useState<DesignPanelId[]>([]);
   const [proposedCount, setProposedCount] = useState(0);
 
   // Poll proposed suggestion count every 30 s for nav badge
@@ -6278,15 +6295,33 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
     persistLeftSidebarLayout({ ...cur, panels, sidebarCollapsed: false });
   }, [persistLeftSidebarLayout]);
 
+  // W1 widget shell (beta flag). Flag off = none of this renders and the old shell is unchanged.
+  const pageShellOn = isWidgetShellOn(appSettings);
+
   const handleToolbarContinuityScan = useCallback(() => {
+    // W1 widget shell: Notes & Analysis (with the ContinuityPanel) is an edPanel page tab, so the scan opens there.
+    if (pageShellOn) {
+      setEdPanelCollapsed(false);
+      setEdPanelTab('notes-analysis');
+      return;
+    }
     setPendingAgentHubTab('notes-analysis');
     handleGrsVisibilityChange(true);
     window.dispatchEvent(new CustomEvent('mythos:open-continuity-scan'));
-  }, [handleGrsVisibilityChange]);
+  }, [handleGrsVisibilityChange, pageShellOn]);
 
   // R11 / M11a: the Coach button is AI-bearing chrome — MSV drops it entirely
   // when the master AI toggle is off (undefined handler = no mount).
   const aiEnabled = useAiEnabled();
+  const shellPage = pageViewFor({ activeTab: tabShell.activeTab, storySubView: view, settingsOpen, betaReaderOpen });
+  const handleAddShellPanel = (id: DesignPanelId) => {
+    // Page panels already open inside their page in W1; only global panels are added to the sidebar.
+    if (!isGlobalScope(designPanel(id).scope)) return;
+    setAddedGlobalPanels((prev) => (prev.includes(id) ? prev : [...prev, id]));
+  };
+  const toggleGlobalPanelCollapsed = (id: DesignPanelId) => {
+    setCollapsedGlobalPanels((prev) => (prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]));
+  };
   // SKY-10573: the Coach sub-tab is also AI-bearing chrome — if it's active
   // when the master toggle flips off mid-session, fall back to Editor
   // (mirrors AgentHubPanel's assistant-tab redirect for the same toggle).
@@ -6634,6 +6669,58 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
   // Beta 4 M2: View → Toggle left panel is a real user toggle (§4).
   const showLeftSidebar = !distractionFree && !leftPanelHidden && (writingMode !== 'focus' || focusPrefs.showLeftSidebar);
   const showBottomBar = !distractionFree && (writingMode !== 'focus' || focusPrefs.showBottomBar);
+  // W1 widget shell: the Editor inspector hides in Distraction-free and Focus modes, like the right sidebar.
+  const edPanelShown = pageShellOn && !distractionFree && (writingMode !== 'focus' || focusPrefs.showRightSidebar);
+  // Page panels W1 actually renders on the current page (the Editor's docks; Brainstorm's Idea Board page).
+  // Other pages keep their own chrome in W1, so their page panels are not counted as open.
+  const editorPanelsOnPage = shellPage === 'editor' && activeDockedTabId === null;
+  const renderedShellPagePanels: DesignPanelId[] = [
+    ...(editorPanelsOnPage && showLeftSidebar ? ['navEditor' as const] : []),
+    ...(editorPanelsOnPage && edPanelShown ? ['edPanel' as const] : []),
+    ...(shellPage === 'brainstorm' ? ['navBrainstorm' as const, 'bsPanel' as const] : []),
+  ];
+  const placedShellPanels: DesignPanelId[] = [
+    ...defaultGlobalSidebars().right,
+    // Bridge: today's partner panel (AgentHubPanel) still hosts the Suggestions tab, so the
+    // catalog must not offer a second copy until the partner panel is split (later lane).
+    'suggestions',
+    // An added AI panel is hidden while AI is off, so the menu lists it again as inert, with its reason.
+    ...addedGlobalPanels.filter((id) => !isPanelInert(id, aiEnabled)),
+    ...renderedShellPagePanels,
+  ];
+  // Notes & Analysis content, shared by the hub tab (flag off) and the edPanel tab (W1 widget shell).
+  // M13 §5.4: "View Full Analysis" must land on the Coach page — the
+  // Story tab alone leaves the writer on whatever sub-view was open.
+  const openCoachPageFromAnalysis = () => { handleTabChange('story'); handleOpenCoachPage(); };
+  const notesAnalysisContinuityPanel = (
+    <ContinuityPanel
+      scene={activeSceneForSidebar}
+      story={selectedStory}
+      enabled={(appSettings?.agents?.archive?.enabled ?? true) && (appSettings?.archiveContinuityEnabled ?? true)}
+      // GAP-6: name the flag that's actually off — agent-disabled wins
+      // (it's the state the AGENTS card's 'Disabled' status matches).
+      disabledReason={(appSettings?.agents?.archive?.enabled ?? true) ? 'feature' : 'agent'}
+      archiveScanScope={appSettings?.archiveScanScope ?? 'active_scene'}
+      archiveStoryEditConsentGiven={appSettings?.archiveStoryEditConsentGiven ?? false}
+      onConsentGranted={handleContinuityConsentGranted}
+      onCountChange={setContinuityCount}
+      // Feeds the partner's continuityItems (Archive chat quick-action chips).
+      onItemsChange={setContinuityItems}
+      onOpenSettings={() => setSettingsOpen(true)}
+    />
+  );
+  const notesAnalysisReferencesPanel = (
+    <ReferencesPanel
+      story={selectedStory}
+      activeScene={activeSceneForSidebar}
+      stories={stories}
+      entities={allEntities}
+      notePaths={allNotePaths}
+      onPickReference={handleNotesWikiLinkClick}
+    />
+  );
+  // W1 opens no page panel from the Add menu, so a page panel that is not already rendered is listed inert.
+  const shellAddCatalog = buildAddCatalog({ page: shellPage, placed: placedShellPanels, aiEnabled, pageOpenable: [] });
 
   // SKY-3618: Compute clamped display widths so center column always gets >= CENTER_MIN_WIDTH pixels.
   // The stored layout.leftWidth / layout.rightWidth are preserved unchanged; only the rendered width is clamped.
@@ -7055,6 +7142,8 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
       {showLeftSidebar && (
         <div
           className={`shell-left${leftSidebarEdgeCollapsed ? ' shell-left--edge' : ''}`}
+          data-panel-id={pageShellOn ? 'navEditor' : undefined}
+          data-scope={pageShellOn ? pageScope('editor') : undefined}
           style={{
             width: renderedLeftWidth,
             ...(leftSidebarEdgeCollapsed ? { ['--shell-left-peek-width' as string]: `${clampedLeftWidth}px` } : {}),
@@ -7523,6 +7612,38 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
         </div>
         {/* F2#16: BottomBar moved out of center column — spans full shell-panels width */}
       </div>
+      {/* W1 widget shell (beta flag): the Story Editor's own inspector, inside the page window.
+          Its tabs are page tabs only (Scenes, Notes & Analysis); Findings and Suggestions are global.
+          Hidden in Distraction-free and Focus modes, like the right sidebar. */}
+      {edPanelShown && (
+        <PageDock
+          panelId="edPanel"
+          scope={pageScope('editor')}
+          label={designPanel('edPanel').label}
+          side="right"
+          collapsed={edPanelCollapsed}
+          onToggleCollapsed={() => setEdPanelCollapsed((v) => !v)}
+          tabs={EDITOR_INSPECTOR_TABS}
+          activeTab={edPanelTab}
+          onTabChange={(id) => setEdPanelTab(id === 'notes-analysis' ? 'notes-analysis' : 'scenes')}
+          testId="page-panel-edPanel"
+        >
+          {edPanelTab === 'scenes' ? (
+            renderSidebarPanel('scenes')
+          ) : (
+            // The hub's Notes & Analysis tab, unchanged: scene analysis, questions, references, scene notes, continuity.
+            <NotesAndAnalysisTab
+              scene={activeSceneForSidebar}
+              onOpenCoachPage={openCoachPageFromAnalysis}
+              referencesPanel={notesAnalysisReferencesPanel}
+              continuityPanel={notesAnalysisContinuityPanel}
+              sceneNotesRefresh={sceneNotesRefresh}
+              onPromoteSceneNote={handlePromoteSceneNote}
+              onSceneNotesChanged={handleSceneNotesChanged}
+            />
+          )}
+        </PageDock>
+      )}
       </div>{/* end shell-panels__row */}
 
       {showBottomBar && (
@@ -7708,6 +7829,8 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
                the Boards tab; `Open` on a filed idea hands that folder to the
                Boards tab through the same deep-link seq the wiki-links use. */
             unifiedBoard={appSettings?.notesBoard?.brainstormUnified ?? false}
+            // W1 widget shell (beta flag): the page panel is the Idea Board only; the partner chat is global.
+            ideaBoardOnly={pageShellOn}
             notesVaultValid={vaultBinding.notesValid}
             boardMinZoom={appSettings?.notesBoard?.minZoom}
             onOpenBoardFolder={(folderPath) => {
@@ -7785,12 +7908,41 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
         onVisibilityChange={handleGrsVisibilityChange}
         onWidthChange={handleGrsWidthChange}
         neonOverlay={<BorderOverlay settings={appSettings?.liquidNeonV2} slot={3} delay={1.6} />}
+        addMenu={pageShellOn ? (
+          <AddPanelMenu catalog={shellAddCatalog} onAdd={handleAddShellPanel} testId="grs-add-panel" />
+        ) : undefined}
+        extraPanels={pageShellOn && addedGlobalPanels.length > 0 ? (
+          <>
+            {addedGlobalPanels.map((id) => {
+              const panel = designPanel(id);
+              // AI Off rule: an AI panel is hidden while AI is off, so it makes no AI calls.
+              if (panel.appAlias === null || isPanelInert(id, aiEnabled)) return null;
+              return (
+                <PageDock
+                  key={id}
+                  panelId={id}
+                  scope={panel.scope}
+                  label={panel.label}
+                  side="right"
+                  collapsed={collapsedGlobalPanels.includes(id)}
+                  onToggleCollapsed={() => toggleGlobalPanelCollapsed(id)}
+                  width={grsWidth}
+                  testId={`global-panel-${id}`}
+                >
+                  {renderSidebarPanel(panel.appAlias)}
+                </PageDock>
+              );
+            })}
+          </>
+        ) : undefined}
       >
         <AgentHubPanel
           scene={activeSceneForSidebar}
           story={selectedStory}
           pendingHubTab={pendingAgentHubTab}
           onPendingHubTabConsumed={() => setPendingAgentHubTab(null)}
+          // W1 widget shell (beta flag): Scenes / Notes & Analysis live in the page's edPanel, not the global sidebar.
+          hidePageTabs={pageShellOn}
           onOpenScenesFull={(board) => {
             if (board) { handleOpenBoard(board); return; }
             handleNavSectionChange('story');
@@ -7813,9 +7965,7 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
           voicePrefs={appSettings?.voice}
           agentNames={appSettings?.agentNames}
           onOpenVaultPath={handleOpenSceneByPath}
-          // M13 §5.4: "View Full Analysis" must land on the Coach page — the
-          // Story tab alone leaves the writer on whatever sub-view was open.
-          onOpenCoachPage={() => { handleTabChange('story'); handleOpenCoachPage(); }}
+          onOpenCoachPage={openCoachPageFromAnalysis}
           // M9b (SKY-9823): without these the sidebar's Notes tab never sees
           // the refresh bump after a drag-promote, so the promoted card stays
           // pinned until a manual reload (SKY-10053).
@@ -7840,33 +7990,9 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
               requestOpenSessionHistory('brainstorm');
             }, 50);
           }}
-          continuityPanel={
-            <ContinuityPanel
-              scene={activeSceneForSidebar}
-              story={selectedStory}
-              enabled={(appSettings?.agents?.archive?.enabled ?? true) && (appSettings?.archiveContinuityEnabled ?? true)}
-              // GAP-6: name the flag that's actually off — agent-disabled wins
-              // (it's the state the AGENTS card's 'Disabled' status matches).
-              disabledReason={(appSettings?.agents?.archive?.enabled ?? true) ? 'feature' : 'agent'}
-              archiveScanScope={appSettings?.archiveScanScope ?? 'active_scene'}
-              archiveStoryEditConsentGiven={appSettings?.archiveStoryEditConsentGiven ?? false}
-              onConsentGranted={handleContinuityConsentGranted}
-              onCountChange={setContinuityCount}
-              onItemsChange={setContinuityItems}
-              onOpenSettings={() => setSettingsOpen(true)}
-            />
-          }
+          continuityPanel={notesAnalysisContinuityPanel}
           continuityItems={continuityItems}
-          referencesPanel={
-            <ReferencesPanel
-              story={selectedStory}
-              activeScene={activeSceneForSidebar}
-              stories={stories}
-              entities={allEntities}
-              notePaths={allNotePaths}
-              onPickReference={handleNotesWikiLinkClick}
-            />
-          }
+          referencesPanel={notesAnalysisReferencesPanel}
         />
       </GlobalRightSidebar>}
 
