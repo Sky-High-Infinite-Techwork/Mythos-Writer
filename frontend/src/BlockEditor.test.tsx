@@ -6,10 +6,12 @@ import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from 'tiptap-markdown';
 import BlockEditor, { blocksToMarkdownBody } from './BlockEditor';
-import type { Block, Scene } from './types';
+import type { Block, EntityEntry, Scene } from './types';
 import { WikiLink } from './WikiLinkExtension';
 import { installActWarningGuard } from './testActWarningGuard';
 import { __resetPrismStoresForTests, prismLiveStore, prismSettingsStore } from './prism/store';
+import { PRISM_RESCAN_DEBOUNCE_MS } from './prism/PrismExtension';
+import { getEditorMarkdown } from './lib/useRichEditor';
 
 installActWarningGuard();
 
@@ -510,6 +512,162 @@ describe('BlockEditor empty-scene entry', () => {
 
     expect(screen.getByText(/start with a sentence/i)).toBeInTheDocument();
     await act(async () => {});
+  });
+});
+
+describe('BlockEditor wiki-link hint Accept', () => {
+  const elara: EntityEntry = {
+    id: 'ent-elara',
+    name: 'Elara Voss',
+    type: 'character',
+    path: 'entities/characters/elara-voss.md',
+    createdAt: '2026-11-09T00:00:00.000Z',
+    updatedAt: '2026-11-09T00:00:00.000Z',
+  };
+
+  function sceneWith(content: string): Scene {
+    return {
+      ...makeBlankScene(),
+      blocks: [{ id: 'b1', type: 'prose', content, order: 0, updatedAt: '2026-11-09T00:00:00.000Z' }],
+    };
+  }
+
+  beforeEach(() => {
+    Object.defineProperty(window, 'api', {
+      value: {
+        entityList: vi.fn().mockResolvedValue({ entities: [] }),
+      },
+      configurable: true,
+    });
+  });
+
+  it('auto-linker Accept links only the hovered name in the editor and makes no suggestion call', async () => {
+    const onAcceptWikiLink = vi.fn();
+    let editorApi: { getMarkdown: () => string } | undefined;
+    const { container } = render(
+      <BlockEditor
+        scene={sceneWith('Elara Voss walked in. Later Elara Voss left.')}
+        onBlocksChange={vi.fn()}
+        onDraftStateChange={vi.fn()}
+        onEditorReady={(api) => { editorApi = api; }}
+        onAcceptWikiLink={onAcceptWikiLink}
+        autoLinkerEntities={[elara]}
+      />
+    );
+
+    await waitFor(() => expect(container.querySelectorAll('.archive-wl-hint')).toHaveLength(2));
+    const second = container.querySelectorAll('.archive-wl-hint')[1] as HTMLElement;
+    expect(second.dataset.wlId).toBe('autolink:ent-elara');
+
+    fireEvent.mouseOver(second);
+    fireEvent.mouseDown(await screen.findByRole('button', { name: 'Accept wiki-link [[Elara Voss]]' }));
+
+    expect(editorApi!.getMarkdown()).toContain('Elara Voss walked in. Later [[Elara Voss]] left.');
+    expect(container.querySelectorAll('[data-wiki-link="Elara Voss"]')).toHaveLength(1);
+    expect(onAcceptWikiLink).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /Accept wiki-link/ })).not.toBeInTheDocument();
+    // Let Prism's debounced rescan land before cleanup unmounts the editor: an
+    // unmount inside that window after any doc-shrinking edit trips a separate,
+    // pre-existing Prism snippet bug (stale scan offsets on plugin-view rebuild).
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, PRISM_RESCAN_DEBOUNCE_MS + 50));
+    });
+  });
+
+  it.each([
+    ['an alias', 'Elara smiled.', '[[Elara Voss|Elara]] smiled.'],
+    ['a lowercase mention', 'elara voss smiled.', '[[Elara Voss|elara voss]] smiled.'],
+  ])('auto-linker Accept on %s keeps the visible text and links it as an alias', async (_case, prose, expected) => {
+    let editorApi: { getMarkdown: () => string } | undefined;
+    const { container } = render(
+      <BlockEditor
+        scene={sceneWith(prose)}
+        onBlocksChange={vi.fn()}
+        onDraftStateChange={vi.fn()}
+        onEditorReady={(api) => { editorApi = api; }}
+        autoLinkerEntities={[{ ...elara, aliases: ['Elara'] }]}
+      />
+    );
+
+    await waitFor(() => expect(container.querySelector('.archive-wl-hint')).not.toBeNull());
+    const visibleBefore = container.querySelector('.ProseMirror')!.textContent;
+
+    fireEvent.mouseOver(container.querySelector('.archive-wl-hint') as HTMLElement);
+    fireEvent.mouseDown(await screen.findByRole('button', { name: 'Accept wiki-link [[Elara Voss]]' }));
+
+    expect(editorApi!.getMarkdown()).toContain(expected);
+    expect(container.querySelector('.ProseMirror')!.textContent).toBe(visibleBefore);
+    // Same pre-existing Prism snippet bug as above: let the rescan land first.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, PRISM_RESCAN_DEBOUNCE_MS + 50));
+    });
+  });
+
+  it('auto-linker Accept right after typing is its own undo step', async () => {
+    let liveEditor: Editor | null = null;
+    render(
+      <BlockEditor
+        scene={sceneWith('Elara Voss')}
+        onBlocksChange={vi.fn()}
+        onDraftStateChange={vi.fn()}
+        onLiveEditorChange={(ed) => { liveEditor = ed; }}
+        autoLinkerEntities={[elara]}
+      />
+    );
+
+    await waitFor(() => expect(document.querySelector('.archive-wl-hint')).not.toBeNull());
+    fireEvent.mouseOver(document.querySelector('.archive-wl-hint') as HTMLElement);
+    const accept = await screen.findByRole('button', { name: 'Accept wiki-link [[Elara Voss]]' });
+    const ed = liveEditor as unknown as Editor;
+
+    // Type next to the name and Accept in the same tick: without closeHistory
+    // the two edits are adjacent and inside newGroupDelay, so they would share
+    // one undo step.
+    let nameEnd = -1;
+    ed.state.doc.descendants((node, pos) => {
+      if (nameEnd < 0 && node.isText && node.text?.includes('Elara Voss')) {
+        nameEnd = pos + node.text.indexOf('Elara Voss') + 'Elara Voss'.length;
+      }
+    });
+    act(() => {
+      ed.view.dispatch(ed.state.tr.insertText(' smiled.', nameEnd));
+      fireEvent.mouseDown(accept);
+    });
+    expect(getEditorMarkdown(ed)).toContain('[[Elara Voss]] smiled.');
+
+    act(() => { ed.commands.undo(); });
+    expect(getEditorMarkdown(ed)).toContain('Elara Voss smiled.');
+    expect(getEditorMarkdown(ed)).not.toContain('[[');
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, PRISM_RESCAN_DEBOUNCE_MS + 50));
+    });
+  });
+
+  it('AI wiki-link Accept stays status-only: calls onAcceptWikiLink and leaves the text unchanged', async () => {
+    const onAcceptWikiLink = vi.fn();
+    let editorApi: { getMarkdown: () => string } | undefined;
+    const { container } = render(
+      <BlockEditor
+        scene={sceneWith('Elara Voss walked through the door.')}
+        onBlocksChange={vi.fn()}
+        onDraftStateChange={vi.fn()}
+        onEditorReady={(api) => { editorApi = api; }}
+        onAcceptWikiLink={onAcceptWikiLink}
+        wikiLinkSuggestions={[{ id: 'sugg-ai-1', anchorText: 'Elara Voss', wikiLink: '[[Elara Voss]]' }]}
+      />
+    );
+
+    await waitFor(() => expect(container.querySelector('.archive-wl-hint')).not.toBeNull());
+    await waitFor(() => expect(editorApi).toBeDefined());
+    const before = editorApi!.getMarkdown();
+
+    fireEvent.mouseOver(container.querySelector('.archive-wl-hint') as HTMLElement);
+    fireEvent.mouseDown(await screen.findByRole('button', { name: 'Accept wiki-link [[Elara Voss]]' }));
+
+    expect(onAcceptWikiLink).toHaveBeenCalledTimes(1);
+    expect(onAcceptWikiLink).toHaveBeenCalledWith('sugg-ai-1', '[[Elara Voss]]', 'Elara Voss');
+    expect(editorApi!.getMarkdown()).toBe(before);
+    expect(container.querySelector('[data-wiki-link]')).toBeNull();
   });
 });
 
