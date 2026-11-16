@@ -94,6 +94,7 @@ jobs:
       group: mythos-unattended-mutate
       cancel-in-progress: false
     permissions:
+      actions: read
       contents: read
       pull-requests: read
       issues: read
@@ -147,7 +148,6 @@ jobs:
         if: needs.admit.outputs.mode == 'act' && steps.plan.outputs.undraft == 'true'
         env:
           TOKEN: ${{ steps.ready.outputs.token }}
-          EXPECTED_WRITES: pull_requests
         run: node .github/scripts/unattended/token-grant.js
       - name: Undraft eligible drafts
         if: needs.admit.outputs.mode == 'act' && steps.plan.outputs.undraft == 'true'
@@ -185,7 +185,6 @@ jobs:
         if: needs.admit.outputs.mode == 'act' && steps.plan.outputs.enqueue == 'true'
         env:
           TOKEN: ${{ steps.enqueue.outputs.token }}
-          EXPECTED_WRITES: pull_requests
         run: node .github/scripts/unattended/token-grant.js
       - name: Enqueue main pull requests at their exact tip
         if: needs.admit.outputs.mode == 'act' && steps.plan.outputs.enqueue == 'true'

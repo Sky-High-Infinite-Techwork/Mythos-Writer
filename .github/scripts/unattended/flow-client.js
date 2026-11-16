@@ -111,6 +111,15 @@ const READY_QUERY = `mutation($id:ID!){
   }
 }`;
 
+function permissionDenied(error) {
+  return /\b(?:403|404)\b/.test(String(error || ''));
+}
+
+function withDenial(result) {
+  if (!result || result.ok || !permissionDenied(result.error)) return result;
+  return { ...result, authDenied: true };
+}
+
 function createClient({ repo, readToken, controlToken, readyToken, enqueueToken }) {
   function api(args, token, input) {
     const result = gh(args, token, input);
@@ -247,7 +256,7 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
     const headRevision = {};
     for (const workflowPath of EVIDENCE_WORKFLOWS) {
       const onMain = blobSha(workflowPath, 'refs/heads/main');
-      if (!onMain.ok) return onMain;
+      if (!onMain.ok) return withDenial(onMain);
       const onHead = blobSha(workflowPath, head);
       if (!onHead.ok) return { ok: true, evidence: { mainRevision: {}, runs: [] } };
       mainRevision[workflowPath] = onMain.sha;
@@ -257,7 +266,7 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
       'api', '--paginate', '--slurp',
       `repos/${repo}/actions/runs?head_sha=${head}&per_page=100`,
     ], readToken);
-    if (!got.ok) return got;
+    if (!got.ok) return withDenial(got);
     const pages = flattenRunPages(got.stdout);
     if (!pages) return { ok: false, error: 'workflow runs were not pages of JSON' };
     const runs = [];

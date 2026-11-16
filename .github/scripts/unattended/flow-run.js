@@ -126,9 +126,12 @@ function select(client) {
   if (listed.truncated) return { ok: false, error: 'open pull request list hit the 200 cap' };
   const only = process.env.PR_NUMBER;
   const rows = [];
+  let considered = 0;
+  let denied = 0;
   for (const pr of listed.prs) {
     if (only && String(pr.number) !== only) continue;
     if (!Number.isInteger(pr.number) || pr.number < 1) continue;
+    considered += 1;
     let loaded;
     try {
       loaded = loadDetail(client, pr);
@@ -137,11 +140,17 @@ function select(client) {
       continue;
     }
     if (!loaded.ok) {
+      if (loaded.authDenied === true) denied += 1;
       process.stderr.write(`#${pr.number} read failed: ${loaded.error || 'unreadable'}; held\n`);
       continue;
     }
     const facts = factsFrom(pr, loaded.detail);
     rows.push({ pr, decision: classify(facts), facts });
+  }
+  if (considered > 0 && denied === considered) {
+    const error = 'evidence read denied (403/404) for every pull request';
+    process.stderr.write(`${error}\n`);
+    return { ok: false, error };
   }
   return { ok: true, rows };
 }

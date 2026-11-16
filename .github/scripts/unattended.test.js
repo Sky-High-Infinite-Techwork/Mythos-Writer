@@ -961,6 +961,113 @@ test('token grant must be the one repository and unexpired', () => {
   assert.equal(interpretGrant(two).ok, false);
 });
 
+function readScopes(text) {
+  const scopes = new Set();
+  if (text.includes('/actions/runs') || text.includes('/actions/jobs')) scopes.add('actions');
+  if (text.includes('/check-runs') || text.includes('check_runs')) scopes.add('checks');
+  if (text.includes('/issues/')) scopes.add('issues');
+  if (text.includes('/pulls') || text.includes("pr', 'list'")) scopes.add('pull-requests');
+  if (text.includes('/contents/') || text.includes('/git/')) scopes.add('contents');
+  return scopes;
+}
+
+test('job permissions cover the API families their scripts call', () => {
+  const scripts = path.join(__dirname, 'unattended');
+  const entryScopes = {
+    'flow-run.js': readScopes(`${fs.readFileSync(path.join(scripts, 'flow-run.js'), 'utf8')}\n${fs.readFileSync(path.join(scripts, 'flow-client.js'), 'utf8')}`),
+    'publish-run.js': readScopes(fs.readFileSync(path.join(scripts, 'publish-run.js'), 'utf8')),
+  };
+  assert.equal(entryScopes['flow-run.js'].has('actions'), true);
+  for (const name of ['mythos-flow-step.yml', 'mythos-final-gate.yml']) {
+    const doc = loadWorkflow(name);
+    assert.deepEqual(doc.permissions, {});
+    for (const [jobName, job] of Object.entries(doc.jobs)) {
+      const perms = job.permissions || {};
+      for (const [key, value] of Object.entries(perms)) {
+        assert.equal(value, 'read', `${name} ${jobName} ${key}`);
+      }
+      const run = (job.steps || []).map((step) => step.run || '').join('\n');
+      for (const [script, scopes] of Object.entries(entryScopes)) {
+        if (!run.includes(script)) continue;
+        for (const scope of scopes) {
+          assert.equal(perms[scope], 'read', `${name} ${jobName} missing ${scope} for ${script}`);
+        }
+      }
+    }
+  }
+});
+
+test('evidence denied for every pull request fails the job', () => {
+  const prs = [prRecord({ number: 4 }), prRecord({ number: 9 })];
+  const client = {
+    readSwitch() { return { ok: true, enabled: true }; },
+    listOpen() { return { ok: true, prs, truncated: false }; },
+    comments() { return { ok: true, comments: [] }; },
+    files() { return { ok: true, files: [] }; },
+    checks() { return { ok: true, checks: {} }; },
+    evidence() { return { ok: false, error: 'HTTP 403: Resource not accessible by integration', authDenied: true }; },
+  };
+  const result = plan(client, 'act');
+  assert.equal(result.ok, false);
+  assert.match(result.error, /evidence read denied \(403\/404\) for every pull request/);
+});
+
+test('one evidence denial is held and another pull request can still be enqueued', () => {
+  const bad = prRecord({ number: 4 });
+  const good = prRecord({ number: 9 });
+  const goodDetail = detailFor(good);
+  const calls = { enqueue: [] };
+  const client = {
+    calls,
+    readSwitch() { return { ok: true, enabled: true }; },
+    listOpen() { return { ok: true, prs: [bad, good], truncated: false }; },
+    comments() { return { ok: true, comments: goodDetail.comments }; },
+    files() { return { ok: true, files: goodDetail.files }; },
+    checks() { return { ok: true, checks: goodDetail.checks }; },
+    evidence(number) {
+      if (number === 4) return { ok: false, error: 'HTTP 404: Not Found', authDenied: true };
+      return { ok: true, evidence: goodDetail.evidence };
+    },
+    queueState() { return { ok: true, queue: goodDetail.queue }; },
+    ruleset() { return { ok: true, ruleset: goodDetail.ruleset }; },
+    enqueue(id, sha) { calls.enqueue.push({ id, sha }); return { ok: true, entry: { position: 1, state: 'QUEUED' } }; },
+  };
+  const result = enqueue(client, 'act');
+  assert.equal(result.ok, true);
+  assert.equal(result.wrote, 1);
+  assert.deepEqual(calls.enqueue, [{ id: 'PR_node', sha: HEAD }]);
+});
+
+test('a 403 or 404 from the Actions runs list is an evidence permission denial', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'evidence-deny-'));
+  const bin = path.join(dir, 'gh');
+  const blob = JSON.stringify({ sha: '1'.repeat(40) });
+  function install(status) {
+    fs.writeFileSync(bin, `#!/bin/sh
+case "$*" in
+  *actions/runs*) echo 'HTTP ${status}: denied' >&2; exit 1 ;;
+  *) printf '%s' '${blob}' ;;
+esac
+`);
+    fs.chmodSync(bin, 0o755);
+  }
+  const previous = process.env.GH_BIN;
+  process.env.GH_BIN = bin;
+  try {
+    install(403);
+    const denied = createClient({ repo: REPO, readToken: 'read' }).evidence(7, HEAD);
+    assert.equal(denied.ok, false);
+    assert.equal(denied.authDenied, true);
+    install(404);
+    const missing = createClient({ repo: REPO, readToken: 'read' }).evidence(7, HEAD);
+    assert.equal(missing.ok, false);
+    assert.equal(missing.authDenied, true);
+  } finally {
+    if (previous === undefined) delete process.env.GH_BIN;
+    else process.env.GH_BIN = previous;
+  }
+});
+
 test('one unreadable pull request is held and the next one can still be enqueued', () => {
   const bad = prRecord({ number: 4 });
   const good = prRecord({ number: 9 });
