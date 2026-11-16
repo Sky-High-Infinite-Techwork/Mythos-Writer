@@ -8,24 +8,25 @@ const path = require('node:path');
 const test = require('node:test');
 const yaml = require('js-yaml');
 
-const { classify, authorAssertion, evidenceOk, filesLookProtected } = require('./unattended/flow-policy');
-const { plan, undraft, enqueue } = require('./unattended/flow-run');
+const { classify, authorAssertion, evidenceOk, filesLookProtected, filesLookOwner, filesLookHighRisk, inspectGate } = require('./unattended/flow-policy');
+const { plan, undraft, enqueue, factsFrom } = require('./unattended/flow-run');
 const {
   ENQUEUE_QUERY, READY_QUERY, flattenPages, flattenRunPages, mapChangedFile, createClient,
   parseAllowlist, authorMatches, leaseHeldFrom, rulesetMatches, httpStatus,
 } = require('./unattended/flow-client');
-const { selectHead } = require('./unattended/discover-run');
+const { selectHead, thresholdFromCompare } = require('./unattended/discover-run');
 const {
-  review, modelEnv, claudeInvocation, assessDiff, readCompare, userDiff, codexResult, codexBody, CHECKLIST,
+  review, modelEnv, claudeInvocation, assessDiff, readCompare, userDiff, systemPrompt, codexResult, codexBody, CHECKLIST,
 } = require('./unattended/transport');
 const { comparePath } = require('./unattended/transport-run');
-const { transportResult, reduce, acceptReducer, parseProviders, providersFromEnv, parseProvidersJson } = require('./unattended/gate-result');
+const { transportResult, reduce, acceptReducer, parseProviders, providersFromEnv, parseProvidersJson, strictClaimOk } = require('./unattended/gate-result');
 const { decideQueueEntry, stillQueue, parseQueueRef } = require('./unattended/queue-policy');
 const { treesMatch, parentsOf, fetchObjects, runPublish } = require('./unattended/publish-run');
 const { interpretGrant } = require('./unattended/token-grant');
 const { interpretSwitch, readSwitch } = require('./unattended/switch');
 const { gh } = require('./unattended/spawn');
-const { CI_INTEGRATION_ID, CHECK_NAME, GATE_APP_ID, REPO, WRITE_APP_ID, WRITE_INSTALLATION_ID } = require('./unattended/constants');
+const { CI_INTEGRATION_ID, CHECK_NAME, GATE_APP_ID, REPO, WRITE_APP_ID, WRITE_INSTALLATION_ID, PROTECTED_RE_SOURCE, protectedPath } = require('./unattended/constants');
+const { resolveDependabotCommits, reviewPlan, headGateSummary, STRICT_REVIEW_PROMPT } = require('./unattended/risk-policy');
 
 const HEAD = 'a'.repeat(40);
 const BASE = 'b'.repeat(40);
@@ -151,7 +152,7 @@ function detailFor(pr, over = {}) {
       ci: { conclusion: 'success', headSha: head },
       'notes-windows': { conclusion: 'success', headSha: head },
       'screenshot-check': { conclusion: 'success', headSha: head },
-      gate: { conclusion: 'success', headSha: head, appId: GATE_APP_ID, summary: `Head: ${head}\n` },
+      gate: { conclusion: 'success', headSha: head, appId: GATE_APP_ID, summary: `Head: ${head}\nRisk: low\n` },
     },
     evidence: evidenceFor(head, pr.number),
     ruleset: { known: true, match: true },
@@ -286,13 +287,25 @@ test('author PROOF comments are assertions and do not authorize', () => {
   assert.equal(evidenceOk(wrongEvent, HEAD, 7, 'main', BASE), false);
   const movedBase = evidenceFor(HEAD, 7);
   movedBase.runs[0].prBaseSha = 'c'.repeat(40);
-  assert.equal(evidenceOk(movedBase, HEAD, 7, 'main', BASE), false);
+  movedBase.runs[1].prBaseSha = 'd'.repeat(40);
+  assert.equal(evidenceOk(movedBase, HEAD, 7, 'main', BASE), true);
+  const wrongHead = evidenceFor(HEAD, 7);
+  wrongHead.runs[0].headSha = 'c'.repeat(40);
+  assert.equal(evidenceOk(wrongHead, HEAD, 7, 'main', BASE), false);
+  const wrongPrHead = evidenceFor(HEAD, 7);
+  wrongPrHead.runs[0].prHeadSha = 'e'.repeat(40);
+  assert.equal(evidenceOk(wrongPrHead, HEAD, 7, 'main', BASE), false);
 });
 
 test('a rename out of a protected path is held', () => {
   const renamed = [{ filename: 'src/x.ts', status: 'renamed', previous_filename: 'electron-main/src/db.ts' }];
   assert.equal(filesLookProtected(renamed), true);
-  assert.equal(classify(readyFacts({ protectedPath: filesLookProtected(renamed) })).reason, 'protected path');
+  assert.equal(filesLookHighRisk(renamed), true);
+  assert.equal(filesLookOwner(renamed), false);
+  assert.equal(classify(readyFacts({ highRisk: true })).reason, 'high-risk review required');
+  const outOfGithub = [{ filename: 'src/x.ts', previous_filename: '.github/workflows/old.yml' }];
+  assert.equal(filesLookOwner(outOfGithub), true);
+  assert.equal(classify(readyFacts({ protectedPath: true, highRisk: true, strictGate: true })).reason, 'protected path');
 });
 
 test('classify holds forks, batch bases, protected paths, missing proof, and a missing tip gate', () => {
@@ -302,7 +315,9 @@ test('classify holds forks, batch bases, protected paths, missing proof, and a m
   assert.equal(classify(readyFacts({ protectedPath: true })).reason, 'protected path');
   assert.equal(classify(readyFacts({ labels: ['tip-freeze'] })).reason, 'hold label');
   assert.equal(classify(readyFacts({ proof: false })).reason, 'missing independent evidence run');
-  assert.equal(classify(readyFacts({ mergeState: 'BEHIND' })).reason, 'rebase needed');
+  assert.equal(classify(readyFacts({ mergeState: 'BEHIND' })).action, 'enqueue');
+  assert.equal(classify(readyFacts({ mergeState: 'DIRTY' })).reason, 'merge conflicts');
+  assert.equal(classify(readyFacts({ mergeState: 'UNMERGEABLE' })).reason, 'unmergeable');
   assert.equal(classify(readyFacts({ mergeState: 'UNKNOWN' })).reason, 'mergeability unknown');
   assert.equal(classify(readyFacts({ draft: true, gate: false })).action, 'undraft');
   assert.equal(classify(readyFacts({ gate: false })).reason, 'tip gate missing');
@@ -317,6 +332,166 @@ test('classify holds forks, batch bases, protected paths, missing proof, and a m
   assert.equal(classify(readyFacts({ labels: ['Lease:active'] })).reason, 'lease');
   assert.equal(classify(readyFacts({ rulesetKnown: false })).reason, 'ruleset policy unknown');
   assert.equal(classify(readyFacts({ rulesetMatch: false })).reason, 'ruleset policy mismatch');
+});
+
+test('high-risk paths need a strict low-risk pass, and .github stays owner-held', () => {
+  const paths = ['package.json', 'frontend/package-lock.json', 'frontend/vite.config.ts', '.claude/settings.json', 'AGENTS.md'];
+  for (const filename of paths) {
+    assert.equal(filesLookHighRisk([{ filename }]), true, filename);
+    assert.equal(filesLookOwner([{ filename }]), false, filename);
+    assert.equal(reviewPlan([{ filename }]).threshold, 'strict', filename);
+  }
+  assert.equal(filesLookOwner([{ filename: '.github/workflows/ci.yml' }]), true);
+  assert.equal(filesLookHighRisk([{ filename: '.github/workflows/ci.yml' }]), false);
+  assert.equal(reviewPlan([{ filename: '.github/workflows/ci.yml' }]).threshold, 'owner');
+  assert.equal(filesLookProtected([{ filename: 'frontend/src/app.ts' }]), false);
+  assert.match(STRICT_REVIEW_PROMPT, /risk is low/);
+  assert.match(STRICT_REVIEW_PROMPT, /block/i);
+  assert.equal(classify(readyFacts({ highRisk: true, gate: true, strictGate: false })).reason, 'high-risk review required');
+  assert.equal(classify(readyFacts({ highRisk: true, gate: true, strictGate: true })).action, 'enqueue');
+  assert.equal(classify(readyFacts({ highRisk: true, strictGate: true, labels: ['carve-out'] })).action, 'enqueue');
+  assert.equal(classify(readyFacts({ labels: ['carve-out'] })).reason, 'hold label');
+  assert.equal(classify(readyFacts({ highRisk: true, labels: ['carve-out'] })).reason, 'high-risk review required');
+  assert.equal(classify(readyFacts({ highRisk: true, strictGate: true, gateBlocked: true })).reason, 'provider review blocked');
+  assert.equal(classify(readyFacts({ gateBlocked: true })).reason, 'provider review blocked');
+  const blocked = inspectGate({
+    conclusion: 'success', headSha: HEAD, appId: GATE_APP_ID, summary: `Head: ${HEAD}\nRisk: high\n`,
+  }, HEAD);
+  assert.equal(blocked.blocked, true);
+  assert.equal(blocked.pass, false);
+  const strict = inspectGate({
+    conclusion: 'success', headSha: HEAD, appId: GATE_APP_ID,
+    summary: headGateSummary(HEAD, 'strict'),
+  }, HEAD);
+  assert.equal(strict.strict, true);
+  assert.equal(headGateSummary(HEAD, 'standard'), `Head: ${HEAD}\nRisk: low\nRule: reducer pass for this run`);
+  const duplicate = inspectGate({
+    conclusion: 'success', headSha: HEAD, appId: GATE_APP_ID,
+    summary: `Head: ${HEAD}\nRisk: low\nRisk: high\n`,
+  }, HEAD);
+  assert.equal(duplicate.blocked, true);
+  assert.equal(duplicate.pass, false);
+  assert.equal(duplicate.strict, false);
+});
+
+test('a high-risk draft undrafts before the strict gate exists', () => {
+  const draft = readyFacts({ draft: true, highRisk: true, strictGate: false, gate: false, gateBlocked: true });
+  assert.equal(classify(draft).action, 'undraft');
+  assert.equal(classify(readyFacts({ highRisk: true, strictGate: false, gate: false })).reason, 'high-risk review required');
+});
+
+test('dependabot patch and minor can enqueue, major and unknown stay held', () => {
+  const eligible = (over) => classify(readyFacts({
+    author: 'dependabot[bot]',
+    authorAllowed: false,
+    highRisk: true,
+    strictGate: true,
+    gate: true,
+    ...over,
+  }));
+  assert.equal(eligible({ dependabotUpdate: 'patch' }).action, 'enqueue');
+  assert.equal(eligible({ dependabotUpdate: 'minor' }).action, 'enqueue');
+  assert.equal(eligible({ dependabotUpdate: 'major' }).reason, 'dependabot major');
+  assert.equal(eligible({ dependabotUpdate: 'unknown' }).reason, 'dependabot update unknown');
+  assert.equal(eligible({ dependabotUpdate: null }).reason, 'dependabot update unknown');
+  assert.equal(eligible({ dependabotUpdate: 'patch', protectedPath: true, strictGate: true }).reason, 'protected path');
+  assert.equal(eligible({ dependabotUpdate: 'patch', strictGate: false }).reason, 'high-risk review required');
+  assert.equal(eligible({ dependabotUpdate: 'patch', ciGreen: false, strictGate: true }).reason, 'required checks are not green');
+  const signed = (subject, over = {}) => ({
+    authorLogin: 'dependabot[bot]',
+    committerLogin: 'dependabot[bot]',
+    verified: true,
+    reason: 'valid',
+    message: subject,
+    ...over,
+  });
+  assert.equal(resolveDependabotCommits([signed('Bump left-pad from 1.2.3 to 1.2.4')]), 'patch');
+  assert.equal(resolveDependabotCommits([signed('chore(deps): bump left-pad from 1.2.3 to 1.3.0')]), 'minor');
+  assert.equal(resolveDependabotCommits([signed('Bump left-pad from 1.2.3 to 2.0.0 in /frontend')]), 'major');
+  assert.equal(resolveDependabotCommits([signed('Bump left-pad from 0.2.1 to 0.3.0')]), 'major');
+  assert.equal(resolveDependabotCommits([signed('Bump left-pad from 0.2.1 to 0.2.2')]), 'patch');
+  assert.equal(resolveDependabotCommits([signed('Bump the npm_and_yarn group with 3 updates')]), 'unknown');
+  assert.equal(resolveDependabotCommits([signed('Bump left-pad from 1.2.3-beta.1 to 1.2.3')]), 'unknown');
+  assert.equal(resolveDependabotCommits([
+    signed('Bump left-pad from 1.2.3 to 2.0.0\n\nupdate-type: version-update:semver-patch\n'),
+  ]), 'major');
+  assert.equal(resolveDependabotCommits([
+    signed('Bump left-pad from 1.2.3 to 1.2.4', { authorLogin: 'ada', committerLogin: 'ada' }),
+  ]), 'unknown');
+  assert.equal(resolveDependabotCommits([
+    signed('Bump left-pad from 1.2.3 to 1.2.4', { committerLogin: 'web-flow' }),
+  ]), 'unknown');
+  assert.equal(resolveDependabotCommits([
+    signed('Bump left-pad from 1.2.3 to 1.2.4', { verified: false, reason: 'unsigned' }),
+  ]), 'unknown');
+  assert.equal(resolveDependabotCommits([]), 'unknown');
+});
+
+test('the flow client reads dependabot commits and ignores pull request text', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'unattended', 'flow-client.js'), 'utf8');
+  assert.match(src, /pulls\/\$\{number\}\/commits/);
+  assert.equal(src.includes('update-type'), false);
+});
+
+test('the new path list still matches every old main protected pattern', () => {
+  const oldMain = [
+    /(^|\/)\.github\//i,
+    /^electron-main\/src\/db\.ts$/,
+    /(^|\/)electron-builder[^/]*$/i,
+    /(^|\/)\.env($|\.)/,
+    /secrets?\.(ts|js|json|ya?ml)$/i,
+    /(^|\/)auth(\/|$)/i,
+    /(^|\/)release\//i,
+  ];
+  const samples = [
+    '.github/workflows/ci.yml',
+    'pkg/nested/.github/workflows/ci.yml',
+    'electron-main/src/db.ts',
+    'electron-builder.json',
+    'frontend/.env',
+    '.env.local',
+    'apiSecrets.ts',
+    'user-secrets.ts',
+    'clientSecret.ts',
+    'app-secret.yaml',
+    'src/secrets.json',
+    'electron-main/src/auth/session.ts',
+    'release/notes.md',
+  ];
+  for (const name of samples) {
+    assert.equal(oldMain.some((re) => re.test(name)), true, name);
+    assert.equal(protectedPath(name), true, name);
+  }
+});
+
+test('factsFrom reads a signed dependabot commit and a strict gate summary', () => {
+  const pr = prRecord({
+    author: { login: 'dependabot[bot]' },
+  });
+  const detail = detailFor(pr, {
+    commits: [{
+      authorLogin: 'dependabot[bot]',
+      committerLogin: 'dependabot[bot]',
+      verified: true,
+      reason: 'valid',
+      message: 'Bump left-pad from 1.2.3 to 1.2.4\n\nupdate-type: version-update:semver-major\n',
+    }],
+    files: [{ filename: 'package.json' }],
+    checks: {
+      ci: { conclusion: 'success', headSha: HEAD },
+      'notes-windows': { conclusion: 'success', headSha: HEAD },
+      'screenshot-check': { conclusion: 'success', headSha: HEAD },
+      gate: { conclusion: 'success', headSha: HEAD, appId: GATE_APP_ID, summary: headGateSummary(HEAD, 'strict') },
+    },
+  });
+  const facts = factsFrom(pr, detail);
+  assert.equal(facts.dependabotUpdate, 'patch');
+  assert.equal(facts.highRisk, true);
+  assert.equal(facts.strictGate, true);
+  assert.equal(classify(facts).action, 'enqueue');
+  const owner = factsFrom(pr, detailFor(pr, { files: [{ filename: '.github/workflows/ci.yml' }] }));
+  assert.equal(owner.protectedPath, true);
+  assert.equal(classify(owner).reason, 'protected path');
 });
 
 test('a disabled or unreadable switch performs no undraft and no enqueue', () => {
@@ -516,9 +691,27 @@ test('model transports are unavailable and cannot reduce to a pass', () => {
   assert.equal(reduce(pass('claude', 'high'), pass('codex', 'high'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
   assert.equal(reduce(pass('claude', 'low', { critic: 'pass', shield: 'pass', probe: 'hold' }), pass('codex', 'low'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
   assert.equal(reduce(unavailableRow('claude'), pass('codex', 'low'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
+  assert.equal(reduce(pass('claude', 'medium'), pass('codex', 'low'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
+  const blocked = { ...pass('claude', 'low'), status: 'block' };
+  assert.equal(reduce(blocked, pass('codex', 'low'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
+  const strictRow = (provider) => ({ ...pass(provider, 'low'), threshold: 'strict' });
+  assert.equal(reduce(strictRow('claude'), pass('codex', 'low'), { runId: '9', runAttempt: '1', threshold: 'strict' }).decision, 'no-pass');
+  const strict = reduce(strictRow('claude'), strictRow('codex'), { runId: '9', runAttempt: '1', threshold: 'strict' });
+  assert.equal(strict.decision, 'pass');
+  assert.equal(strict.risk, 'low');
+  assert.equal(strict.threshold, 'strict');
+  assert.equal(strictClaimOk(strict), true);
+  assert.equal(acceptReducer({ ...strict, threshold: 'standard' }, { runId: '9', runAttempt: '1' }), null);
   const accepted = reduce(pass('claude', 'low'), pass('codex', 'low'), { runId: '9', runAttempt: '1' });
   assert.equal(accepted.decision, 'pass');
+  assert.equal(accepted.threshold, 'standard');
   assert.equal(accepted.roles.claude.critic, 'pass');
+  assert.equal(acceptReducer({ ...accepted, threshold: 'strict' }, { runId: '9', runAttempt: '1' }), null);
+  const claudeOnly = reduce(strictRow('claude'), pass('codex', 'low'), { runId: '9', runAttempt: '1', threshold: 'strict' }, 'claude');
+  assert.equal(claudeOnly.decision, 'pass');
+  assert.equal(claudeOnly.threshold, 'strict');
+  assert.equal(claudeOnly.providers.length, 1);
+  assert.equal(reduce(pass('claude', 'low'), strictRow('codex'), { runId: '9', runAttempt: '1', threshold: 'strict' }, 'claude').decision, 'no-pass');
   assert.equal(acceptReducer(accepted, { runId: '8', runAttempt: '1' }), null);
   assert.equal(acceptReducer({ ...accepted, risk: 'high' }, { runId: '9', runAttempt: '1' }), null);
   assert.equal(acceptReducer({ ...accepted, roles: { ...accepted.roles, claude: { provider: 'claude', status: 'pass' } } }, { runId: '9', runAttempt: '1' }), null);
@@ -1202,12 +1395,39 @@ test('transports hold high risk, reject auth and malformed output, and hide the 
   assert.equal(high.risk, 'high');
   assert.equal(review(meta, { authFailed: true, modelText: text }).status, 'unavailable');
   assert.equal(review(meta, { modelText: 'not json', files: readable }).reason, 'malformed');
-  const held = review({ ...meta, provider: 'codex' }, {
+  const highRisk = review({ ...meta, provider: 'codex' }, {
     modelText: text,
-    files: [{ filename: 'electron-main/src/db.ts' }],
+    files: [{ filename: 'electron-main/src/db.ts', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' }],
   });
-  assert.equal(held.reason, 'protected-path');
-  assert.equal(held.risk, 'high');
+  assert.equal(highRisk.status, 'pass');
+  assert.equal(highRisk.threshold, 'strict');
+  assert.match(systemPrompt('strict'), new RegExp(STRICT_REVIEW_PROMPT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(systemPrompt('strict'), /"risk":"low"\|"high"/);
+  const ownerHeld = review(meta, {
+    modelText: text,
+    files: [{ filename: 'pkg/.github/workflows/ci.yml', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' }],
+  });
+  assert.equal(ownerHeld.reason, 'owner-path');
+  assert.equal(ownerHeld.risk, 'high');
+  const fromCompare = review({ ...meta, baseSha: BASE }, {
+    modelText: text,
+    files: [{ filename: 'frontend/src/app.ts', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' }],
+    compare: {
+      base_commit: { sha: BASE },
+      total_commits: 1,
+      ahead_by: 1,
+      commits: [{ sha: HEAD }],
+      files: [{ filename: 'package.json', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' }],
+    },
+  });
+  assert.equal(fromCompare.threshold, 'strict');
+  assert.equal(thresholdFromCompare(fromCompare && {
+    base_commit: { sha: BASE },
+    total_commits: 1,
+    ahead_by: 1,
+    commits: [{ sha: HEAD }],
+    files: [{ filename: 'package.json', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' }],
+  }, BASE, HEAD), 'strict');
   const saved = {
     GITHUB_TOKEN: process.env.GITHUB_TOKEN,
     GH_TOKEN: process.env.GH_TOKEN,

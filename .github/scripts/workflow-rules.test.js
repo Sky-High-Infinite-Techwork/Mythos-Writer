@@ -99,16 +99,12 @@ test('stage1 includes needs.diff-guard.result', () => {
   assert.match(stage[1], /needs\.diff-guard\.result/);
 });
 
-test('draft-ready-on-green skips non-main bases before ready', () => {
+test('draft-ready-on-green is retired so hygiene cannot undraft', () => {
   const doc = loadWorkflow('mythos-pr-hygiene.yml');
-  const run = doc.jobs['draft-ready-on-green'].steps.map((step) => step.run || '').join('\n');
-  const baseCheck = 'if [ "$BASE" != "main" ]; then echo "skip #$n base $BASE"; continue; fi';
-  const baseAt = run.indexOf(baseCheck);
-  const readyAt = run.indexOf('gh pr ready');
-  assert.ok(run.includes('baseRefName'));
-  assert.ok(baseAt >= 0, 'base check');
-  assert.ok(readyAt >= 0, 'gh pr ready');
-  assert.ok(baseAt < readyAt);
+  assert.equal(doc.jobs['draft-ready-on-green'], undefined);
+  const text = fs.readFileSync(path.join(WORKFLOWS, 'mythos-pr-hygiene.yml'), 'utf8');
+  assert.equal(text.includes('gh pr ready'), false);
+  assert.ok(doc.jobs['draft-ci-comment']);
 });
 
 test('ops health is quarterly secrets-rotation only', () => {

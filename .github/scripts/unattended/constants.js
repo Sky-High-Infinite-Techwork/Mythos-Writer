@@ -18,22 +18,23 @@ const EVIDENCE_WORKFLOWS = [
 ];
 const RESULT_SCHEMA = 'mythos-gate-result/v1';
 
-const PROTECTED_PATH = [
-  /(^|\/)\.github\//i,
-  /^electron-main\/src\/db\.ts$/,
-  /(^|\/)electron-builder[^/]*$/i,
-  /(^|\/)\.env($|\.)/,
-  /secrets?\.(ts|js|json|ya?ml)$/i,
-  /(^|\/)auth(\/|$)/i,
-  /(^|\/)release\//i,
-];
-
 function sha40(value) {
   return typeof value === 'string' && /^[0-9a-f]{40}$/.test(value);
 }
 
+// Same ERE as batch-automerge.yml PROTECTED_RE. The workflow cannot load this
+// module (it does not check the repo out). batch-automerge.test.js locks the copies.
+const PROTECTED_RE_SOURCE = "(^|/)auth|payment|billing|stripe|(^|/)migrations?/|schema|(^|/)\\.github/|(^|/)release|electron-builder|\\.nsh$|(^|/)scripts/verify-fuses\\.mjs$|(^|/)scripts/fuses\\.expected\\.json$|^electron-main/src/db\\.ts$|secrets?\\.(ts|js|json|ya?ml)$|(^|/)\\.env(\\..+)?$|(^|/)agents\\.md$|(^|/)claude\\.md$|(^|/)\\.claude/|(^|/)\\.codex/|(^|/)\\.mcp\\.json$|(^|/)\\.npmrc$|(^|/)\\.yarnrc[^/]*$|(^|/)\\.husky/|(^|/)\\.gitmodules$|(^|/)[^/]+\\.config\\.[^/]+$|(^|/)(yarn|cargo|poetry|pipfile|uv|pdm|gemfile|composer|podfile|mix|pubspec|flake)\\.lock$|(^|/)(package-lock|npm-shrinkwrap|packages\\.lock)\\.json$|(^|/)pnpm-lock\\.yaml$|(^|/)bun\\.lockb?$|(^|/)go\\.sum$|(^|/)gradle\\.lockfile$|(^|/)package\\.json$|(^|/)cargo\\.toml$|(^|/)go\\.mod$|(^|/)gemfile$|(^|/)composer\\.json$|(^|/)pyproject\\.toml$|(^|/)pipfile$|(^|/)requirements[^/]*\\.txt$|(^|/)pom\\.xml$|(^|/)build\\.gradle[^/]*$|^(docs/)?codeowners$|(^|/)deno\\.lock$|(^|/)package\\.resolved$|(^|/)\\.terraform\\.lock\\.hcl$|(^|/)dev-requirements[^/]*\\.txt$|(^|/)setup\\.py$";
+const PROTECTED_RE = new RegExp(PROTECTED_RE_SOURCE, 'i');
+// .github/** stays owner-merged, including a nested path the batch ERE only anchors at ^.
+const OWNER_RE = /(^|\/)\.github\//i;
+
 function protectedPath(filename) {
-  return PROTECTED_PATH.some((re) => re.test(filename));
+  return PROTECTED_RE.test(String(filename || ''));
+}
+
+function ownerPath(filename) {
+  return OWNER_RE.test(String(filename || ''));
 }
 
 module.exports = {
@@ -47,6 +48,8 @@ module.exports = {
   HOLD_LABELS,
   EVIDENCE_WORKFLOWS,
   RESULT_SCHEMA,
+  PROTECTED_RE_SOURCE,
   sha40,
   protectedPath,
+  ownerPath,
 };

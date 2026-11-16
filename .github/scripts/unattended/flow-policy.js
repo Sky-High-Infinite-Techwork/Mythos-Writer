@@ -7,10 +7,10 @@ const {
   GATE_APP_ID,
   REPO,
   sha40,
-  protectedPath,
 } = require('./constants');
+const { fileClasses } = require('./risk-policy');
 
-const MERGE_OK = new Set(['CLEAN', 'BLOCKED', 'HAS_HOOKS', 'UNSTABLE', 'DRAFT']);
+const MERGE_OK = new Set(['CLEAN', 'BLOCKED', 'HAS_HOOKS', 'UNSTABLE', 'DRAFT', 'BEHIND']);
 
 function hold(reason) {
   return { action: 'hold', reason };
@@ -35,7 +35,9 @@ function evidenceRunOk(run, head, prNumber, baseRef, baseSha, revision) {
   if (run.repository !== REPO || run.headRepository !== REPO) return false;
   if (run.headSha !== head || run.pr !== prNumber) return false;
   if (run.prHeadSha !== head || run.prBaseRef !== baseRef) return false;
-  if (!sha40(baseSha) || run.prBaseSha !== baseSha) return false;
+  // baseSha is the pull request's current base. A newer main must not void
+  // evidence that is still bound to this exact head.
+  void baseSha;
   if (!Number.isInteger(run.runId) || run.runId < 1) return false;
   if (!Number.isInteger(run.runAttempt) || run.runAttempt < 1) return false;
   if (!sha40(run.workflowBlob) || run.workflowBlob !== revision) return false;
@@ -78,20 +80,58 @@ function gateOk(run, head) {
   return first === `Head: ${head}`;
 }
 
+function summaryField(summary, label) {
+  const line = String(summary || '').split('\n').find((row) => row.startsWith(`${label}: `));
+  return line ? line.slice(label.length + 2).trim() : '';
+}
+
+// Flow-step view of the gate check. A success that is not Risk: low is not a pass.
+// strict is that pass plus Review: strict, bound to this head.
+function inspectGate(run, head) {
+  const empty = { pass: false, strict: false, blocked: false };
+  if (!run || run.headSha !== head || run.appId !== GATE_APP_ID) return empty;
+  const lines = String(run.summary || '').split('\n');
+  const riskLines = lines.filter((row) => row.startsWith('Risk: '));
+  if (riskLines.length > 1) return { pass: false, strict: false, blocked: true };
+  const bound = lines[0] === `Head: ${head}`;
+  const risk = riskLines.length === 1 ? riskLines[0].slice('Risk: '.length).trim() : '';
+  const review = summaryField(run.summary, 'Review');
+  const failure = run.conclusion === 'failure' || run.conclusion === 'cancelled' || run.conclusion === 'timed_out';
+  const nonLow = risk === 'block' || (risk !== '' && risk !== 'low');
+  if (!bound && !failure && !nonLow) return empty;
+  const blocked = Boolean(failure || nonLow);
+  const pass = run.conclusion === 'success' && bound && risk === 'low' && !blocked;
+  return { pass, strict: pass && review === 'strict', blocked };
+}
+
 function filesLookProtected(files) {
-  return (files || []).some((file) => protectedPath(file.filename || '') || protectedPath(file.previous_filename || ''));
+  const classes = fileClasses(files);
+  return classes.has('owner') || classes.has('high-risk');
+}
+
+function filesLookOwner(files) {
+  return fileClasses(files).has('owner');
+}
+
+function filesLookHighRisk(files) {
+  return fileClasses(files).has('high-risk');
 }
 
 function classify(facts) {
   if (facts.allowlistKnown !== true) return hold('author allow-list missing');
   if (facts.scopeKnown !== true) return hold('team/scope unknown');
   if (facts.fork) return hold('fork');
-  if (facts.authorAllowed !== true) return hold('author not allow-listed');
-  if (facts.author === 'dependabot[bot]') return hold('dependabot');
+  // Dependabot patch and minor are eligible without an allow-list entry. The bump
+  // class is checked after the owner-path hold, so a .github change stays protected.
+  if (facts.author !== 'dependabot[bot]' && facts.authorAllowed !== true) {
+    return hold('author not allow-listed');
+  }
   if (!sha40(facts.head)) return hold('head sha');
   if (facts.base !== 'main') return hold('base is not main');
   const labels = (facts.labels || []).map((name) => String(name).toLowerCase());
-  if (labels.some((name) => HOLD_LABELS.includes(name))) return hold('hold label');
+  // carve-out is the old Ivy marker. It still holds an ordinary PR. A high-risk PR
+  // with a strict low-risk pass is not held for that label.
+  if (labels.some((name) => name !== 'carve-out' && HOLD_LABELS.includes(name))) return hold('hold label');
   if (facts.labelsComplete === false) return hold('label list incomplete');
   if (facts.leaseKnown !== true) return hold('lease unknown');
   if (facts.leaseHeld === true || labels.some((name) => name === 'lease' || name.startsWith('lease:'))) {
@@ -103,13 +143,24 @@ function classify(facts) {
   if (facts.policyKnown === false) return hold('merge queue policy unknown');
   if (!facts.filesComplete) return hold('file list incomplete');
   if (facts.protectedPath) return hold('protected path');
-  if (facts.mergeState === 'BEHIND' || facts.mergeState === 'DIRTY' || facts.mergeState === 'UNMERGEABLE') {
-    return hold('rebase needed');
+  if (facts.author === 'dependabot[bot]') {
+    if (facts.dependabotUpdate === 'major') return hold('dependabot major');
+    if (facts.dependabotUpdate !== 'patch' && facts.dependabotUpdate !== 'minor') {
+      return hold('dependabot update unknown');
+    }
   }
+  if (facts.mergeState === 'DIRTY') return hold('merge conflicts');
+  if (facts.mergeState === 'UNMERGEABLE') return hold('unmergeable');
   if (!MERGE_OK.has(facts.mergeState)) return hold('mergeability unknown');
   if (!facts.proof) return hold('missing independent evidence run');
   if (!facts.ciGreen) return hold('required checks are not green');
+  // The gate is not posted for drafts. Undraft first, then the gate runs, then enqueue.
   if (facts.draft) return { action: 'undraft', reason: 'draft with an evidence run and required checks' };
+  if (facts.gateBlocked) return hold('provider review blocked');
+  if (facts.highRisk && facts.strictGate !== true) return hold('high-risk review required');
+  if (labels.includes('carve-out') && !(facts.highRisk === true && facts.strictGate === true)) {
+    return hold('hold label');
+  }
   if (!facts.gate) return hold('tip gate missing');
   if (!facts.queueEnabled) return hold('base has no merge queue');
   if (!facts.nodeId) return hold('missing pull request id');
@@ -124,5 +175,8 @@ module.exports = {
   latestRun,
   ciGreen,
   gateOk,
+  inspectGate,
   filesLookProtected,
+  filesLookOwner,
+  filesLookHighRisk,
 };

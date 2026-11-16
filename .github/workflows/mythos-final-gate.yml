@@ -96,6 +96,7 @@ jobs:
       pr: ${{ steps.pick.outputs.pr }}
       head: ${{ steps.pick.outputs.head }}
       base: ${{ steps.pick.outputs.base }}
+      threshold: ${{ steps.pick.outputs.threshold }}
       run_claude: ${{ steps.pick.outputs.run_claude }}
       run_codex: ${{ steps.pick.outputs.run_codex }}
     steps:
@@ -210,7 +211,7 @@ jobs:
         run: node .github/scripts/unattended/transport-run.js
 
   reduce:
-    needs: [admit, transport-claude, transport-codex]
+    needs: [admit, discover, transport-claude, transport-codex]
     if: always() && needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main' && (needs.transport-claude.result == 'success' || needs.transport-claude.result == 'skipped') && (needs.transport-codex.result == 'success' || needs.transport-codex.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -240,6 +241,7 @@ jobs:
         env:
           CLAUDE_RESULT: ${{ needs.transport-claude.outputs.result }}
           CODEX_RESULT: ${{ needs.transport-codex.outputs.result }}
+          THRESHOLD: ${{ needs.discover.outputs.threshold }}
           MYTHOS_GATE_PROVIDERS_JSON: ${{ toJSON(vars.MYTHOS_GATE_PROVIDERS) }}
           GITHUB_TOKEN: ''
           GH_TOKEN: ''

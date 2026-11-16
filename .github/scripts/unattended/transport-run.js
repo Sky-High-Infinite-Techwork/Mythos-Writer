@@ -7,9 +7,9 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { REPO, sha40 } = require('./constants');
 const { gh } = require('./spawn');
-const { filesLookProtected } = require('./flow-policy');
+const { reviewPlan } = require('./risk-policy');
 const {
-  assessDiff, readCompare, userDiff, review, unavailable, claudeInvocation, codexBody, codexResult, claudeResult,
+  assessDiff, readCompare, userDiff, systemPrompt, review, unavailable, claudeInvocation, codexBody, codexResult, claudeResult,
 } = require('./transport');
 
 function setOutput(name, value) {
@@ -45,9 +45,9 @@ function fetchCompare(baseSha, headSha) {
   return { ok: true, files: read.files, body };
 }
 
-function runClaude(diffText) {
+function runClaude(diffText, prompt) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-transport-'));
-  const call = claudeInvocation(home);
+  const call = claudeInvocation(home, prompt);
   fs.writeFileSync(call.systemPromptFile, call.systemPrompt);
   const result = spawnSync(call.command, call.args, {
     cwd: home,
@@ -60,8 +60,8 @@ function runClaude(diffText) {
   return claudeResult(result.status, result.stdout, result.stderr);
 }
 
-function runCodex(diffText) {
-  const body = JSON.stringify(codexBody(diffText));
+function runCodex(diffText, prompt) {
+  const body = JSON.stringify(codexBody(diffText, prompt));
   return new Promise((resolve) => {
     const req = https.request('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -115,11 +115,13 @@ async function main() {
     return 0;
   }
   const diff = assessDiff(loaded.files);
-  if (!diff.ok || filesLookProtected(loaded.files)) {
-    emit(review(meta, { compare: loaded.body, files: loaded.files }));
+  const plan = reviewPlan(loaded.files);
+  if (!diff.ok || plan.threshold === 'owner') {
+    emit(review(meta, { compare: loaded.body }));
     return 0;
   }
-  const ran = provider === 'claude' ? runClaude(diff.text) : await runCodex(diff.text);
+  const prompt = systemPrompt(plan.threshold);
+  const ran = provider === 'claude' ? runClaude(diff.text, prompt) : await runCodex(diff.text, prompt);
   emit(review(meta, { ...ran, compare: loaded.body, modelText: ran.stdout }));
   return 0;
 }

@@ -38,7 +38,7 @@ High → low:
 
 1. **Circuit breaker** (`MYTHOS_WAKE_CIRCUIT_BREAKER`) — suppresses wakes
 2. **Trend throttle** (`MYTHOS_TIP_FIX_WINDOW_MINUTES` 20→10)
-3. **Auto ready-for-review** (hygiene `draft-ready-on-green`)
+3. **Auto ready-for-review** — retired with hygiene `draft-ready-on-green`. Undraft is `mythos-flow-step` only.
 
 Rules:
 
@@ -55,7 +55,7 @@ Rules:
 | --- | --- | --- | --- |
 | Set `MYTHOS_WAKE_CIRCUIT_BREAKER` | Log only | Set var | n/a (is the breaker) |
 | Set `MYTHOS_TIP_FIX_WINDOW_MINUTES=10` | Log only | Set var | **Yes** |
-| `gh pr ready` after 2 greens | Log only | Execute | **Yes** |
+| `gh pr ready` after 2 greens | Retired with `draft-ready-on-green` | Retired | n/a |
 
 ## Rollback (one command each)
 

@@ -83,9 +83,43 @@ function sameProviders(left, right) {
   return left.length === right.length && left.every((name, index) => name === right[index]);
 }
 
+function rowThreshold(row) {
+  if (!row || row.status !== 'pass' || row.risk !== 'low') return null;
+  if (row.threshold === undefined || row.threshold === 'standard') return 'standard';
+  if (row.threshold === 'strict') return 'strict';
+  return null;
+}
+
+// Only the configured providers vote. They must agree. A caller cannot upgrade
+// a standard row to strict by setting expected.threshold.
+function agreedThreshold(rows, providers, expected) {
+  if (expected && expected.threshold === 'owner') return null;
+  const values = [];
+  for (const name of providers) {
+    const value = rowThreshold(rows[name]);
+    if (!value) return null;
+    values.push(value);
+  }
+  const agreed = values.every((value) => value === values[0]) ? values[0] : null;
+  if (!agreed) return null;
+  if (expected && (expected.threshold === 'strict' || expected.threshold === 'standard') && expected.threshold !== agreed) {
+    return null;
+  }
+  return agreed;
+}
+
+function strictClaimOk(value) {
+  if (!value) return false;
+  if (value.threshold !== 'strict' && value.threshold !== 'standard') return value.threshold === undefined;
+  const providers = value.providers;
+  if (!Array.isArray(providers) || providers.length === 0) return false;
+  return providers.every((name) => value.roles && value.roles[name] && value.roles[name].threshold === value.threshold);
+}
+
 // A pass requires every listed provider on the same low-risk head.
 // High risk, a missing role, an unavailable listed provider, or a bad provider list cannot pass.
 // An unlisted provider cannot satisfy a listed one.
+// threshold comes from those listed providers and must match the compare class when one is supplied.
 function reduce(claude, codex, expected, rawProviders) {
   const parsed = parseProviders(rawProviders);
   if (!parsed.ok) return noPass('providers');
@@ -96,19 +130,22 @@ function reduce(claude, codex, expected, rawProviders) {
       return noPass(rows[name] && rows[name].status);
     }
   }
+  const threshold = agreedThreshold(rows, parsed.providers, expected);
+  if (!threshold) return noPass('threshold');
   const pr = rows[parsed.providers[0]].pr;
   if (!Number.isInteger(pr) || pr < 1 || parsed.providers.some((name) => rows[name].pr !== pr)) {
     return noPass('refused');
   }
   const roles = {};
   for (const name of parsed.providers) {
-    roles[name] = { provider: name, status: 'pass', critic: 'pass', shield: 'pass', probe: 'pass' };
+    roles[name] = { provider: name, status: 'pass', critic: 'pass', shield: 'pass', probe: 'pass', threshold };
   }
   return {
     schema: RESULT_SCHEMA,
     decision: 'pass',
     status: 'pass',
     risk: 'low',
+    threshold,
     repository: REPO,
     pr,
     headSha: head,
@@ -133,6 +170,10 @@ function acceptReducer(value, expected, rawProviders) {
     if (!rolePass({ ...value, provider: name, roles: roles[name] }, name, value.headSha, expected.runId, expected.runAttempt)) {
       return null;
     }
+  }
+  if (!strictClaimOk(value)) return null;
+  if (expected && (expected.threshold === 'strict' || expected.threshold === 'standard') && value.threshold !== expected.threshold) {
+    return null;
   }
   return value;
 }
@@ -163,7 +204,11 @@ function main(argv) {
     return 0;
   }
   if (command === 'reduce') {
-    const result = reduce(readJsonEnv('CLAUDE_RESULT'), readJsonEnv('CODEX_RESULT'), meta, providerArgument());
+    const threshold = process.env.THRESHOLD;
+    const expected = (threshold === 'strict' || threshold === 'standard' || threshold === 'owner')
+      ? { ...meta, threshold }
+      : meta;
+    const result = reduce(readJsonEnv('CLAUDE_RESULT'), readJsonEnv('CODEX_RESULT'), expected, providerArgument());
     const line = JSON.stringify(result);
     setOutput('result', line);
     setOutput('decision', result.decision);
@@ -178,5 +223,5 @@ if (require.main === module) process.exit(main(process.argv));
 
 module.exports = {
   transportResult, reduce, acceptReducer, noPass, reviewRolesPass, parseProviders, providersFromEnv,
-  parseProvidersJson, providerArgument,
+  parseProvidersJson, providerArgument, strictClaimOk,
 };

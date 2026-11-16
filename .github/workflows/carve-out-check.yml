@@ -7,9 +7,12 @@ name: carve-out-check
 # repeatedly missed bundled carve-outs when the file list was skimmed or
 # shrunk (see SKY-10569, SKY-10702, SKY-10974). This check makes the signal
 # structural: it labels and comments on the PR itself, so it survives even if
-# nobody re-diffs by hand. It never fails the build — carve-out paths are not
-# forbidden, they just require Ivy/human sign-off instead of a routine
-# CI-green auto-merge (see .github/copilot-instructions.md "Merge model").
+# nobody re-diffs by hand. It never fails the build. `.github/**` stays
+# owner-merged. Other flagged paths are high-risk: the merge queue takes them
+# only after mythos/final-gate from gate App 5736520, a strict provider review
+# for that exact head, at low risk. A block or any non-low risk stays held.
+# Builders do not wait for Critic, Shield, Probe, or an Ivy merge
+# (see .github/copilot-instructions.md "Merge model").
 
 on:
   pull_request:
@@ -48,7 +51,7 @@ jobs:
           sparse-checkout: .github/scripts/migration-flag.js
           sparse-checkout-cone-mode: false
 
-      - name: Flag carve-out paths for human/Ivy review
+      - name: Flag carve-out paths
         uses: actions/github-script@v9
         with:
           script: |
@@ -186,8 +189,11 @@ jobs:
               '',
               list,
               '',
-              'Per the merge model, this does not auto-merge on green CI + a routine',
-              'merge-gate decision alone. Escalate to Ivy before merging.',
+              'Per the merge model, `.github/**` stays owner-merged.',
+              'Other flagged paths are high-risk. They join the merge queue only after',
+              '`mythos/final-gate` from gate App 5736520, from a strict provider review',
+              'of this exact head, at low risk. A block or any non-low risk stays held.',
+              'Do not wait for Critic, Shield, Probe, or an Ivy merge.',
             ].join('\n') + (migrationHits.length === 0 ? '' : `\n\n### DB / data migration\n\n${migrationList}`);
 
             await writeComment(body);

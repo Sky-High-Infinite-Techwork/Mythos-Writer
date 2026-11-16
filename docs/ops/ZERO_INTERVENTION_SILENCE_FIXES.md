@@ -2,17 +2,17 @@
 
 Creed: **cut waste, don't weaken quality.**
 
-PR hygiene (rebase + draft-CI comment + draft→ready): [`.github/workflows/mythos-pr-hygiene.yml`](../../.github/workflows/mythos-pr-hygiene.yml).
+PR hygiene (draft-CI comment only; undraft is `mythos-flow-step`): [`.github/workflows/mythos-pr-hygiene.yml`](../../.github/workflows/mythos-pr-hygiene.yml).
 
 ## Map (trigger → action → silence failure prevented)
 
-### 1. Draft ready after 2 consecutive CI greens (same tip)
+### 1. Draft ready after 2 consecutive CI greens (retired)
 
 | | |
 | --- | --- |
-| **Trigger** | `mythos-pr-hygiene` `draft-ready-on-green`: CI `workflow_run` **success** on a **draft** PR; sticky `<!-- mythos-draft-green:SHA -->` reaches `green_streak≥2` on the **same** tip SHA. |
-| **Action** | `gh pr ready` (mark ready-for-review). **Never** auto-close drafts. |
-| **Silence failure prevented** | Draft rot / forever-draft with green CI nobody notices. |
+| **Trigger** | Was `mythos-pr-hygiene` `draft-ready-on-green`. That job is removed. |
+| **Action** | None from hygiene. `mythos-flow-step` undrafts when its policy passes. Hygiene never calls `gh pr ready`. |
+| **Silence failure prevented** | A second, weaker undraft path cannot mark a carve-out or an unlisted author ready. |
 | **Committed** | `.github/workflows/mythos-pr-hygiene.yml` |
 
 ### 2. Self-healing audit-down
@@ -61,7 +61,7 @@ PR hygiene (rebase + draft-CI comment + draft→ready): [`.github/workflows/myth
 | | |
 | --- | --- |
 | **Trigger** | CI `workflow_run` on a **main push** (no associated pull request). `GET /actions/runs/{id}/pull_requests` returns HTTP 404 and `gh api` still writes the error JSON to stdout. |
-| **Action** | `draft-ready-on-green` and `draft-ci-comment` soft-skip (exit 0). Non-numeric tokens never reach `gh pr view`. |
+| **Action** | `draft-ci-comment` soft-skips (exit 0). Non-numeric tokens never reach `gh pr view`. |
 | **Silence failure prevented** | A green main CI run painting hygiene red, which looks like a product outage and invites noise. |
 | **Committed** | `.github/workflows/mythos-pr-hygiene.yml`, `scripts/mythos-ops/ops-guards.sh` |
 

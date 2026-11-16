@@ -6,7 +6,8 @@ const path = require('node:path');
 const { REPO, GATE_APP_ID, CHECK_NAME, sha40 } = require('./constants');
 const { gh, git, run } = require('./spawn');
 const { readSwitch } = require('./switch');
-const { acceptReducer, providerArgument } = require('./gate-result');
+const { acceptReducer, providerArgument, strictClaimOk } = require('./gate-result');
+const { headGateSummary } = require('./risk-policy');
 const { gateOk } = require('./flow-policy');
 const { flattenPages, rulesetMatches } = require('./flow-client');
 const { parseQueueRef, decideQueueEntry, stillQueue, queueSummary, TITLES } = require('./queue-policy');
@@ -347,7 +348,11 @@ function runPublish(io, opts) {
     if (pull.prReadable && pull.state === 'open' && !pull.draft && pull.head === head.headSha) {
       const current = io.ourRun(head.headSha);
       if (!current.headRunReadable) return { code: 1, posted };
-      const summary = `Head: ${head.headSha}\nRisk: low\nRule: reducer pass for this run`;
+      if (!strictClaimOk(head)) {
+        process.stdout.write(`head #${head.pr} threshold is not consistent; no success posted\n`);
+        return { code: 0, posted };
+      }
+      const summary = headGateSummary(head.headSha, head.threshold);
       if (!samePosted(current.headRun, 'completed', 'success', summary)) {
         if (!rulesAllow(io)) {
           process.stdout.write(`head #${head.pr} ruleset is not the main queue policy; no success posted\n`);

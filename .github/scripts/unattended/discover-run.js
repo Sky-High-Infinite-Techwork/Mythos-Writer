@@ -4,6 +4,8 @@ const fs = require('node:fs');
 const { REPO, sha40 } = require('./constants');
 const { gh } = require('./spawn');
 const { parseProvidersJson } = require('./gate-result');
+const { readCompare } = require('./transport');
+const { reviewPlan } = require('./risk-policy');
 
 function selectHead(prs, only) {
   const rows = (prs || []).filter((pr) => pr
@@ -31,6 +33,14 @@ function mapPull(row) {
     baseSha: row && row.base && row.base.sha,
     head: row && row.head && row.head.sha,
   };
+}
+
+// The class is the compare's file list at the discovered SHAs, not the live pull request files.
+function thresholdFromCompare(body, baseSha, headSha) {
+  const read = readCompare(body, baseSha, headSha);
+  if (!read.ok) return '';
+  if (read.files.length >= 300) return '';
+  return reviewPlan(read.files).threshold;
 }
 
 function setOutput(name, value) {
@@ -64,9 +74,21 @@ function main() {
   const flat = Array.isArray(pages) && pages.length && Array.isArray(pages[0]) ? pages.flat() : pages;
   const chosen = selectHead((flat || []).map(mapPull), only);
   const providers = parseProvidersJson(process.env.MYTHOS_GATE_PROVIDERS_JSON);
+  let threshold = '';
+  if (chosen) {
+    const compared = gh(['api', `repos/${REPO}/compare/${chosen.baseSha}...${chosen.head}`], process.env.READ_TOKEN);
+    if (compared.status === 0) {
+      try {
+        threshold = thresholdFromCompare(JSON.parse(compared.stdout), chosen.baseSha, chosen.head);
+      } catch {
+        threshold = '';
+      }
+    }
+  }
   setOutput('pr', chosen ? String(chosen.number) : '');
   setOutput('head', chosen ? chosen.head : '');
   setOutput('base', chosen ? chosen.baseSha : '');
+  setOutput('threshold', threshold);
   setOutput('run_claude', providers.ok && providers.providers.includes('claude') ? 'true' : 'false');
   setOutput('run_codex', providers.ok && providers.providers.includes('codex') ? 'true' : 'false');
   process.stdout.write(chosen ? `discover #${chosen.number} ${chosen.head}\n` : 'discover: no head\n');
@@ -75,4 +97,4 @@ function main() {
 
 if (require.main === module) process.exit(main());
 
-module.exports = { selectHead, mapPull };
+module.exports = { selectHead, mapPull, thresholdFromCompare };
