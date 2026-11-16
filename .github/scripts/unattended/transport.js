@@ -55,26 +55,36 @@ function assessDiff(files) {
   return { ok: true, reason: '', text: rows.join(''), files };
 }
 
+function counted(value) {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
 // Three-dot base...head echoes the requested base on base_commit.
-// The head commit is the last returned commit, and only when the list is complete.
+// GitHub caps the commit list at 250, so 250 is already a hold.
+// The head is the last element of a complete list, never commits[total_commits - 1].
 function readCompare(body, baseSha, headSha) {
   if (!body || !Array.isArray(body.files) || !Array.isArray(body.commits)) {
     return { ok: false, reason: 'diff-unreadable' };
   }
   const total = body.total_commits;
-  if (typeof total !== 'number' || !Number.isInteger(total) || total < 0) {
-    return { ok: false, reason: 'diff-unreadable' };
+  const commits = body.commits;
+  if (!counted(total)) return { ok: false, reason: 'diff-unreadable' };
+  const ahead = body.ahead_by;
+  if (ahead !== undefined && !counted(ahead)) return { ok: false, reason: 'diff-unreadable' };
+  if (commits.length >= COMPARE_COMMIT_CAP || total >= COMPARE_COMMIT_CAP || (counted(ahead) && ahead >= COMPARE_COMMIT_CAP)) {
+    return { ok: false, reason: 'commit-cap' };
   }
-  if (total > COMPARE_COMMIT_CAP || body.commits.length < total) {
+  if (commits.length !== total || (counted(ahead) && commits.length !== ahead)) {
     return { ok: false, reason: 'commit-cap' };
   }
   const base = body.base_commit && body.base_commit.sha;
   if (base !== baseSha) return { ok: false, reason: 'sha-mismatch' };
   if (total === 0) {
-    if (headSha !== baseSha) return { ok: false, reason: 'sha-mismatch' };
-  } else if (!body.commits[total - 1] || body.commits[total - 1].sha !== headSha) {
-    return { ok: false, reason: 'sha-mismatch' };
+    if (commits.length !== 0 || headSha !== baseSha) return { ok: false, reason: 'sha-mismatch' };
+    return { ok: false, reason: 'patch-missing' };
   }
+  const tip = commits[commits.length - 1];
+  if (!tip || tip.sha !== headSha) return { ok: false, reason: 'sha-mismatch' };
   return { ok: true, files: body.files };
 }
 

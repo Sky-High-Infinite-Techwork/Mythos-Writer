@@ -1301,15 +1301,30 @@ test('a capped or mismatched compare is held', () => {
       ...over,
     };
   }
-  const capped = review(meta, { modelText: passText, compare: body({ total_commits: 251, commits: [{ sha: HEAD }] }) });
-  assert.equal(capped.status, 'hold');
-  assert.equal(capped.reason, 'commit-cap');
+  const atCap = review(meta, {
+    modelText: passText,
+    compare: body({ total_commits: 250, ahead_by: 1, commits: [{ sha: HEAD }] }),
+  });
+  assert.equal(atCap.status, 'hold');
+  assert.equal(atCap.reason, 'commit-cap');
+  const aheadCap = review(meta, {
+    modelText: passText,
+    compare: body({ total_commits: 1, ahead_by: 250, commits: [{ sha: HEAD }] }),
+  });
+  assert.equal(aheadCap.status, 'hold');
+  assert.equal(aheadCap.reason, 'commit-cap');
   const short = review(meta, {
     modelText: passText,
-    compare: body({ total_commits: 2, commits: [{ sha: HEAD }] }),
+    compare: body({ total_commits: 2, ahead_by: 2, commits: [{ sha: HEAD }] }),
   });
   assert.equal(short.status, 'hold');
   assert.equal(short.reason, 'commit-cap');
+  const aheadShort = review(meta, {
+    modelText: passText,
+    compare: body({ total_commits: 1, ahead_by: 2, commits: [{ sha: HEAD }] }),
+  });
+  assert.equal(aheadShort.status, 'hold');
+  assert.equal(aheadShort.reason, 'commit-cap');
   const wrongBase = review(meta, {
     modelText: passText,
     compare: body({ base_commit: { sha: 'c'.repeat(40) } }),
@@ -1322,8 +1337,26 @@ test('a capped or mismatched compare is held', () => {
   });
   assert.equal(wrongHead.status, 'hold');
   assert.equal(wrongHead.reason, 'sha-mismatch');
-  assert.equal(readCompare(body(), BASE, HEAD).ok, true);
-  assert.equal(review(meta, { modelText: passText, compare: body() }).status, 'pass');
+  const none = review({ ...meta, headSha: BASE }, {
+    modelText: passText,
+    compare: body({
+      total_commits: 0,
+      ahead_by: 0,
+      commits: [],
+      base_commit: { sha: BASE },
+      files: [file],
+    }),
+  });
+  assert.equal(none.status, 'hold');
+  assert.equal(none.reason, 'patch-missing');
+  const emptyMismatch = review(meta, {
+    modelText: passText,
+    compare: body({ total_commits: 0, ahead_by: 0, commits: [] }),
+  });
+  assert.equal(emptyMismatch.status, 'hold');
+  assert.equal(emptyMismatch.reason, 'sha-mismatch');
+  assert.equal(readCompare(body({ ahead_by: 1 }), BASE, HEAD).ok, true);
+  assert.equal(review(meta, { modelText: passText, compare: body({ ahead_by: 1 }) }).status, 'pass');
 });
 
 test('one unreadable pull request is held and the next one can still be enqueued', () => {
