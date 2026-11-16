@@ -16,6 +16,7 @@ const CHECKLIST = [
 
 const DIFF_CAP = 48000;
 const COMPARE_FILE_LIMIT = 300;
+const COMPARE_COMMIT_CAP = 250;
 const CODEX_MODEL = 'gpt-4.1-mini';
 const BINARY_NAME = /\.(png|jpe?g|gif|webp|ico|pdf|woff2?|ttf|eot|zip|gz|tgz|tar|bin|exe|dll|so|dylib|wasm|mp[34]|mov|avi|webm)$/i;
 
@@ -52,6 +53,29 @@ function assessDiff(files) {
     rows.push(piece);
   }
   return { ok: true, reason: '', text: rows.join(''), files };
+}
+
+// Three-dot base...head echoes the requested base on base_commit.
+// The head commit is the last returned commit, and only when the list is complete.
+function readCompare(body, baseSha, headSha) {
+  if (!body || !Array.isArray(body.files) || !Array.isArray(body.commits)) {
+    return { ok: false, reason: 'diff-unreadable' };
+  }
+  const total = body.total_commits;
+  if (typeof total !== 'number' || !Number.isInteger(total) || total < 0) {
+    return { ok: false, reason: 'diff-unreadable' };
+  }
+  if (total > COMPARE_COMMIT_CAP || body.commits.length < total) {
+    return { ok: false, reason: 'commit-cap' };
+  }
+  const base = body.base_commit && body.base_commit.sha;
+  if (base !== baseSha) return { ok: false, reason: 'sha-mismatch' };
+  if (total === 0) {
+    if (headSha !== baseSha) return { ok: false, reason: 'sha-mismatch' };
+  } else if (!body.commits[total - 1] || body.commits[total - 1].sha !== headSha) {
+    return { ok: false, reason: 'sha-mismatch' };
+  }
+  return { ok: true, files: body.files };
 }
 
 function userDiff(text) {
@@ -114,7 +138,20 @@ function review(meta, input) {
       roles: { critic: 'hold', shield: 'hold', probe: 'hold' },
     });
   }
-  const diff = assessDiff(input && input.files);
+  let files = input && input.files;
+  if (input && input.compare) {
+    const read = readCompare(input.compare, meta.baseSha, meta.headSha);
+    if (!read.ok) {
+      return envelope(meta, {
+        status: 'hold',
+        risk: 'high',
+        reason: read.reason,
+        roles: { critic: 'hold', shield: 'hold', probe: 'hold' },
+      });
+    }
+    files = read.files;
+  }
+  const diff = assessDiff(files);
   if (!diff.ok) {
     return envelope(meta, {
       status: 'hold',
@@ -207,6 +244,7 @@ module.exports = {
   DIFF_CAP,
   CODEX_MODEL,
   assessDiff,
+  readCompare,
   userDiff,
   parseVerdict,
   review,

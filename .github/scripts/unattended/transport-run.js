@@ -9,7 +9,7 @@ const { REPO, sha40 } = require('./constants');
 const { gh } = require('./spawn');
 const { filesLookProtected } = require('./flow-policy');
 const {
-  assessDiff, userDiff, review, unavailable, claudeInvocation, codexBody, codexResult, claudeResult,
+  assessDiff, readCompare, userDiff, review, unavailable, claudeInvocation, codexBody, codexResult, claudeResult,
 } = require('./transport');
 
 function setOutput(name, value) {
@@ -40,8 +40,9 @@ function fetchCompare(baseSha, headSha) {
   } catch {
     return { ok: false };
   }
-  if (!body || !Array.isArray(body.files)) return { ok: false };
-  return { ok: true, files: body.files };
+  const read = readCompare(body, baseSha, headSha);
+  if (!read.ok) return { ok: false, reason: read.reason, body, files: body.files };
+  return { ok: true, files: read.files, body };
 }
 
 function runClaude(diffText) {
@@ -109,16 +110,17 @@ async function main() {
   }
   const loaded = fetchCompare(meta.baseSha, meta.headSha);
   if (!loaded.ok) {
-    emit(unavailable(meta, 'diff-unreadable'));
+    if (loaded.body) emit(review(meta, { compare: loaded.body }));
+    else emit(unavailable(meta, 'diff-unreadable'));
     return 0;
   }
   const diff = assessDiff(loaded.files);
   if (!diff.ok || filesLookProtected(loaded.files)) {
-    emit(review(meta, { files: loaded.files }));
+    emit(review(meta, { compare: loaded.body, files: loaded.files }));
     return 0;
   }
   const ran = provider === 'claude' ? runClaude(diff.text) : await runCodex(diff.text);
-  emit(review(meta, { ...ran, files: loaded.files, modelText: ran.stdout }));
+  emit(review(meta, { ...ran, compare: loaded.body, modelText: ran.stdout }));
   return 0;
 }
 

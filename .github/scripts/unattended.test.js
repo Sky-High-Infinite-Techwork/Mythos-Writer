@@ -15,7 +15,9 @@ const {
   parseAllowlist, authorMatches, leaseHeldFrom, rulesetMatches, httpStatus,
 } = require('./unattended/flow-client');
 const { selectHead } = require('./unattended/discover-run');
-const { review, modelEnv, claudeInvocation, assessDiff, userDiff, codexResult, codexBody, CHECKLIST } = require('./unattended/transport');
+const {
+  review, modelEnv, claudeInvocation, assessDiff, readCompare, userDiff, codexResult, codexBody, CHECKLIST,
+} = require('./unattended/transport');
 const { comparePath } = require('./unattended/transport-run');
 const { transportResult, reduce, acceptReducer, parseProviders, providersFromEnv, parseProvidersJson } = require('./unattended/gate-result');
 const { decideQueueEntry, stillQueue, parseQueueRef } = require('./unattended/queue-policy');
@@ -1283,6 +1285,45 @@ test('an incomplete diff is held and the review uses the discovered SHAs', () =>
   assert.match(route, new RegExp(`${base}\\.\\.\\.${HEAD}$`));
   assert.equal(route.includes('/pulls/'), false);
   assert.equal(comparePath('abc', HEAD), null);
+});
+
+test('a capped or mismatched compare is held', () => {
+  const meta = { provider: 'claude', pr: 7, headSha: HEAD, baseSha: BASE, runId: '9', runAttempt: '1' };
+  const passText = JSON.stringify({ risk: 'low', roles: { critic: 'pass', shield: 'pass', probe: 'pass' } });
+  const file = { filename: 'frontend/src/app.ts', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' };
+  function body(over = {}) {
+    return {
+      base_commit: { sha: BASE },
+      merge_base_commit: { sha: BASE },
+      total_commits: 1,
+      commits: [{ sha: HEAD }],
+      files: [file],
+      ...over,
+    };
+  }
+  const capped = review(meta, { modelText: passText, compare: body({ total_commits: 251, commits: [{ sha: HEAD }] }) });
+  assert.equal(capped.status, 'hold');
+  assert.equal(capped.reason, 'commit-cap');
+  const short = review(meta, {
+    modelText: passText,
+    compare: body({ total_commits: 2, commits: [{ sha: HEAD }] }),
+  });
+  assert.equal(short.status, 'hold');
+  assert.equal(short.reason, 'commit-cap');
+  const wrongBase = review(meta, {
+    modelText: passText,
+    compare: body({ base_commit: { sha: 'c'.repeat(40) } }),
+  });
+  assert.equal(wrongBase.status, 'hold');
+  assert.equal(wrongBase.reason, 'sha-mismatch');
+  const wrongHead = review(meta, {
+    modelText: passText,
+    compare: body({ commits: [{ sha: 'd'.repeat(40) }] }),
+  });
+  assert.equal(wrongHead.status, 'hold');
+  assert.equal(wrongHead.reason, 'sha-mismatch');
+  assert.equal(readCompare(body(), BASE, HEAD).ok, true);
+  assert.equal(review(meta, { modelText: passText, compare: body() }).status, 'pass');
 });
 
 test('one unreadable pull request is held and the next one can still be enqueued', () => {
