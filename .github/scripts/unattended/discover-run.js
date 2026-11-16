@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const { REPO, sha40 } = require('./constants');
 const { gh } = require('./spawn');
+const { parseProvidersJson } = require('./gate-result');
 
 function selectHead(prs, only) {
   const rows = (prs || []).filter((pr) => pr
@@ -11,6 +12,7 @@ function selectHead(prs, only) {
     && pr.fork !== true
     && pr.base === 'main'
     && sha40(pr.head)
+    && sha40(pr.baseSha)
     && Number.isInteger(pr.number)
     && pr.number > 0);
   if (only) return rows.find((pr) => String(pr.number) === String(only)) || null;
@@ -26,6 +28,7 @@ function mapPull(row) {
     draft: Boolean(row && row.draft),
     fork: headRepo !== REPO,
     base: row && row.base && row.base.ref,
+    baseSha: row && row.base && row.base.sha,
     head: row && row.head && row.head.sha,
   };
 }
@@ -60,8 +63,12 @@ function main() {
   }
   const flat = Array.isArray(pages) && pages.length && Array.isArray(pages[0]) ? pages.flat() : pages;
   const chosen = selectHead((flat || []).map(mapPull), only);
+  const providers = parseProvidersJson(process.env.MYTHOS_GATE_PROVIDERS_JSON);
   setOutput('pr', chosen ? String(chosen.number) : '');
   setOutput('head', chosen ? chosen.head : '');
+  setOutput('base', chosen ? chosen.baseSha : '');
+  setOutput('run_claude', providers.ok && providers.providers.includes('claude') ? 'true' : 'false');
+  setOutput('run_codex', providers.ok && providers.providers.includes('codex') ? 'true' : 'false');
   process.stdout.write(chosen ? `discover #${chosen.number} ${chosen.head}\n` : 'discover: no head\n');
   return 0;
 }

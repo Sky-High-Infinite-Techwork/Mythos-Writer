@@ -15,32 +15,47 @@ const CHECKLIST = [
 ].join('\n');
 
 const DIFF_CAP = 48000;
+const COMPARE_FILE_LIMIT = 300;
 const CODEX_MODEL = 'gpt-4.1-mini';
+const BINARY_NAME = /\.(png|jpe?g|gif|webp|ico|pdf|woff2?|ttf|eot|zip|gz|tgz|tar|bin|exe|dll|so|dylib|wasm|mp[34]|mov|avi|webm)$/i;
 
-function normalizeDiff(files) {
-  const rows = [];
-  let used = 0;
-  for (const file of files || []) {
-    const filename = String((file && file.filename) || '');
-    const status = String((file && file.status) || '');
-    const previous = file && file.previous_filename ? ` (from ${file.previous_filename})` : '';
-    const header = `diff -- ${status} ${filename}${previous}\n`;
-    let patch = typeof (file && file.patch) === 'string' ? file.patch : '';
-    const room = DIFF_CAP - used - header.length;
-    if (room <= 0) {
-      rows.push(`${header}[truncated]\n`);
-      break;
-    }
-    if (patch.length > room) patch = `${patch.slice(0, room)}\n[truncated]\n`;
-    if (patch && !patch.endsWith('\n')) patch += '\n';
-    rows.push(header + patch);
-    used += header.length + patch.length;
-  }
-  return rows.join('');
+function filePiece(file) {
+  const previous = file.previous_filename ? ` (from ${file.previous_filename})` : '';
+  const header = `diff -- ${file.status || ''} ${file.filename}${previous}\n`;
+  const patch = file.patch.endsWith('\n') ? file.patch : `${file.patch}\n`;
+  return header + patch;
 }
 
-function promptFor(diff) {
-  return `${CHECKLIST}\nDIFF:\n${diff}`;
+function fileProblem(file) {
+  if (!file || typeof file.filename !== 'string' || file.filename === '') return 'patch-missing';
+  if (typeof file.patch !== 'string' || file.patch.length === 0) {
+    return BINARY_NAME.test(file.filename) ? 'binary-unknown' : 'patch-missing';
+  }
+  return null;
+}
+
+// A pass is allowed only when every file has its full textual patch and the
+// whole diff fits under the cap. A missing, binary, truncated, or over-cap
+// diff is a hold.
+function assessDiff(files) {
+  if (!Array.isArray(files) || files.length === 0) return { ok: false, reason: 'patch-missing', files: files || [] };
+  if (files.length >= COMPARE_FILE_LIMIT) return { ok: false, reason: 'diff-truncated', files };
+  let used = 0;
+  const rows = [];
+  for (const file of files) {
+    const problem = fileProblem(file);
+    if (problem) return { ok: false, reason: problem, files };
+    const piece = filePiece(file);
+    if (piece.length > DIFF_CAP) return { ok: false, reason: 'diff-cap', files };
+    if (used + piece.length > DIFF_CAP) return { ok: false, reason: 'diff-truncated', files };
+    used += piece.length;
+    rows.push(piece);
+  }
+  return { ok: true, reason: '', text: rows.join(''), files };
+}
+
+function userDiff(text) {
+  return `DIFF:\n${text}`;
 }
 
 function parseVerdict(text) {
@@ -99,6 +114,15 @@ function review(meta, input) {
       roles: { critic: 'hold', shield: 'hold', probe: 'hold' },
     });
   }
+  const diff = assessDiff(input && input.files);
+  if (!diff.ok) {
+    return envelope(meta, {
+      status: 'hold',
+      risk: 'high',
+      reason: diff.reason,
+      roles: { critic: 'hold', shield: 'hold', probe: 'hold' },
+    });
+  }
   const verdict = parseVerdict(input && input.modelText);
   if (!verdict) return unavailable(meta, 'malformed');
   const pass = verdict.risk === 'low'
@@ -126,10 +150,19 @@ function modelEnv(provider, home) {
 }
 
 function claudeInvocation(home) {
+  const systemPromptFile = `${home}/system-prompt.txt`;
   return {
     command: 'claude',
-    args: ['-p', '--output-format', 'json', '--bare', '--restricted', '--tools', '', '--disallowedTools', '*', '--permission-mode', 'dontAsk', '--max-budget-usd', '1'],
+    args: [
+      '-p', '--output-format', 'json',
+      '--safe-mode', '--restricted', '--strict-mcp-config',
+      '--tools', '', '--disallowedTools', '*',
+      '--permission-mode', 'dontAsk', '--max-budget-usd', '1',
+      '--system-prompt-file', systemPromptFile,
+    ],
     env: modelEnv('claude', home),
+    systemPromptFile,
+    systemPrompt: CHECKLIST,
   };
 }
 
@@ -171,9 +204,10 @@ function claudeResult(status, stdout, stderr) {
 
 module.exports = {
   CHECKLIST,
+  DIFF_CAP,
   CODEX_MODEL,
-  normalizeDiff,
-  promptFor,
+  assessDiff,
+  userDiff,
   parseVerdict,
   review,
   unavailable,

@@ -27,7 +27,7 @@ function parseProviders(raw) {
   if (typeof raw !== 'string') return { ok: false, providers: [] };
   const text = raw.trim();
   if (text === '') return { ok: false, providers: [] };
-  const parts = text.split(',').map((part) => part.trim());
+  const parts = text.split(',').map((part) => part.trim().toLowerCase());
   if (parts.some((part) => part === '')) return { ok: false, providers: [] };
   const seen = new Set();
   for (const part of parts) {

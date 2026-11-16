@@ -95,6 +95,9 @@ jobs:
     outputs:
       pr: ${{ steps.pick.outputs.pr }}
       head: ${{ steps.pick.outputs.head }}
+      base: ${{ steps.pick.outputs.base }}
+      run_claude: ${{ steps.pick.outputs.run_claude }}
+      run_codex: ${{ steps.pick.outputs.run_codex }}
     steps:
       - name: Confirm the trusted ref before checkout
         env:
@@ -117,11 +120,12 @@ jobs:
           REPO: Sky-High-Infinite-Techwork/Mythos-Writer
           PR_NUMBER: ${{ needs.admit.outputs.pr }}
           READ_TOKEN: ${{ github.token }}
+          MYTHOS_GATE_PROVIDERS_JSON: ${{ toJSON(vars.MYTHOS_GATE_PROVIDERS) }}
         run: node .github/scripts/unattended/discover-run.js
 
   transport-claude:
     needs: [admit, discover]
-    if: needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main' && (toJSON(vars.MYTHOS_GATE_PROVIDERS) == 'null' || vars.MYTHOS_GATE_PROVIDERS == 'claude' || vars.MYTHOS_GATE_PROVIDERS == 'claude,codex' || vars.MYTHOS_GATE_PROVIDERS == 'codex,claude')
+    if: needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main' && needs.discover.outputs.run_claude == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: mythos-claude
@@ -158,13 +162,14 @@ jobs:
           REPO: Sky-High-Infinite-Techwork/Mythos-Writer
           PR_NUMBER: ${{ needs.discover.outputs.pr }}
           HEAD_SHA: ${{ needs.discover.outputs.head }}
+          BASE_SHA: ${{ needs.discover.outputs.base }}
           READ_TOKEN: ${{ github.token }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: node .github/scripts/unattended/transport-run.js
 
   transport-codex:
     needs: [admit, discover]
-    if: needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main' && (toJSON(vars.MYTHOS_GATE_PROVIDERS) == 'null' || vars.MYTHOS_GATE_PROVIDERS == 'codex' || vars.MYTHOS_GATE_PROVIDERS == 'claude,codex' || vars.MYTHOS_GATE_PROVIDERS == 'codex,claude')
+    if: needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main' && needs.discover.outputs.run_codex == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: mythos-codex
@@ -199,6 +204,7 @@ jobs:
           REPO: Sky-High-Infinite-Techwork/Mythos-Writer
           PR_NUMBER: ${{ needs.discover.outputs.pr }}
           HEAD_SHA: ${{ needs.discover.outputs.head }}
+          BASE_SHA: ${{ needs.discover.outputs.base }}
           READ_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: node .github/scripts/unattended/transport-run.js

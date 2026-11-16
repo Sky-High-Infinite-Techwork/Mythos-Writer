@@ -15,7 +15,8 @@ const {
   parseAllowlist, authorMatches, leaseHeldFrom, rulesetMatches, httpStatus,
 } = require('./unattended/flow-client');
 const { selectHead } = require('./unattended/discover-run');
-const { review, modelEnv, claudeInvocation, normalizeDiff, codexResult } = require('./unattended/transport');
+const { review, modelEnv, claudeInvocation, assessDiff, userDiff, codexResult, codexBody, CHECKLIST } = require('./unattended/transport');
+const { comparePath } = require('./unattended/transport-run');
 const { transportResult, reduce, acceptReducer, parseProviders, providersFromEnv, parseProvidersJson } = require('./unattended/gate-result');
 const { decideQueueEntry, stillQueue, parseQueueRef } = require('./unattended/queue-policy');
 const { treesMatch, parentsOf, fetchObjects, runPublish } = require('./unattended/publish-run');
@@ -549,7 +550,9 @@ test('MYTHOS_GATE_PROVIDERS selects who must pass and fails closed otherwise', (
   assert.equal(parseProviders('   ').ok, false);
   assert.equal(parseProviders('claude,codex,codex').ok, false);
   assert.equal(parseProviders('claude,foo').ok, false);
-  assert.equal(parseProviders('Claude').ok, false);
+  assert.deepEqual(parseProviders('Claude').providers, ['claude']);
+  assert.deepEqual(parseProviders('CLAUDE, Codex').providers, ['claude', 'codex']);
+  assert.equal(parseProviders('claude,FOO').ok, false);
   assert.equal(parseProvidersJson('""').ok, false);
   const claudeOnly = reduce(pass('claude'), pass('codex'), expected, 'claude');
   assert.deepEqual(claudeOnly.providers, ['claude']);
@@ -745,10 +748,9 @@ test('privileged workflows are inert controllers with pinned actions and split c
   assert.equal(codexJob.includes('claude-code'), false);
   assert.equal(gate.jobs['transport-claude'].environment, 'mythos-claude');
   assert.equal(gate.jobs['transport-codex'].environment, 'mythos-codex');
-  assert.match(String(gate.jobs['transport-claude'].if), /MYTHOS_GATE_PROVIDERS/);
-  assert.match(String(gate.jobs['transport-claude'].if), /== 'claude'/);
-  assert.equal(String(gate.jobs['transport-claude'].if).includes("== 'codex'"), false);
-  assert.match(String(gate.jobs['transport-codex'].if), /== 'codex'/);
+  assert.match(String(gate.jobs['transport-claude'].if), /run_claude == 'true'/);
+  assert.match(String(gate.jobs['transport-codex'].if), /run_codex == 'true'/);
+  assert.equal(String(gate.jobs['transport-claude'].if).includes('OPENAI_API_KEY'), false);
   assert.match(String(gate.jobs.reduce.if), /skipped/);
   assert.match(gateText, /MYTHOS_GATE_APP_PRIVATE_KEY/);
   assert.match(gateText, /permission-checks: write/);
@@ -1031,7 +1033,7 @@ function readScopes(text) {
   if (text.includes('/check-runs') || text.includes('check_runs')) scopes.add('checks');
   if (text.includes('/issues/')) scopes.add('issues');
   if (text.includes('/pulls') || text.includes("pr', 'list'")) scopes.add('pull-requests');
-  if (text.includes('/contents/') || text.includes('/git/')) scopes.add('contents');
+  if (text.includes('/contents/') || text.includes('/git/') || text.includes('/compare/')) scopes.add('contents');
   return scopes;
 }
 
@@ -1177,7 +1179,7 @@ esac
 
 test('discover selects one open main pull request', () => {
   const head = HEAD;
-  const open = { number: 9, state: 'open', draft: false, fork: false, base: 'main', head };
+  const open = { number: 9, state: 'open', draft: false, fork: false, base: 'main', baseSha: BASE, head };
   assert.equal(selectHead([open, { ...open, number: 4 }], '').number, 4);
   assert.equal(selectHead([open, { ...open, number: 3, fork: true }], '').number, 9);
   assert.equal(selectHead([{ ...open, draft: true }], '9'), null);
@@ -1188,15 +1190,16 @@ test('discover selects one open main pull request', () => {
 test('transports hold high risk, reject auth and malformed output, and hide the other secret', () => {
   const meta = { provider: 'claude', pr: 7, headSha: HEAD, runId: '9', runAttempt: '1' };
   const text = JSON.stringify({ risk: 'low', roles: { critic: 'pass', shield: 'pass', probe: 'pass' } });
-  assert.equal(review(meta, { modelText: text, files: [{ filename: 'frontend/src/app.ts' }] }).status, 'pass');
+  const readable = [{ filename: 'frontend/src/app.ts', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' }];
+  assert.equal(review(meta, { modelText: text, files: readable }).status, 'pass');
   const high = review(meta, {
     modelText: JSON.stringify({ risk: 'high', roles: { critic: 'pass', shield: 'pass', probe: 'pass' } }),
-    files: [],
+    files: readable,
   });
   assert.equal(high.decision, 'no-pass');
   assert.equal(high.risk, 'high');
   assert.equal(review(meta, { authFailed: true, modelText: text }).status, 'unavailable');
-  assert.equal(review(meta, { modelText: 'not json', files: [] }).reason, 'malformed');
+  assert.equal(review(meta, { modelText: 'not json', files: readable }).reason, 'malformed');
   const held = review({ ...meta, provider: 'codex' }, {
     modelText: text,
     files: [{ filename: 'electron-main/src/db.ts' }],
@@ -1220,11 +1223,21 @@ test('transports hold high risk, reject auth and malformed output, and hide the 
     assert.equal(env.OPENAI_API_KEY, undefined);
     assert.equal(env.READ_TOKEN, undefined);
     assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, 'oauth');
-    const args = claudeInvocation('/tmp/claude-home').args;
-    assert.equal(args.includes('--dangerously-skip-permissions'), false);
-    assert.equal(args.includes('--restricted'), true);
-    assert.equal(args.includes('--tools'), true);
-    assert.match(normalizeDiff([{ filename: 'a.ts', status: 'modified', patch: 'line\n' }]), /diff -- modified a\.ts/);
+    const call = claudeInvocation('/tmp/claude-home');
+    assert.equal(call.args.includes('--bare'), false);
+    assert.equal(call.args.includes('--dangerously-skip-permissions'), false);
+    assert.equal(call.args.includes('--safe-mode'), true);
+    assert.equal(call.args.includes('--restricted'), true);
+    assert.equal(call.args.includes('--strict-mcp-config'), true);
+    assert.equal(call.args.includes('--system-prompt-file'), true);
+    assert.equal(call.systemPrompt, CHECKLIST);
+    assert.equal(call.env.ANTHROPIC_API_KEY, undefined);
+    const message = userDiff(assessDiff([{ filename: 'a.ts', status: 'modified', patch: 'line\n' }]).text);
+    assert.equal(message.includes('critic:'), false);
+    assert.match(message, /^DIFF:\n/);
+    const codex = codexBody('line\n');
+    assert.equal(codex.messages[0].content, CHECKLIST);
+    assert.equal(codex.messages[1].content.includes('critic:'), false);
     assert.equal(codexResult(401, '{}').authFailed, true);
     assert.equal(codexResult(200, JSON.stringify({ choices: [{ message: { content: text } }] })).stdout, text);
   } finally {
@@ -1233,6 +1246,43 @@ test('transports hold high risk, reject auth and malformed output, and hide the 
       else process.env[key] = value;
     }
   }
+});
+
+test('an incomplete diff is held and the review uses the discovered SHAs', () => {
+  const meta = { provider: 'claude', pr: 7, headSha: HEAD, runId: '9', runAttempt: '1' };
+  const passText = JSON.stringify({ risk: 'low', roles: { critic: 'pass', shield: 'pass', probe: 'pass' } });
+  const missing = review(meta, {
+    modelText: passText,
+    files: [{ filename: 'electron-main/src/auth.ts', status: 'modified' }],
+  });
+  assert.equal(missing.status, 'hold');
+  assert.equal(missing.reason, 'patch-missing');
+  const binary = review(meta, {
+    modelText: passText,
+    files: [{ filename: 'assets/logo.png', status: 'added' }],
+  });
+  assert.equal(binary.status, 'hold');
+  assert.equal(binary.reason, 'binary-unknown');
+  const over = review(meta, {
+    modelText: passText,
+    files: [{ filename: 'frontend/src/app.ts', status: 'modified', patch: 'x'.repeat(48001) }],
+  });
+  assert.equal(over.status, 'hold');
+  assert.equal(over.reason, 'diff-cap');
+  const truncated = review(meta, {
+    modelText: passText,
+    files: [
+      { filename: 'a.ts', status: 'modified', patch: 'a'.repeat(30000) },
+      { filename: 'b.ts', status: 'modified', patch: 'b'.repeat(30000) },
+    ],
+  });
+  assert.equal(truncated.status, 'hold');
+  assert.equal(truncated.reason, 'diff-truncated');
+  const base = BASE;
+  const route = comparePath(base, HEAD);
+  assert.match(route, new RegExp(`${base}\\.\\.\\.${HEAD}$`));
+  assert.equal(route.includes('/pulls/'), false);
+  assert.equal(comparePath('abc', HEAD), null);
 });
 
 test('one unreadable pull request is held and the next one can still be enqueued', () => {

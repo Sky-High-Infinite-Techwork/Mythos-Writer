@@ -7,10 +7,9 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { REPO, sha40 } = require('./constants');
 const { gh } = require('./spawn');
-const { flattenPages } = require('./flow-client');
 const { filesLookProtected } = require('./flow-policy');
 const {
-  promptFor, normalizeDiff, review, unavailable, claudeInvocation, codexBody, codexResult, claudeResult,
+  assessDiff, userDiff, review, unavailable, claudeInvocation, codexBody, codexResult, claudeResult,
 } = require('./transport');
 
 function setOutput(name, value) {
@@ -25,22 +24,33 @@ function emit(result) {
   process.stdout.write(`${line}\n`);
 }
 
-function fetchFiles(pr) {
-  const result = gh([
-    'api', '--paginate', '--slurp', `repos/${REPO}/pulls/${pr}/files?per_page=100`,
-  ], process.env.READ_TOKEN);
-  if (result.status !== 0) return { ok: false };
-  const rows = flattenPages(result.stdout);
-  if (!rows) return { ok: false };
-  return { ok: true, files: rows };
+function comparePath(baseSha, headSha) {
+  if (!sha40(baseSha) || !sha40(headSha)) return null;
+  return `repos/${REPO}/compare/${baseSha}...${headSha}`;
 }
 
-function runClaude(prompt) {
+function fetchCompare(baseSha, headSha) {
+  const route = comparePath(baseSha, headSha);
+  if (!route) return { ok: false };
+  const result = gh(['api', route], process.env.READ_TOKEN);
+  if (result.status !== 0) return { ok: false };
+  let body;
+  try {
+    body = JSON.parse(result.stdout);
+  } catch {
+    return { ok: false };
+  }
+  if (!body || !Array.isArray(body.files)) return { ok: false };
+  return { ok: true, files: body.files };
+}
+
+function runClaude(diffText) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-transport-'));
   const call = claudeInvocation(home);
+  fs.writeFileSync(call.systemPromptFile, call.systemPrompt);
   const result = spawnSync(call.command, call.args, {
     cwd: home,
-    input: prompt,
+    input: userDiff(diffText),
     encoding: 'utf8',
     env: call.env,
     timeout: 8 * 60 * 1000,
@@ -49,8 +59,8 @@ function runClaude(prompt) {
   return claudeResult(result.status, result.stdout, result.stderr);
 }
 
-function runCodex(prompt) {
-  const body = JSON.stringify(codexBody(prompt));
+function runCodex(diffText) {
+  const body = JSON.stringify(codexBody(diffText));
   return new Promise((resolve) => {
     const req = https.request('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -80,6 +90,7 @@ async function main() {
     provider,
     pr: Number(process.env.PR_NUMBER),
     headSha: process.env.HEAD_SHA || '',
+    baseSha: process.env.BASE_SHA || '',
     runId: process.env.GITHUB_RUN_ID || '',
     runAttempt: process.env.GITHUB_RUN_ATTEMPT || '',
   };
@@ -87,7 +98,7 @@ async function main() {
     emit(unavailable(meta, 'provider'));
     return 0;
   }
-  if (!sha40(meta.headSha) || !Number.isInteger(meta.pr) || meta.pr < 1) {
+  if (!sha40(meta.headSha) || !sha40(meta.baseSha) || !Number.isInteger(meta.pr) || meta.pr < 1) {
     emit(unavailable(meta, 'no-head'));
     return 0;
   }
@@ -96,18 +107,17 @@ async function main() {
     emit(unavailable(meta, 'missing-credential'));
     return 0;
   }
-  const loaded = fetchFiles(meta.pr);
+  const loaded = fetchCompare(meta.baseSha, meta.headSha);
   if (!loaded.ok) {
     emit(unavailable(meta, 'diff-unreadable'));
     return 0;
   }
-  if (filesLookProtected(loaded.files)) {
+  const diff = assessDiff(loaded.files);
+  if (!diff.ok || filesLookProtected(loaded.files)) {
     emit(review(meta, { files: loaded.files }));
     return 0;
   }
-  const ran = provider === 'claude'
-    ? runClaude(promptFor(normalizeDiff(loaded.files)))
-    : await runCodex(normalizeDiff(loaded.files));
+  const ran = provider === 'claude' ? runClaude(diff.text) : await runCodex(diff.text);
   emit(review(meta, { ...ran, files: loaded.files, modelText: ran.stdout }));
   return 0;
 }
@@ -116,4 +126,4 @@ if (require.main === module) {
   main().then((code) => process.exit(code)).catch(() => process.exit(1));
 }
 
-module.exports = { fetchFiles, runClaude, runCodex };
+module.exports = { comparePath, fetchCompare, runClaude, runCodex };
