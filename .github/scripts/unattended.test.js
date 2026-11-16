@@ -14,7 +14,7 @@ const {
   ENQUEUE_QUERY, READY_QUERY, flattenPages, flattenRunPages, mapChangedFile, createClient,
   parseAllowlist, authorMatches, leaseHeldFrom, rulesetMatches, httpStatus,
 } = require('./unattended/flow-client');
-const { selectHead, thresholdFromCompare, DISCOVER_SLOT_SECONDS } = require('./unattended/discover-run');
+const { selectHead, thresholdFromCompare, DISCOVER_SLOT_SECONDS, isSettledGateRun } = require('./unattended/discover-run');
 const {
   review, modelEnv, claudeInvocation, assessDiff, readCompare, userDiff, systemPrompt, codexResult, codexBody, CHECKLIST,
 } = require('./unattended/transport');
@@ -686,6 +686,26 @@ test('model transports are unavailable and cannot reduce to a pass', () => {
   assert.equal(claudeOnly.threshold, 'strict');
   assert.equal(claudeOnly.providers.length, 1);
   assert.equal(reduce(pass('claude', 'low'), strictRow('codex'), strictExpected, 'claude').decision, 'no-pass');
+  const modelBlock = {
+    ...pass('claude', 'high'), status: 'hold', risk: 'high', decision: 'no-pass',
+    roles: { critic: 'hold', shield: 'pass', probe: 'pass' },
+  };
+  delete modelBlock.reason;
+  const blockedResult = reduce(modelBlock, pass('codex', 'low'), standard);
+  assert.equal(blockedResult.block, true);
+  assert.equal(blockedResult.headSha, HEAD);
+  const unavailableBlock = reduce(
+    { ...pass('claude', 'low'), status: 'unavailable', reason: 'malformed' },
+    pass('codex', 'low'),
+    standard,
+  );
+  assert.equal(unavailableBlock.block, undefined);
+  const infraHold = reduce(
+    { ...modelBlock, reason: 'owner-path' },
+    pass('codex', 'low'),
+    standard,
+  );
+  assert.equal(infraHold.block, undefined);
   assert.equal(acceptReducer(accepted, { runId: '8', runAttempt: '1' }), null);
   assert.equal(acceptReducer({ ...accepted, risk: 'high' }, { runId: '9', runAttempt: '1' }), null);
   assert.equal(acceptReducer({ ...accepted, roles: { ...accepted.roles, claude: { provider: 'claude', status: 'pass' } } }, { runId: '9', runAttempt: '1' }), null);
@@ -1367,7 +1387,18 @@ test('discover selects one open main pull request', () => {
   assert.equal(selectHead([{ ...open, number: 4, labels: ['hold'] }, newer], '', 0).number, 9);
   assert.equal(selectHead([{ ...open, number: 4, labels: ['do-not-merge'] }, newer], '', 0).number, 9);
   assert.equal(selectHead([{ ...open, number: 4, labels: ['carve-out'], ownerPath: true }, newer], '', 0).number, 9);
-  assert.equal(selectHead([{ ...open, number: 4, gatePosted: true }], '4').number, 4);
+  assert.equal(selectHead([{ ...open, number: 4, gatePosted: true }], '4'), null);
+  assert.equal(selectHead([{ ...open, number: 4 }], '4').number, 4);
+  assert.equal(selectHead([{ ...open, number: 4, labels: ['tip-freeze'] }, newer], '', 0).number, 9);
+  assert.equal(isSettledGateRun({
+    head_sha: head, status: 'completed', conclusion: 'failure', app: { id: GATE_APP_ID },
+  }, head), true);
+  assert.equal(isSettledGateRun({
+    head_sha: head, status: 'completed', conclusion: 'success', app: { id: GATE_APP_ID },
+  }, head), true);
+  assert.equal(isSettledGateRun({
+    head_sha: head, status: 'in_progress', conclusion: null, app: { id: GATE_APP_ID },
+  }, head), false);
   const heads = [
     { ...open, number: 4 },
     { ...open, number: 9 },
@@ -1926,6 +1957,52 @@ test('a switch that flips during the ruleset re-read blocks queue and head check
   assert.equal(posted.posted, 0);
   assert.equal(switchReads, 2);
   assert.deepEqual(writes, []);
+});
+
+test('a model block on a head is not replaced by a later pass or a manual rerun', () => {
+  const writes = [];
+  let existing = null;
+  const io = {
+    readSwitch: () => ({ ok: true, enabled: true }),
+    ruleset: () => ({ ok: true, ruleset: { known: true, match: true } }),
+    listEntries: () => ({ ok: true, entries: [] }),
+    pull: () => ({ prReadable: true, state: 'open', draft: false, head: HEAD }),
+    ourRun: () => ({ headRunReadable: true, headRun: existing }),
+    writeRun(_prior, sha, status, conclusion, summary) {
+      writes.push({ sha, status, conclusion, summary });
+      existing = { id: 1, status, conclusion, summary, appId: GATE_APP_ID };
+      return { ok: true };
+    },
+  };
+  const block = { block: true, decision: 'no-pass', status: 'block', pr: 7, headSha: HEAD, reason: 'model-block' };
+  const first = runPublish(io, {
+    mode: 'act', gateAppId: String(GATE_APP_ID), gateToken: 'gate', blockDecision: block, threshold: 'standard',
+  });
+  assert.equal(first.posted, 1);
+  assert.equal(writes[0].status, 'completed');
+  assert.equal(writes[0].conclusion, 'failure');
+  assert.match(writes[0].summary, new RegExp(`^Head: ${HEAD}`));
+  const pass = {
+    pr: 7,
+    headSha: HEAD,
+    threshold: 'standard',
+    providers: ['claude'],
+    roles: {
+      claude: { provider: 'claude', status: 'pass', critic: 'pass', shield: 'pass', probe: 'pass', threshold: 'standard' },
+    },
+  };
+  const second = runPublish(io, {
+    mode: 'act', gateAppId: String(GATE_APP_ID), gateToken: 'gate', headDecision: pass, threshold: 'standard', pr: '7',
+  });
+  assert.equal(second.posted, 0);
+  assert.equal(writes.length, 1);
+  const retry = runPublish(io, {
+    mode: 'act', gateAppId: String(GATE_APP_ID), gateToken: 'gate',
+    blockDecision: { decision: 'no-pass', status: 'unavailable', pr: 7, headSha: HEAD },
+    threshold: 'standard',
+  });
+  assert.equal(retry.posted, 0);
+  assert.equal(writes.length, 1);
 });
 
 test('a check post re-reads the ruleset and skips a weaker policy', () => {

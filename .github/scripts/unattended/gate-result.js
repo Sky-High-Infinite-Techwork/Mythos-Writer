@@ -21,6 +21,43 @@ function noPass(status) {
   return { schema: RESULT_SCHEMA, decision: 'no-pass', status: status || 'unavailable', repository: REPO };
 }
 
+const RETRY_REASONS = new Set([
+  'malformed',
+  'auth',
+  'missing-credential',
+  'transport',
+  'diff-unreadable',
+  'provider',
+  'no-head',
+  'model-transport-not-approved',
+]);
+
+// A model hold with a parsed verdict is final for this head. Unavailable output,
+// a malformed reply, and an infrastructure hold are not: those may be retried.
+function isModelBlock(row) {
+  if (!row || row.status !== 'hold') return false;
+  if (typeof row.reason === 'string' && (row.reason.length === 0 || RETRY_REASONS.has(row.reason))) return false;
+  if (typeof row.reason === 'string') return false;
+  if (!row.roles) return false;
+  return row.risk === 'high' || row.risk === 'low';
+}
+
+function definitiveBlock(rows, providers) {
+  const blocked = providers.map((name) => rows[name]).filter(isModelBlock);
+  const head = blocked.find((row) => sha40(row.headSha) && Number.isInteger(row.pr) && row.pr > 0);
+  if (!head) return null;
+  return {
+    schema: RESULT_SCHEMA,
+    decision: 'no-pass',
+    status: 'block',
+    block: true,
+    repository: REPO,
+    pr: head.pr,
+    headSha: head.headSha,
+    reason: 'model-block',
+  };
+}
+
 // Omitted means both providers. An empty or unknown value fails closed.
 function parseProviders(raw) {
   if (raw === undefined || raw === null) return { ok: true, providers: ['claude', 'codex'] };
@@ -120,6 +157,8 @@ function reduce(claude, codex, expected, rawProviders) {
   const head = rows[parsed.providers[0]] && rows[parsed.providers[0]].headSha;
   for (const name of parsed.providers) {
     if (!rolePass(rows[name], name, head, expected.runId, expected.runAttempt)) {
+      const block = definitiveBlock(rows, parsed.providers);
+      if (block) return block;
       return noPass(rows[name] && rows[name].status);
     }
   }
@@ -217,5 +256,5 @@ if (require.main === module) process.exit(main(process.argv));
 
 module.exports = {
   transportResult, reduce, acceptReducer, noPass, reviewRolesPass, parseProviders, providersFromEnv,
-  parseProvidersJson, providerArgument, strictClaimOk,
+  parseProvidersJson, providerArgument, strictClaimOk, isModelBlock,
 };

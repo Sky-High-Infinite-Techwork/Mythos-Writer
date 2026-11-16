@@ -255,14 +255,18 @@ function runPublish(io, opts) {
   if (only && !/^[1-9][0-9]{0,9}$/.test(only)) return { code: 1, posted: 0 };
   const selected = listed.entries.filter((entry) => !only || String(entry.pr) === only);
   const head = opts.headDecision;
-  const headDue = Boolean(head) && (!only || String(head.pr) === only);
+  const block = opts.blockDecision && opts.blockDecision.block === true && sha40(opts.blockDecision.headSha)
+    ? opts.blockDecision
+    : null;
+  const headRecord = (head && sha40(head.headSha) ? head : null) || block;
+  const headDue = Boolean(headRecord) && (!only || String(headRecord.pr) === only);
   if (opts.mode !== 'act') {
     for (const entry of selected) {
       const view = viewFor(io, entry);
       const verdict = decideQueueEntry(entry, view, chainFor({ baseTip: null, parents: new Set() }, view.baseTip));
       process.stdout.write(`queue #${entry.pr} ${verdict.state || 'skip'}: ${verdict.why}\n`);
     }
-    if (headDue) process.stdout.write(`head #${head.pr} dry-run\n`);
+    if (headDue) process.stdout.write(`head #${headRecord.pr} ${block ? 'block ' : ''}dry-run\n`);
     return { code: 0, posted: 0 };
   }
   if (!opts.gateToken && (selected.length > 0 || headDue)) return { code: 2, posted: 0 };
@@ -344,30 +348,52 @@ function runPublish(io, opts) {
     if (!progress) break;
   }
   if (headDue) {
-    const pull = io.pull(head.pr);
-    if (pull.prReadable && pull.state === 'open' && !pull.draft && pull.head === head.headSha) {
-      const current = io.ourRun(head.headSha);
-      if (!current.headRunReadable) return { code: 1, posted };
-      if (!strictClaimOk(head) || head.threshold !== opts.threshold) {
-        process.stdout.write(`head #${head.pr} threshold is not consistent; no success posted\n`);
-        return { code: 0, posted };
-      }
-      const summary = headGateSummary(head.headSha, head.threshold);
-      if (!samePosted(current.headRun, 'completed', 'success', summary)) {
-        if (!rulesAllow(io)) {
-          process.stdout.write(`head #${head.pr} ruleset is not the main queue policy; no success posted\n`);
-          return { code: 0, posted };
-        }
-        const again = io.readSwitch();
-        if (!again.ok) return { code: 1, posted };
-        if (!again.enabled) return { code: 0, posted };
-        const wrote = io.writeRun(current.headRun, head.headSha, 'completed', 'success', summary);
-        if (!wrote.ok) return { code: 1, posted };
-        posted += 1;
-      }
-      process.stdout.write(`head #${head.pr} success\n`);
+    const record = block || head;
+    const pull = io.pull(record.pr);
+    if (!(pull.prReadable && pull.state === 'open' && !pull.draft && pull.head === record.headSha)) {
+      process.stdout.write(`head #${record.pr} moved; no result posted\n`);
     } else {
-      process.stdout.write(`head #${head.pr} moved; no success posted\n`);
+      const current = io.ourRun(record.headSha);
+      if (!current.headRunReadable) return { code: 1, posted };
+      const prior = current.headRun;
+      const settled = prior && prior.status === 'completed'
+        && (prior.conclusion === 'success' || prior.conclusion === 'failure')
+        && prior.appId === GATE_APP_ID;
+      if (settled) {
+        process.stdout.write(`head #${record.pr} already has a gate result; not replaced\n`);
+      } else if (block) {
+        const summary = `Head: ${record.headSha}\nResult: block\nRule: a model block on this head is final`;
+        if (!samePosted(prior, 'completed', 'failure', summary)) {
+          if (!rulesAllow(io)) {
+            process.stdout.write(`head #${record.pr} ruleset is not the main queue policy; no block posted\n`);
+          } else {
+            const again = io.readSwitch();
+            if (!again.ok) return { code: 1, posted };
+            if (!again.enabled) return { code: 0, posted };
+            const wrote = io.writeRun(prior, record.headSha, 'completed', 'failure', summary);
+            if (!wrote.ok) return { code: 1, posted };
+            posted += 1;
+            process.stdout.write(`head #${record.pr} block\n`);
+          }
+        }
+      } else if (!strictClaimOk(head) || head.threshold !== opts.threshold) {
+        process.stdout.write(`head #${head.pr} threshold is not consistent; no success posted\n`);
+      } else {
+        const summary = headGateSummary(head.headSha, head.threshold);
+        if (!samePosted(prior, 'completed', 'success', summary)) {
+          if (!rulesAllow(io)) {
+            process.stdout.write(`head #${head.pr} ruleset is not the main queue policy; no success posted\n`);
+          } else {
+            const again = io.readSwitch();
+            if (!again.ok) return { code: 1, posted };
+            if (!again.enabled) return { code: 0, posted };
+            const wrote = io.writeRun(prior, head.headSha, 'completed', 'success', summary);
+            if (!wrote.ok) return { code: 1, posted };
+            posted += 1;
+            process.stdout.write(`head #${head.pr} success\n`);
+          }
+        }
+      }
     }
   }
   return { code: 0, posted };
@@ -376,15 +402,18 @@ function runPublish(io, opts) {
 function main() {
   const mode = process.env.MODE;
   const gateAppId = process.env.GATE_APP_ID || '';
+  let raw = null;
   let headDecision = null;
   if (process.env.REDUCER_RESULT) {
     try {
-      headDecision = acceptReducer(JSON.parse(process.env.REDUCER_RESULT), {
+      raw = JSON.parse(process.env.REDUCER_RESULT);
+      headDecision = acceptReducer(raw, {
         runId: process.env.GITHUB_RUN_ID,
         runAttempt: process.env.GITHUB_RUN_ATTEMPT,
         threshold: process.env.THRESHOLD,
       }, providerArgument());
     } catch {
+      raw = null;
       headDecision = null;
     }
   }
@@ -395,6 +424,7 @@ function main() {
       gateAppId,
       gateToken: process.env.GATE_TOKEN,
       headDecision,
+      blockDecision: headDecision ? null : raw,
       threshold: process.env.THRESHOLD,
     });
     return result.code;

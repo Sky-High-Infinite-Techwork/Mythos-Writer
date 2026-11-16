@@ -24,7 +24,7 @@ function shapeOk(pr) {
 
 function holdLabel(pr) {
   const labels = (pr.labels || []).map((name) => String(name).toLowerCase());
-  if (labels.includes('hold') || labels.includes('do-not-merge')) return true;
+  if (labels.includes('hold') || labels.includes('do-not-merge') || labels.includes('tip-freeze')) return true;
   return labels.includes('carve-out') && pr.ownerPath === true;
 }
 
@@ -38,7 +38,9 @@ function eligible(pr) {
 }
 
 function selectHead(prs, only, nowSeconds) {
-  if (only) return (prs || []).find((pr) => shapeOk(pr) && String(pr.number) === String(only)) || null;
+  if (only) {
+    return (prs || []).find((pr) => shapeOk(pr) && pr.gatePosted !== true && String(pr.number) === String(only)) || null;
+  }
   const rows = (prs || []).filter(eligible);
   rows.sort((left, right) => left.number - right.number);
   if (!rows.length) return null;
@@ -63,6 +65,13 @@ function mapPull(row) {
   };
 }
 
+function isSettledGateRun(run, head) {
+  if (!run || run.head_sha !== head) return false;
+  if (!run.app || run.app.id !== GATE_APP_ID) return false;
+  if (run.status !== 'completed') return false;
+  return run.conclusion === 'success' || run.conclusion === 'failure';
+}
+
 function gatePosted(head) {
   const route = `repos/${REPO}/commits/${head}/check-runs?check_name=${encodeURIComponent(CHECK_NAME)}&per_page=100`;
   const result = gh(['api', route], process.env.READ_TOKEN);
@@ -75,7 +84,7 @@ function gatePosted(head) {
   }
   if (!body || !Array.isArray(body.check_runs)) return null;
   if (body.total_count > body.check_runs.length) return null;
-  return body.check_runs.some((run) => run && run.head_sha === head && run.app && run.app.id === GATE_APP_ID);
+  return body.check_runs.some((run) => isSettledGateRun(run, head));
 }
 
 function compareClass(baseSha, headSha) {
@@ -133,23 +142,25 @@ function main() {
   const annotated = [];
   for (const pr of (flat || []).map(mapPull)) {
     const authorAllowed = authorMatches({ login: pr.author }, allowlist);
+    if (pr.draft === true) {
+      annotated.push({ ...pr, authorAllowed });
+      continue;
+    }
     const manual = only && String(pr.number) === String(only);
     let gate = false;
     let ownerPath = false;
     let threshold = '';
     const reviewable = authorAllowed && pr.author !== 'dependabot[bot]';
     if (reviewable || manual) {
-      if (!manual) {
-        const posted = sha40(pr.head) ? gatePosted(pr.head) : null;
-        if (posted === null) {
-          annotated.push({ ...pr, authorAllowed, gatePosted: true });
-          continue;
-        }
-        gate = posted;
-        if (posted) {
-          annotated.push({ ...pr, authorAllowed, gatePosted: true });
-          continue;
-        }
+      const posted = sha40(pr.head) ? gatePosted(pr.head) : null;
+      if (posted === null) {
+        annotated.push({ ...pr, authorAllowed, gatePosted: true });
+        continue;
+      }
+      gate = posted;
+      if (posted) {
+        annotated.push({ ...pr, authorAllowed, gatePosted: true });
+        continue;
       }
       if (sha40(pr.baseSha) && sha40(pr.head)) {
         const compared = compareClass(pr.baseSha, pr.head);
@@ -178,4 +189,6 @@ function main() {
 
 if (require.main === module) process.exit(main());
 
-module.exports = { selectHead, mapPull, thresholdFromCompare, DISCOVER_SLOT_SECONDS };
+module.exports = {
+  selectHead, mapPull, thresholdFromCompare, DISCOVER_SLOT_SECONDS, isSettledGateRun,
+};
