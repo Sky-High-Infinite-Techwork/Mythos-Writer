@@ -24,23 +24,36 @@ function authorAssertion(comments, head) {
     .some((line) => line.trim() === header));
 }
 
-function evidenceRunOk(run, head, prNumber, revision) {
-  if (!run || run.repository !== REPO || run.headRepository !== REPO) return false;
-  if (run.headSha !== head || run.pr !== prNumber || run.conclusion !== 'success') return false;
+function newerRun(left, right) {
+  if (left.runId !== right.runId) return left.runId > right.runId ? left : right;
+  return (left.runAttempt || 0) >= (right.runAttempt || 0) ? left : right;
+}
+
+function evidenceRunOk(run, head, prNumber, baseRef, baseSha, revision) {
+  if (!run || run.path === undefined) return false;
+  if (run.event !== 'pull_request' || run.status !== 'completed' || run.conclusion !== 'success') return false;
+  if (run.repository !== REPO || run.headRepository !== REPO) return false;
+  if (run.headSha !== head || run.pr !== prNumber) return false;
+  if (run.prHeadSha !== head || run.prBaseRef !== baseRef) return false;
+  if (!sha40(baseSha) || run.prBaseSha !== baseSha) return false;
   if (!Number.isInteger(run.runId) || run.runId < 1) return false;
   if (!Number.isInteger(run.runAttempt) || run.runAttempt < 1) return false;
   if (!sha40(run.workflowBlob) || run.workflowBlob !== revision) return false;
   return EVIDENCE_WORKFLOWS.includes(run.path);
 }
 
-// Proof is a successful run of each trusted workflow, for this repository, pull
-// request, and full SHA, using the workflow blob currently on main.
-function evidenceOk(evidence, head, prNumber) {
+// The latest run of each trusted workflow must be a completed pull_request success.
+// An earlier success does not survive a later failure, cancellation, or incomplete run.
+function evidenceOk(evidence, head, prNumber, baseRef, baseSha) {
   if (!sha40(head) || !Number.isInteger(prNumber) || !evidence || !evidence.mainRevision) return false;
   const runs = evidence.runs || [];
   return EVIDENCE_WORKFLOWS.every((workflowPath) => {
     const revision = evidence.mainRevision[workflowPath];
-    return runs.some((run) => run.path === workflowPath && evidenceRunOk(run, head, prNumber, revision));
+    const latest = runs.filter((run) => run && run.path === workflowPath).reduce((best, run) => {
+      if (!best) return run;
+      return newerRun(run, best);
+    }, null);
+    return evidenceRunOk(latest, head, prNumber, baseRef, baseSha, revision);
   });
 }
 
@@ -77,6 +90,11 @@ function classify(facts) {
   const labels = (facts.labels || []).map((name) => String(name).toLowerCase());
   if (labels.some((name) => HOLD_LABELS.includes(name))) return hold('hold label');
   if (facts.labelsComplete === false) return hold('label list incomplete');
+  if (facts.teamScopeKnown !== true) return hold('team/scope unknown');
+  if (facts.leaseKnown !== true) return hold('lease unknown');
+  if (facts.leaseHeld === true) return hold('lease');
+  if (facts.rulesetKnown !== true) return hold('ruleset policy unknown');
+  if (facts.rulesetMatch !== true) return hold('ruleset policy mismatch');
   if (facts.scopeKnown === false) return hold('repository scope unknown');
   if (facts.policyKnown === false) return hold('merge queue policy unknown');
   if (!facts.filesComplete) return hold('file list incomplete');

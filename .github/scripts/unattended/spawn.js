@@ -2,6 +2,8 @@
 
 const { spawnSync } = require('node:child_process');
 
+const MAX_BUFFER = 64 * 1024 * 1024;
+
 function redact(text) {
   return String(text || '')
     .replace(/-----BEGIN[\s\S]*?-----END [^-]+-----/g, '[redacted]')
@@ -29,6 +31,7 @@ function run(bin, args, { token, input, timeout } = {}) {
     env,
     input,
     timeout: timeout || 120000,
+    maxBuffer: MAX_BUFFER,
   });
   return {
     status: result.status,
@@ -52,4 +55,4 @@ function git(repoDir, args) {
   ], { timeout: 180000 });
 }
 
-module.exports = { redact, run, gh, git };
+module.exports = { redact, run, gh, git, MAX_BUFFER };

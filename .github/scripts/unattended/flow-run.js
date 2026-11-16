@@ -34,13 +34,18 @@ function factsFrom(pr, detail) {
     draft: pr.isDraft === true,
     fork,
     scopeKnown: typeof queue.scopeKnown === 'boolean' ? queue.scopeKnown : typeof pr.isCrossRepository === 'boolean',
+    teamScopeKnown: queue.teamScopeKnown === true,
+    leaseKnown: queue.leaseKnown === true,
+    leaseHeld: queue.leaseHeld === true,
+    rulesetKnown: Boolean(detail.ruleset && detail.ruleset.known === true),
+    rulesetMatch: Boolean(detail.ruleset && detail.ruleset.match === true),
     author,
     labels: labelNames(pr, detail),
     labelsComplete: queue.labelsComplete !== false,
     mergeState: String(pr.mergeStateStatus || '').toUpperCase(),
     filesComplete,
     protectedPath: filesLookProtected(files),
-    proof: evidenceOk(detail.evidence, pr.headRefOid, pr.number),
+    proof: evidenceOk(detail.evidence, pr.headRefOid, pr.number, pr.baseRefName, queue.baseSha),
     ciGreen: ciGreen(detail.checks || {}, pr.headRefOid),
     gate: gateOk(detail.checks && detail.checks.gate, pr.headRefOid),
     queueEnabled: queue.queueEnabled === true,
@@ -60,6 +65,8 @@ function loadDetail(client, pr) {
   if (!evidence.ok) return evidence;
   const queue = client.queueState(pr.number);
   if (!queue.ok) return queue;
+  const ruleset = client.ruleset();
+  if (!ruleset.ok) return ruleset;
   return {
     ok: true,
     detail: {
@@ -68,6 +75,7 @@ function loadDetail(client, pr) {
       checks: checks.checks,
       evidence: evidence.evidence,
       queue: queue.queue,
+      ruleset: ruleset.ruleset,
     },
   };
 }
@@ -84,6 +92,8 @@ function freshFacts(client, pr) {
   if (!checks.ok) return checks;
   const evidence = client.evidence(pr.number, first.queue.head);
   if (!evidence.ok) return evidence;
+  const ruleset = client.ruleset();
+  if (!ruleset.ok) return ruleset;
   const second = client.queueState(pr.number);
   if (!second.ok) return second;
   if (second.queue.head !== first.queue.head || second.queue.base !== first.queue.base || second.queue.state !== 'OPEN') {
@@ -103,6 +113,7 @@ function freshFacts(client, pr) {
     checks: checks.checks,
     evidence: evidence.evidence,
     queue: live,
+    ruleset: ruleset.ruleset,
   });
   return { ok: true, decision: classify(next), live };
 }
@@ -116,8 +127,17 @@ function select(client) {
   for (const pr of listed.prs) {
     if (only && String(pr.number) !== only) continue;
     if (!Number.isInteger(pr.number) || pr.number < 1) continue;
-    const loaded = loadDetail(client, pr);
-    if (!loaded.ok) return loaded;
+    let loaded;
+    try {
+      loaded = loadDetail(client, pr);
+    } catch (err) {
+      process.stderr.write(`#${pr.number} read failed; held\n`);
+      continue;
+    }
+    if (!loaded.ok) {
+      process.stderr.write(`#${pr.number} read failed: ${loaded.error || 'unreadable'}; held\n`);
+      continue;
+    }
     const facts = factsFrom(pr, loaded.detail);
     rows.push({ pr, decision: classify(facts), facts });
   }
@@ -157,8 +177,17 @@ function actOn(client, mode, action, write) {
   let wrote = 0;
   for (const row of selected.rows) {
     if (row.decision.action !== action) continue;
-    const fresh = freshFacts(client, row.pr);
-    if (!fresh.ok) return { ...fresh, wrote };
+    let fresh;
+    try {
+      fresh = freshFacts(client, row.pr);
+    } catch (err) {
+      process.stderr.write(`#${row.pr.number} read failed; skipped\n`);
+      continue;
+    }
+    if (!fresh.ok) {
+      process.stderr.write(`#${row.pr.number} read failed: ${fresh.error || 'unreadable'}; skipped\n`);
+      continue;
+    }
     if (fresh.moved || !fresh.decision || fresh.decision.action !== action) {
       process.stdout.write(`#${row.pr.number} changed before the write; skipped\n`);
       continue;

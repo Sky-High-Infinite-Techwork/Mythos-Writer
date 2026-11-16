@@ -10,7 +10,7 @@ The switch is read again, with `MYTHOS_CONTROL_READ_TOKEN`, after eligibility is
 
 | Workflow | What it does in Phase 1a |
 | --- | --- |
-| `mythos-flow-step.yml` | Schedule and manual run from `main`. Evidence is a successful run of `.github/workflows/ci.yml` and `.github/workflows/screenshot-check.yml` on that exact full SHA, for this repository and pull request, using the workflow blob currently on `main`. The run id and attempt are part of that record. An author `PROOF @ <sha>` comment is an assertion and does not count. The job then undrafts a draft that has that evidence and green `ci`, `notes-windows`, and `screenshot-check`, and enqueues a non-draft whose tip also has `mythos/final-gate` success from App 5736520. Enqueue is GraphQL `enqueuePullRequest` with `expectedHeadOid` set to the full tip SHA. The token is requested with Pull requests write only. |
+| `mythos-flow-step.yml` | Schedule and manual run from `main`. Proof is the Phase 1a rule below. The job undrafts a draft that has that proof and green `ci`, `notes-windows`, and `screenshot-check`, and enqueues a non-draft whose tip also has `mythos/final-gate` success from App 5736520. Enqueue is GraphQL `enqueuePullRequest` with `expectedHeadOid` set to the full tip SHA. The token requests Pull requests write only. |
 | `mythos-final-gate.yml` | Schedule and manual run from `main`. Discover selects no head. Claude and Codex emit unavailable and call no model, so the reducer cannot pass and this workflow does not create a tip gate. The publisher, in a separate job, posts `mythos/final-gate` on a `main` queue commit only when the pull request head already has that check from App 5736520 and `git merge-tree --write-tree` reproduces the queue tree. A manual `pr` input limits that scan to one pull request. |
 | `mythos-automation-contracts.yml` | Pull request and merge queue. No environment and no secrets. Runs the controller tests. |
 
@@ -19,6 +19,14 @@ Manual runs default to `dry-run`. `act` is the mode that can write. A scheduled 
 Phase 1a does not push, rebase, dispatch new work, call OpenRouter, or auto-merge `batch/**`. A pull request that touches `.github/`, auth, secrets, `electron-main/src/db.ts`, or release config stays held, including a rename out of those paths. The write App does not post PROOF comments.
 
 `ci` (including `notes-windows`) and `screenshot-check` already run on `merge_group`.
+
+## Proof (Phase 1a, accepted by Ivy, PM)
+
+Phase 1a proof is required CI green from `main`'s workflow revision on the exact tip. Ivy accepted that trust level.
+
+For each of `.github/workflows/ci.yml` and `.github/workflows/screenshot-check.yml`, the latest Actions run on that tip must have `event` `pull_request`, `status` `completed`, and `conclusion` `success`. `run.head_sha` is the tip. The run's pull request link head SHA, base ref, and base SHA match the pull request now. The workflow file blob at that tip equals the blob on `main`. A later failure, cancellation, or in-progress run on that SHA voids an earlier success. An author `PROOF @ <sha>` comment is an assertion and does not count. The write App does not post one.
+
+A pull request is held, with no write, when team/scope, lease, or the `main` ruleset cannot be read or is unknown. A known fork, an active `lease` label, or a ruleset that does not require the merge queue and the four checks is also held.
 
 ## Variables
 
@@ -64,7 +72,7 @@ Confirm each of these in the GitHub API or settings UI. The workflows cannot see
 5. The write App installation is `182422539` on Mythos-Writer only. Its repository permissions are the ones created with the App: Contents, Pull requests, and Issues read/write; Checks, Actions, and Metadata read. It does not have Workflows permission.
 6. The gate App is `5736520`. Its installation id variable matches the installation on Mythos-Writer.
 7. A `workflow_dispatch` dry-run of both privileged workflows was watched while the variable was still `false`, and the runs exited without writes.
-8. `enqueuePullRequest` authorization for a GitHub App requires the Merge queues write permission in addition to Pull requests write. This workflow does not request Merge queues write, because that permission is not on the App. Enqueue stays fail-closed until the owner adds that permission and a reviewed workflow change requests it.
+8. Enqueue needs Merge queues write on the Mythos Writer Flow App and a code change that requests that permission on the token. This workflow requests Pull requests write only. Until both exist, GitHub rejects enqueue and the job fails closed.
 
 ## Stop a run that is already going
 

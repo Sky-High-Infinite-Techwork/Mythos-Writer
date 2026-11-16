@@ -1,7 +1,7 @@
 'use strict';
 
 const { gh } = require('./spawn');
-const { CHECK_NAME, EVIDENCE_WORKFLOWS, REPO, REQUIRED_CHECKS, sha40 } = require('./constants');
+const { CHECK_NAME, EVIDENCE_WORKFLOWS, GATE_APP_ID, REPO, REQUIRED_CHECKS, sha40 } = require('./constants');
 const { readSwitch } = require('./switch');
 const { latestRun } = require('./flow-policy');
 
@@ -128,7 +128,7 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
     const query = `query($owner:String!,$name:String!,$n:Int!){
       repository(owner:$owner,name:$name){
         pullRequest(number:$n){
-          id isDraft isInMergeQueue isMergeQueueEnabled headRefOid baseRefName state mergeStateStatus
+          id isDraft isInMergeQueue isMergeQueueEnabled headRefOid baseRefName baseRefOid state mergeStateStatus
           author { login }
           headRepository { nameWithOwner }
           labels(first: 100) { pageInfo { hasNextPage } nodes { name } }
@@ -158,10 +158,16 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
         state: pr.state,
         mergeState: pr.mergeStateStatus,
         author: pr.author && pr.author.login,
-        fork: pr.headRepository ? pr.headRepository.nameWithOwner !== repo : true,
+        fork: Boolean(pr.headRepository && pr.headRepository.nameWithOwner) && pr.headRepository.nameWithOwner !== repo,
         scopeKnown: Boolean(pr.headRepository && pr.headRepository.nameWithOwner),
+        teamScopeKnown: Boolean(pr.headRepository && pr.headRepository.nameWithOwner)
+          && typeof (pr.author && pr.author.login) === 'string' && pr.author.login.length > 0,
         labels: labelNodes.map((node) => node && node.name).filter(Boolean),
-        labelsComplete: labelConn.pageInfo ? labelConn.pageInfo.hasNextPage !== true : false,
+        labelsComplete: Boolean(labelConn.pageInfo) && labelConn.pageInfo.hasNextPage !== true,
+        leaseKnown: Boolean(labelConn.pageInfo) && labelConn.pageInfo.hasNextPage !== true,
+        leaseHeld: Boolean(labelConn.pageInfo) && labelConn.pageInfo.hasNextPage !== true
+          && labelNodes.some((node) => node && (node.name === 'lease' || String(node.name || '').startsWith('lease:'))),
+        baseSha: pr.baseRefOid,
       },
     };
   }
@@ -196,27 +202,47 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
     const runs = [];
     for (const run of pages) {
       if (!run || run.head_sha !== head) continue;
-      const repository = run.repository && run.repository.full_name;
-      const headRepository = run.head_repository && run.head_repository.full_name;
-      const linked = (run.pull_requests || []).some((row) => row && row.number === prNumber);
-      if (!linked || repository !== REPO || headRepository !== REPO) continue;
-      if (run.conclusion !== 'success') continue;
       const workflowPath = run.path;
       if (!EVIDENCE_WORKFLOWS.includes(workflowPath)) continue;
-      if (headRevision[workflowPath] !== mainRevision[workflowPath]) continue;
+      const link = (run.pull_requests || []).find((row) => row && row.number === prNumber);
       runs.push({
         path: workflowPath,
-        headSha: head,
+        event: run.event,
+        status: run.status,
+        conclusion: run.conclusion,
+        headSha: run.head_sha,
         pr: prNumber,
-        repository,
-        headRepository,
-        conclusion: 'success',
+        prHeadSha: link && link.head && link.head.sha,
+        prBaseRef: link && link.base && link.base.ref,
+        prBaseSha: link && link.base && link.base.sha,
+        repository: run.repository && run.repository.full_name,
+        headRepository: run.head_repository && run.head_repository.full_name,
         runId: run.id,
         runAttempt: run.run_attempt,
-        workflowBlob: mainRevision[workflowPath],
+        workflowBlob: headRevision[workflowPath],
       });
     }
     return { ok: true, evidence: { mainRevision, runs } };
+  }
+
+  let rulesetCache = null;
+  function ruleset() {
+    if (rulesetCache) return rulesetCache;
+    const got = api(['api', `repos/${repo}/rules/branches/main`], readToken);
+    const rules = got.ok ? parseJson(got.stdout) : null;
+    if (!Array.isArray(rules)) {
+      rulesetCache = { ok: true, ruleset: { known: false, match: false } };
+      return rulesetCache;
+    }
+    const required = rules.find((rule) => rule && rule.type === 'required_status_checks');
+    const contexts = required && required.parameters && required.parameters.required_status_checks;
+    const list = Array.isArray(contexts) ? contexts : [];
+    const names = new Set(list.map((row) => row && row.context));
+    const gate = list.some((row) => row && row.context === CHECK_NAME && row.integration_id === GATE_APP_ID);
+    const checks = REQUIRED_CHECKS.every((name) => names.has(name)) && gate;
+    const queue = rules.some((rule) => rule && rule.type === 'merge_queue');
+    rulesetCache = { ok: true, ruleset: { known: true, match: queue && checks } };
+    return rulesetCache;
   }
 
   function ready(number) {
@@ -245,6 +271,7 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
     checks,
     queueState,
     evidence,
+    ruleset,
     ready,
     enqueue,
   };
