@@ -1,0 +1,188 @@
+name: Mythos flow step
+
+# Default-branch controller. Undraft, then enqueue a main pull request with
+# GraphQL enqueuePullRequest. Batch bases stay held. There is no push.
+# See docs/ops/unattended-flow.md.
+
+on:
+  schedule:
+    # Every ten minutes, offset from final-gate.
+    - cron: '2,12,22,32,42,52 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'dry-run plans only. act undrafts and enqueues.'
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - act
+      pr:
+        description: 'One pull request number. Empty scans open pull requests.'
+        required: false
+        default: ''
+        type: string
+
+permissions: {}
+
+jobs:
+  admit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
+      mode: ${{ steps.gate.outputs.mode }}
+      pr: ${{ steps.gate.outputs.pr }}
+    steps:
+      - name: Admit a main-branch run only when UNATTENDED_ENABLED is true
+        id: gate
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          EVENT: ${{ github.event_name }}
+          SWITCH: ${{ vars.UNATTENDED_ENABLED }}
+          MODE: ${{ github.event.inputs.mode }}
+          PR: ${{ github.event.inputs.pr }}
+        run: |
+          set -euo pipefail
+          # ADMIT-BEGIN
+          if [ "$REPO" != "Sky-High-Infinite-Techwork/Mythos-Writer" ]; then
+            echo "reject: repository" >&2
+            exit 1
+          fi
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "reject: ref is not main" >&2
+            exit 1
+          fi
+          case "$EVENT" in
+            schedule|workflow_dispatch) ;;
+            *) echo "reject: event" >&2; exit 1 ;;
+          esac
+          if [ "$EVENT" = "schedule" ]; then
+            MODE=act
+          fi
+          if [ "$SWITCH" != "true" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "mode=inert" >> "$GITHUB_OUTPUT"
+            echo "pr=" >> "$GITHUB_OUTPUT"
+            echo "UNATTENDED_ENABLED is not true; exiting without writes"
+            exit 0
+          fi
+          case "$MODE" in
+            dry-run|act) ;;
+            *) echo "reject: mode" >&2; exit 1 ;;
+          esac
+          if [ -n "${PR:-}" ] && [[ ! "$PR" =~ ^[1-9][0-9]{0,9}$ ]]; then
+            echo "reject: pr" >&2
+            exit 1
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "pr=${PR:-}" >> "$GITHUB_OUTPUT"
+          # ADMIT-END
+
+  act:
+    needs: admit
+    if: needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: mythos-writer
+    concurrency:
+      group: mythos-unattended-mutate
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      checks: read
+    steps:
+      - name: Confirm the trusted ref before reading secrets
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$REPO" = "Sky-High-Infinite-Techwork/Mythos-Writer"
+          test "$REF" = "refs/heads/main"
+      - name: Check out the trusted default-branch commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+      - name: Plan undrafts and enqueues
+        id: plan
+        env:
+          MODE: ${{ needs.admit.outputs.mode }}
+          REPO: Sky-High-Infinite-Techwork/Mythos-Writer
+          PR_NUMBER: ${{ needs.admit.outputs.pr }}
+          CONTROL_TOKEN: ${{ secrets.MYTHOS_CONTROL_READ_TOKEN }}
+          READ_TOKEN: ${{ github.token }}
+        run: node .github/scripts/unattended/flow-run.js plan
+      - name: Mint a pull-request token for undraft
+        id: ready
+        if: needs.admit.outputs.mode == 'act' && steps.plan.outputs.undraft == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.MYTHOS_WRITE_APP_ID }}
+          private-key: ${{ secrets.MYTHOS_WRITE_APP_PRIVATE_KEY }}
+          owner: Sky-High-Infinite-Techwork
+          repositories: Mythos-Writer
+          permission-pull-requests: write
+      - name: Check the undraft token installation
+        if: needs.admit.outputs.mode == 'act' && steps.plan.outputs.undraft == 'true'
+        env:
+          MINTED: ${{ steps.ready.outputs.installation-id }}
+          EXPECTED: ${{ vars.MYTHOS_WRITE_APP_INSTALLATION_ID }}
+        run: |
+          set -euo pipefail
+          test "$MINTED" = "182422539"
+          test "$MINTED" = "$EXPECTED"
+      - name: Undraft eligible drafts
+        if: needs.admit.outputs.mode == 'act' && steps.plan.outputs.undraft == 'true'
+        env:
+          MODE: act
+          REPO: Sky-High-Infinite-Techwork/Mythos-Writer
+          PR_NUMBER: ${{ needs.admit.outputs.pr }}
+          CONTROL_TOKEN: ${{ secrets.MYTHOS_CONTROL_READ_TOKEN }}
+          READ_TOKEN: ${{ github.token }}
+          READY_TOKEN: ${{ steps.ready.outputs.token }}
+          WRITE_APP_ID: ${{ vars.MYTHOS_WRITE_APP_ID }}
+          WRITE_INSTALLATION_ID: ${{ vars.MYTHOS_WRITE_APP_INSTALLATION_ID }}
+        run: node .github/scripts/unattended/flow-run.js undraft
+      - name: Mint a merge-queue token for enqueue
+        id: enqueue
+        if: needs.admit.outputs.mode == 'act' && steps.plan.outputs.enqueue == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.MYTHOS_WRITE_APP_ID }}
+          private-key: ${{ secrets.MYTHOS_WRITE_APP_PRIVATE_KEY }}
+          owner: Sky-High-Infinite-Techwork
+          repositories: Mythos-Writer
+          permission-pull-requests: write
+          permission-merge-queues: write
+      - name: Check the enqueue token installation
+        if: needs.admit.outputs.mode == 'act' && steps.plan.outputs.enqueue == 'true'
+        env:
+          MINTED: ${{ steps.enqueue.outputs.installation-id }}
+          EXPECTED: ${{ vars.MYTHOS_WRITE_APP_INSTALLATION_ID }}
+        run: |
+          set -euo pipefail
+          test "$MINTED" = "182422539"
+          test "$MINTED" = "$EXPECTED"
+      - name: Enqueue main pull requests at their exact tip
+        if: needs.admit.outputs.mode == 'act' && steps.plan.outputs.enqueue == 'true'
+        env:
+          MODE: act
+          REPO: Sky-High-Infinite-Techwork/Mythos-Writer
+          PR_NUMBER: ${{ needs.admit.outputs.pr }}
+          CONTROL_TOKEN: ${{ secrets.MYTHOS_CONTROL_READ_TOKEN }}
+          READ_TOKEN: ${{ github.token }}
+          ENQUEUE_TOKEN: ${{ steps.enqueue.outputs.token }}
+          WRITE_APP_ID: ${{ vars.MYTHOS_WRITE_APP_ID }}
+          WRITE_INSTALLATION_ID: ${{ vars.MYTHOS_WRITE_APP_INSTALLATION_ID }}
+        run: node .github/scripts/unattended/flow-run.js enqueue
