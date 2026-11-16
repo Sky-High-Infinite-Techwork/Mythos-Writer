@@ -1,6 +1,6 @@
 # Unattended flow (Phase 1a)
 
-Phase 1a undrafts and enqueues pull requests that already have independent evidence. It does not run a model review, and it does not post a new `mythos/final-gate` success on a pull request tip. The final-gate workflow can only copy an existing App 5736520 head success onto a `main` queue commit whose merge tree matches.
+Phase 1a undrafts and enqueues pull requests that already have independent evidence. It does not run a model review, and it does not post a new `mythos/final-gate` success on a pull request tip. The publisher mirrors an existing App 5736520 head success onto a `main` queue commit whose merge tree matches. The same job can post head success from an accepted reducer result. Phase 1a transports are unavailable, so the reducer cannot pass and that head post does not run.
 
 These workflows do nothing until the repository variable `UNATTENDED_ENABLED` is the literal string `true`. Any other value, including a missing variable, exits without a write and without posting `mythos/final-gate`.
 
@@ -30,7 +30,7 @@ For each of `.github/workflows/ci.yml` and `.github/workflows/screenshot-check.y
 
 GraphQL `author.login` for a bot omits the `[bot]` suffix that REST includes (`cursor` versus `cursor[bot]`). The flow reads `author.__typename`. When that is `Bot` and the login does not already end in `[bot]`, the comparison uses `login[bot]`. A User named `cursor` does not match the allow-list entry `cursor[bot]`.
 
-The publisher does not read `MYTHOS_FLOW_AUTHOR_ALLOWLIST`. It only mirrors an existing trusted head gate onto a queue commit, and it cannot undraft or enqueue.
+The publisher does not read `MYTHOS_FLOW_AUTHOR_ALLOWLIST`, and it cannot undraft or enqueue. It mirrors an existing trusted head gate onto a queue commit. It can also post head success when the reducer result is accepted. In Phase 1a the reducer cannot pass, so that head post does not run.
 
 A pull request is also held when the lease label list or the `main` ruleset cannot be read. `lease` and `lease:` labels match without regard to case. After the other eligibility checks, the ruleset is read again. That fresh read must still require GitHub Actions (`integration_id` 15368) on `ci`, `notes-windows`, and `screenshot-check`, the gate App (`5736520`) on `mythos/final-gate`, `strict_required_status_checks_policy` true, and a merge queue whose `merge_method` is `SQUASH`. Ruleset 25235759 on `main` is that policy. A stale or weaker ruleset holds the write. The switch is read after that ruleset re-read and is the last call before the write.
 

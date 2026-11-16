@@ -105,6 +105,12 @@ const ENQUEUE_QUERY = `mutation($id:ID!,$expected:GitObjectID!){
   }
 }`;
 
+const READY_QUERY = `mutation($id:ID!){
+  markPullRequestReadyForReview(input:{pullRequestId:$id}){
+    pullRequest{ id isDraft }
+  }
+}`;
+
 function createClient({ repo, readToken, controlToken, readyToken, enqueueToken }) {
   function api(args, token, input) {
     const result = gh(args, token, input);
@@ -286,9 +292,20 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
     return { ok: true, ruleset: rulesetMatches(rules) };
   }
 
-  function ready(number) {
-    const got = api(['pr', 'ready', String(number), '--repo', repo], readyToken);
-    return got.ok ? { ok: true } : got;
+  function ready(nodeId) {
+    if (typeof nodeId !== 'string' || nodeId.length === 0) return { ok: false, error: 'missing pull request id' };
+    const got = api(['api', 'graphql', '--input', '-'], readyToken, JSON.stringify({
+      query: READY_QUERY,
+      variables: { id: nodeId },
+    }));
+    if (!got.ok) return got;
+    const body = parseJson(got.stdout);
+    const marked = body && body.data && body.data.markPullRequestReadyForReview;
+    const pullRequest = marked && marked.pullRequest;
+    if (!pullRequest || body.errors || pullRequest.isDraft !== false) {
+      return { ok: false, error: 'undraft did not mark the pull request ready' };
+    }
+    return { ok: true };
   }
 
   function enqueue(nodeId, head) {
@@ -319,6 +336,6 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
 }
 
 module.exports = {
-  createClient, parseJson, flattenPages, flattenRunPages, mapChangedFile, ENQUEUE_QUERY,
+  createClient, parseJson, flattenPages, flattenRunPages, mapChangedFile, ENQUEUE_QUERY, READY_QUERY,
   parseAllowlist, canonicalLogin, authorMatches, leaseHeldFrom, rulesetMatches,
 };

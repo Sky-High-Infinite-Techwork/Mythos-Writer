@@ -221,7 +221,10 @@ function actOn(client, mode, action, write) {
 }
 
 function undraft(client, mode) {
-  return actOn(client, mode, 'undraft', (pr) => client.ready(pr.number));
+  return actOn(client, mode, 'undraft', (_pr, fresh) => {
+    if (!fresh.live || !fresh.live.nodeId) return { ok: false, error: 'missing pull request id' };
+    return client.ready(fresh.live.nodeId);
+  });
 }
 
 function enqueue(client, mode) {

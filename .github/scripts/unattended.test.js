@@ -11,7 +11,7 @@ const yaml = require('js-yaml');
 const { classify, authorAssertion, evidenceOk, filesLookProtected } = require('./unattended/flow-policy');
 const { plan, undraft, enqueue } = require('./unattended/flow-run');
 const {
-  ENQUEUE_QUERY, flattenPages, flattenRunPages, mapChangedFile, createClient,
+  ENQUEUE_QUERY, READY_QUERY, flattenPages, flattenRunPages, mapChangedFile, createClient,
   parseAllowlist, authorMatches, leaseHeldFrom, rulesetMatches,
 } = require('./unattended/flow-client');
 const { transportResult, reduce, acceptReducer } = require('./unattended/gate-result');
@@ -354,13 +354,74 @@ test('act undrafts a proven draft without a tip gate and enqueues one ready main
   });
   const undrafting = clientFor([draft], [true, true], () => draftDetail);
   assert.equal(undraft(undrafting, 'act').wrote, 1);
-  assert.deepEqual(undrafting.calls.ready, [7]);
+  assert.deepEqual(undrafting.calls.ready, ['PR_node']);
   assert.deepEqual(undrafting.calls.enqueue, []);
 
   const ready = prRecord();
   const enqueuing = clientFor([ready], [true, true], () => detailFor(ready));
   assert.equal(enqueue(enqueuing, 'act').wrote, 1);
   assert.deepEqual(enqueuing.calls.enqueue, [{ id: 'PR_node', sha: HEAD }]);
+});
+
+test('the switch read is the last call before the undraft mutation', () => {
+  const draft = prRecord({ isDraft: true, mergeStateStatus: 'DRAFT' });
+  const draftDetail = detailFor(draft, {
+    checks: {
+      ci: { conclusion: 'success', headSha: HEAD },
+      'notes-windows': { conclusion: 'success', headSha: HEAD },
+      'screenshot-check': { conclusion: 'success', headSha: HEAD },
+    },
+    queue: { ...detailFor(draft).queue, draft: true, queueEnabled: false },
+  });
+  const calls = [];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'undraft-'));
+  const bin = path.join(dir, 'gh');
+  const log = path.join(dir, 'log');
+  fs.writeFileSync(bin, `#!/usr/bin/env node
+const fs = require('fs');
+let input = '';
+process.stdin.on('data', (chunk) => { input += chunk; });
+process.stdin.on('end', () => {
+  fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args: process.argv.slice(2), input }) + '\\n');
+  process.stdout.write(JSON.stringify({
+    data: { markPullRequestReadyForReview: { pullRequest: { id: 'PR_node', isDraft: false } } },
+  }));
+});
+`);
+  fs.chmodSync(bin, 0o755);
+  const previousBin = process.env.GH_BIN;
+  process.env.GH_BIN = bin;
+  const real = createClient({ repo: REPO, readyToken: 'ready-token' });
+  const client = {
+    readSwitch() { calls.push('readSwitch'); return { ok: true, enabled: true }; },
+    listOpen() { calls.push('listOpen'); return { ok: true, prs: [draft], truncated: false }; },
+    comments() { calls.push('comments'); return { ok: true, comments: draftDetail.comments }; },
+    files() { calls.push('files'); return { ok: true, files: draftDetail.files }; },
+    checks() { calls.push('checks'); return { ok: true, checks: draftDetail.checks }; },
+    evidence() { calls.push('evidence'); return { ok: true, evidence: draftDetail.evidence }; },
+    queueState() { calls.push('queueState'); return { ok: true, queue: draftDetail.queue }; },
+    ruleset() { calls.push('ruleset'); return { ok: true, ruleset: draftDetail.ruleset }; },
+    ready(nodeId) {
+      calls.push('ready');
+      return real.ready(nodeId);
+    },
+  };
+  try {
+    assert.equal(undraft(client, 'act').wrote, 1);
+    assert.equal(calls.at(-2), 'readSwitch');
+    assert.equal(calls.at(-1), 'ready');
+    const lines = fs.readFileSync(log, 'utf8').trim().split('\n');
+    assert.equal(lines.length, 1);
+    const sent = JSON.parse(lines[0]);
+    assert.deepEqual(sent.args, ['api', 'graphql', '--input', '-']);
+    const body = JSON.parse(sent.input);
+    assert.equal(body.query, READY_QUERY);
+    assert.deepEqual(body.variables, { id: 'PR_node' });
+    assert.equal(sent.input.includes('pullRequest(number'), false);
+  } finally {
+    if (previousBin === undefined) delete process.env.GH_BIN;
+    else process.env.GH_BIN = previousBin;
+  }
 });
 
 test('a moved tip, a batch base, and a protected path do not enqueue', () => {
