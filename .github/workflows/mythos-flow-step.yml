@@ -1,7 +1,7 @@
 name: Mythos flow step
 
-# Default-branch controller. Undraft, then enqueue a main pull request with
-# GraphQL enqueuePullRequest. Batch bases stay held. There is no push.
+# Phase 1a. Undraft and enqueue from main. The final gate does not review.
+# Enqueue is GraphQL enqueuePullRequest. Batch bases stay held. There is no push.
 # See docs/ops/unattended-flow.md.
 
 on:
@@ -142,6 +142,12 @@ jobs:
           set -euo pipefail
           test "$MINTED" = "182422539"
           test "$MINTED" = "$EXPECTED"
+      - name: Check the undraft token grant
+        if: needs.admit.outputs.mode == 'act' && steps.plan.outputs.undraft == 'true'
+        env:
+          TOKEN: ${{ steps.ready.outputs.token }}
+          EXPECTED_WRITES: pull_requests
+        run: node .github/scripts/unattended/token-grant.js
       - name: Undraft eligible drafts
         if: needs.admit.outputs.mode == 'act' && steps.plan.outputs.undraft == 'true'
         env:
@@ -164,7 +170,6 @@ jobs:
           owner: Sky-High-Infinite-Techwork
           repositories: Mythos-Writer
           permission-pull-requests: write
-          permission-merge-queues: write
       - name: Check the enqueue token installation
         if: needs.admit.outputs.mode == 'act' && steps.plan.outputs.enqueue == 'true'
         env:
@@ -174,6 +179,12 @@ jobs:
           set -euo pipefail
           test "$MINTED" = "182422539"
           test "$MINTED" = "$EXPECTED"
+      - name: Check the enqueue token grant
+        if: needs.admit.outputs.mode == 'act' && steps.plan.outputs.enqueue == 'true'
+        env:
+          TOKEN: ${{ steps.enqueue.outputs.token }}
+          EXPECTED_WRITES: pull_requests
+        run: node .github/scripts/unattended/token-grant.js
       - name: Enqueue main pull requests at their exact tip
         if: needs.admit.outputs.mode == 'act' && steps.plan.outputs.enqueue == 'true'
         env:

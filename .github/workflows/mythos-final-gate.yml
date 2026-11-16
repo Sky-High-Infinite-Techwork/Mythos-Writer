@@ -1,8 +1,8 @@
 name: Mythos final gate
 
-# Default-branch controller. Schedule and workflow_dispatch only.
-# Model jobs hold no App token and no provider secret. The publisher is the
-# only job that can mint the gate App token. See docs/ops/unattended-flow.md.
+# Phase 1a. Schedule and workflow_dispatch from main only.
+# Model jobs do not review. The publisher mirrors an existing head success
+# onto a matching main queue commit. See docs/ops/unattended-flow.md.
 
 on:
   schedule:
@@ -110,7 +110,7 @@ jobs:
       - name: Select no head while the model transport is unapproved
         run: |
           set -euo pipefail
-          echo "No head selected. The model transport is not approved, so this run cannot post a new tip success."
+          echo "Phase 1a selects no head. No model review runs, so this job cannot post a new tip success."
 
   transport-claude:
     needs: [admit, discover]
@@ -258,6 +258,7 @@ jobs:
           CONTROL_TOKEN: ${{ secrets.MYTHOS_CONTROL_READ_TOKEN }}
           READ_TOKEN: ${{ github.token }}
           REDUCER_RESULT: ${{ needs.reduce.outputs.result }}
+          PR_NUMBER: ${{ needs.admit.outputs.pr }}
         run: |
           set -euo pipefail
           set +e
@@ -290,6 +291,12 @@ jobs:
           set -euo pipefail
           test -n "$EXPECTED"
           test "$MINTED" = "$EXPECTED"
+      - name: Check the gate token grant
+        if: steps.probe.outputs.needs_token == 'true'
+        env:
+          TOKEN: ${{ steps.gate.outputs.token }}
+          EXPECTED_WRITES: checks
+        run: node .github/scripts/unattended/token-grant.js
       - name: Post queue and head results with the gate token
         if: steps.probe.outputs.needs_token == 'true'
         env:
@@ -299,4 +306,5 @@ jobs:
           READ_TOKEN: ${{ github.token }}
           GATE_TOKEN: ${{ steps.gate.outputs.token }}
           REDUCER_RESULT: ${{ needs.reduce.outputs.result }}
+          PR_NUMBER: ${{ needs.admit.outputs.pr }}
         run: node .github/scripts/unattended/publish-run.js

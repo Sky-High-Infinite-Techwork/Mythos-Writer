@@ -1,20 +1,22 @@
-# Unattended flow (Phase 1)
+# Unattended flow (Phase 1a)
 
-GitHub Actions is the engine. These workflows do nothing until the repository variable `UNATTENDED_ENABLED` is the literal string `true`. Any other value, including a missing variable, exits without a write and without posting `mythos/final-gate`.
+Phase 1a undrafts and enqueues pull requests that already have independent evidence. It does not run a model review, and it does not post a new `mythos/final-gate` success on a pull request tip. The final-gate workflow can only copy an existing App 5736520 head success onto a `main` queue commit whose merge tree matches.
 
-The switch is read again, with `MYTHOS_CONTROL_READ_TOKEN`, immediately before each undraft, enqueue, and check post. One API call that was already authorized can still finish. Turning the variable off does not cancel a merge GitHub has already accepted and does not erase a green check.
+These workflows do nothing until the repository variable `UNATTENDED_ENABLED` is the literal string `true`. Any other value, including a missing variable, exits without a write and without posting `mythos/final-gate`.
+
+The switch is read again, with `MYTHOS_CONTROL_READ_TOKEN`, after eligibility is loaded and immediately before each undraft, enqueue, and check post. One API call that was already authorized can still finish. Turning the variable off does not cancel a merge GitHub has already accepted and does not erase a green check.
 
 ## Workflows
 
-| Workflow | What it does |
+| Workflow | What it does in Phase 1a |
 | --- | --- |
-| `mythos-final-gate.yml` | Schedule and manual run from `main`. Claude and Codex jobs emit an unavailable result and call no model. The reducer cannot pass on that result. The publisher, in a separate job, mints the gate App token only when a queue commit or a reducer pass needs a check. It posts `mythos/final-gate` on a `main` queue commit only when the pull request head already has that check from App 5736520 and `git merge-tree --write-tree` reproduces the queue tree. |
-| `mythos-flow-step.yml` | Schedule and manual run from `main`. Confirms independent `PROOF @ <full tip sha>` from the pull request author or `cursor[bot]`, undrafts a draft that already has that proof and green `ci`, `notes-windows`, and `screenshot-check`, then enqueues a non-draft whose tip also has `mythos/final-gate` success from App 5736520. Enqueue is GraphQL `enqueuePullRequest` with `expectedHeadOid` set to the full tip SHA. |
+| `mythos-flow-step.yml` | Schedule and manual run from `main`. Evidence is a successful run of `.github/workflows/ci.yml` and `.github/workflows/screenshot-check.yml` on that exact full SHA, for this repository and pull request, using the workflow blob currently on `main`. The run id and attempt are part of that record. An author `PROOF @ <sha>` comment is an assertion and does not count. The job then undrafts a draft that has that evidence and green `ci`, `notes-windows`, and `screenshot-check`, and enqueues a non-draft whose tip also has `mythos/final-gate` success from App 5736520. Enqueue is GraphQL `enqueuePullRequest` with `expectedHeadOid` set to the full tip SHA. The token is requested with Pull requests write only. |
+| `mythos-final-gate.yml` | Schedule and manual run from `main`. Discover selects no head. Claude and Codex emit unavailable and call no model, so the reducer cannot pass and this workflow does not create a tip gate. The publisher, in a separate job, posts `mythos/final-gate` on a `main` queue commit only when the pull request head already has that check from App 5736520 and `git merge-tree --write-tree` reproduces the queue tree. A manual `pr` input limits that scan to one pull request. |
 | `mythos-automation-contracts.yml` | Pull request and merge queue. No environment and no secrets. Runs the controller tests. |
 
 Manual runs default to `dry-run`. `act` is the mode that can write. A scheduled run is `act`, and it still stops when the variable is not `true`.
 
-Phase 1 does not push, rebase, dispatch new work, call OpenRouter, pass `--admin`, or auto-merge `batch/**`. A pull request that touches `.github/`, auth, secrets, `electron-main/src/db.ts`, or release config stays held. The write App does not post `PROOF` comments.
+Phase 1a does not push, rebase, dispatch new work, call OpenRouter, or auto-merge `batch/**`. A pull request that touches `.github/`, auth, secrets, `electron-main/src/db.ts`, or release config stays held, including a rename out of those paths. The write App does not post PROOF comments.
 
 `ci` (including `notes-windows`) and `screenshot-check` already run on `merge_group`.
 
@@ -24,7 +26,7 @@ Repository Actions variables:
 
 | Name | Value |
 | --- | --- |
-| `UNATTENDED_ENABLED` | `false` until a watched canary. `true` arms new runs. |
+| `UNATTENDED_ENABLED` | `false` until the checklist below is done. `true` arms new runs. |
 | `MYTHOS_WRITE_APP_ID` | `5777914` |
 | `MYTHOS_WRITE_APP_INSTALLATION_ID` | `182422539` |
 | `MYTHOS_GATE_APP_ID` | `5736520` |
@@ -43,13 +45,26 @@ Each environment allows the `main` branch only. A job can use one environment, s
 | `mythos-publisher` | `MYTHOS_GATE_APP_PRIVATE_KEY` | Gate check posts |
 | `mythos-publisher` | `MYTHOS_CONTROL_READ_TOKEN` | Live switch read in that job |
 | `mythos-control` | `MYTHOS_CONTROL_READ_TOKEN` | Reserved for a later read-only job |
-| `mythos-control` | `MYTHOS_OPS_CHECKOUT_TOKEN` | Not read by these workflows. Phase 1 Ops scripts are not on Ops `main`, so this PR does not check out private Ops. |
-| `mythos-claude` | `CLAUDE_CODE_OAUTH_TOKEN` | Not read. Model jobs do not call Claude. |
-| `mythos-codex` | `OPENAI_API_KEY` | Not read. Model jobs do not call Codex. |
+| `mythos-control` | `MYTHOS_OPS_CHECKOUT_TOKEN` | Not read by these workflows. The Phase 1 Ops controller scripts are not on Ops `main`. |
+| `mythos-claude` | `CLAUDE_CODE_OAUTH_TOKEN` | Not read. Phase 1a does not call Claude. |
+| `mythos-codex` | `OPENAI_API_KEY` | Not read. Phase 1a does not call Codex. |
 
 `MYTHOS_CONTROL_READ_TOKEN` is a fine-grained PAT for Mythos-Writer with Actions variables read and metadata read. It cannot write contents or pull requests. The two App private keys stay in different environments and different jobs.
 
 Do not add `OPENROUTER_API_KEY`.
+
+## Before the switch may be set true
+
+Confirm each of these in the GitHub API or settings UI. The workflows cannot see environment branch policy or repository-secret copies.
+
+1. `UNATTENDED_ENABLED` is still `false`.
+2. Environments `mythos-writer`, `mythos-publisher`, `mythos-control`, `mythos-claude`, and `mythos-codex` exist, and each deployment branch policy allows only `main`.
+3. `MYTHOS_WRITE_APP_PRIVATE_KEY` exists only in `mythos-writer`. `MYTHOS_GATE_APP_PRIVATE_KEY` exists only in `mythos-publisher`. Neither exists as a repository Actions secret.
+4. `MYTHOS_CONTROL_READ_TOKEN` exists in `mythos-control`, `mythos-writer`, and `mythos-publisher`. It is a Writer-only fine-grained PAT with Actions variables read and metadata read, and it has no contents or pull-request write.
+5. The write App installation is `182422539` on Mythos-Writer only. Its repository permissions are the ones created with the App: Contents, Pull requests, and Issues read/write; Checks, Actions, and Metadata read. It does not have Workflows permission.
+6. The gate App is `5736520`. Its installation id variable matches the installation on Mythos-Writer.
+7. A `workflow_dispatch` dry-run of both privileged workflows was watched while the variable was still `false`, and the runs exited without writes.
+8. `enqueuePullRequest` authorization for a GitHub App requires the Merge queues write permission in addition to Pull requests write. This workflow does not request Merge queues write, because that permission is not on the App. Enqueue stays fail-closed until the owner adds that permission and a reviewed workflow change requests it.
 
 ## Stop a run that is already going
 

@@ -1,7 +1,7 @@
 'use strict';
 
 const { gh } = require('./spawn');
-const { CHECK_NAME, REQUIRED_CHECKS, sha40 } = require('./constants');
+const { CHECK_NAME, EVIDENCE_WORKFLOWS, REPO, REQUIRED_CHECKS, sha40 } = require('./constants');
 const { readSwitch } = require('./switch');
 const { latestRun } = require('./flow-policy');
 
@@ -11,6 +11,39 @@ function parseJson(text) {
   } catch {
     return null;
   }
+}
+
+function flattenRunPages(text) {
+  const parsed = parseJson(text);
+  if (!Array.isArray(parsed) || parsed.length === 0) return null;
+  const runs = [];
+  let total = null;
+  for (const page of parsed) {
+    if (!page || !Array.isArray(page.workflow_runs) || typeof page.total_count !== 'number') return null;
+    if (total === null) total = page.total_count;
+    for (const run of page.workflow_runs) runs.push(run);
+  }
+  if (runs.length < total) return null;
+  return runs;
+}
+
+function flattenPages(text) {
+  const parsed = parseJson(text);
+  if (!Array.isArray(parsed)) return null;
+  const rows = [];
+  for (const page of parsed) {
+    if (!Array.isArray(page)) return null;
+    for (const row of page) rows.push(row);
+  }
+  return rows;
+}
+
+function mapChangedFile(row) {
+  return {
+    filename: row && row.filename,
+    status: row && row.status,
+    previous_filename: row && row.previous_filename,
+  };
 }
 
 function splitRepo(repo) {
@@ -44,10 +77,10 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
   }
 
   function comments(number) {
-    const got = api(['api', '--paginate', `repos/${repo}/issues/${number}/comments`], readToken);
+    const got = api(['api', '--paginate', '--slurp', `repos/${repo}/issues/${number}/comments`], readToken);
     if (!got.ok) return got;
-    const rows = parseJson(got.stdout);
-    if (!Array.isArray(rows)) return { ok: false, error: 'comments were not a JSON array' };
+    const rows = flattenPages(got.stdout);
+    if (!rows) return { ok: false, error: 'comments were not pages of JSON' };
     return {
       ok: true,
       comments: rows.map((row) => ({
@@ -58,11 +91,11 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
   }
 
   function files(number) {
-    const got = api(['api', '--paginate', `repos/${repo}/pulls/${number}/files`], readToken);
+    const got = api(['api', '--paginate', '--slurp', `repos/${repo}/pulls/${number}/files`], readToken);
     if (!got.ok) return got;
-    const rows = parseJson(got.stdout);
-    if (!Array.isArray(rows)) return { ok: false, error: 'files were not a JSON array' };
-    return { ok: true, files: rows.map((row) => ({ filename: row && row.filename })) };
+    const rows = flattenPages(got.stdout);
+    if (!rows) return { ok: false, error: 'files were not pages of JSON' };
+    return { ok: true, files: rows.map(mapChangedFile) };
   }
 
   function checks(sha) {
@@ -96,6 +129,9 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
       repository(owner:$owner,name:$name){
         pullRequest(number:$n){
           id isDraft isInMergeQueue isMergeQueueEnabled headRefOid baseRefName state mergeStateStatus
+          author { login }
+          headRepository { nameWithOwner }
+          labels(first: 100) { pageInfo { hasNextPage } nodes { name } }
         }
       }
     }`;
@@ -107,6 +143,8 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
     const body = parseJson(got.stdout);
     const pr = body && body.data && body.data.repository && body.data.repository.pullRequest;
     if (!pr || body.errors) return { ok: false, error: 'pull request query failed' };
+    const labelConn = pr.labels || {};
+    const labelNodes = labelConn.nodes || [];
     return {
       ok: true,
       queue: {
@@ -114,12 +152,71 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
         draft: pr.isDraft === true,
         inQueue: pr.isInMergeQueue === true,
         queueEnabled: pr.isMergeQueueEnabled === true,
+        policyKnown: typeof pr.isMergeQueueEnabled === 'boolean',
         head: pr.headRefOid,
         base: pr.baseRefName,
         state: pr.state,
         mergeState: pr.mergeStateStatus,
+        author: pr.author && pr.author.login,
+        fork: pr.headRepository ? pr.headRepository.nameWithOwner !== repo : true,
+        scopeKnown: Boolean(pr.headRepository && pr.headRepository.nameWithOwner),
+        labels: labelNodes.map((node) => node && node.name).filter(Boolean),
+        labelsComplete: labelConn.pageInfo ? labelConn.pageInfo.hasNextPage !== true : false,
       },
     };
+  }
+
+  function blobSha(workflowPath, ref) {
+    const got = api(['api', `repos/${repo}/contents/${workflowPath}?ref=${encodeURIComponent(ref)}`], readToken);
+    if (!got.ok) return got;
+    const body = parseJson(got.stdout);
+    if (!body || !sha40(body.sha)) return { ok: false, error: `workflow blob unreadable at ${ref}` };
+    return { ok: true, sha: body.sha };
+  }
+
+  function evidence(prNumber, head) {
+    if (!sha40(head)) return { ok: false, error: 'head sha' };
+    const mainRevision = {};
+    const headRevision = {};
+    for (const workflowPath of EVIDENCE_WORKFLOWS) {
+      const onMain = blobSha(workflowPath, 'refs/heads/main');
+      if (!onMain.ok) return onMain;
+      const onHead = blobSha(workflowPath, head);
+      if (!onHead.ok) return { ok: true, evidence: { mainRevision: {}, runs: [] } };
+      mainRevision[workflowPath] = onMain.sha;
+      headRevision[workflowPath] = onHead.sha;
+    }
+    const got = api([
+      'api', '--paginate', '--slurp',
+      `repos/${repo}/actions/runs?head_sha=${head}&per_page=100`,
+    ], readToken);
+    if (!got.ok) return got;
+    const pages = flattenRunPages(got.stdout);
+    if (!pages) return { ok: false, error: 'workflow runs were not pages of JSON' };
+    const runs = [];
+    for (const run of pages) {
+      if (!run || run.head_sha !== head) continue;
+      const repository = run.repository && run.repository.full_name;
+      const headRepository = run.head_repository && run.head_repository.full_name;
+      const linked = (run.pull_requests || []).some((row) => row && row.number === prNumber);
+      if (!linked || repository !== REPO || headRepository !== REPO) continue;
+      if (run.conclusion !== 'success') continue;
+      const workflowPath = run.path;
+      if (!EVIDENCE_WORKFLOWS.includes(workflowPath)) continue;
+      if (headRevision[workflowPath] !== mainRevision[workflowPath]) continue;
+      runs.push({
+        path: workflowPath,
+        headSha: head,
+        pr: prNumber,
+        repository,
+        headRepository,
+        conclusion: 'success',
+        runId: run.id,
+        runAttempt: run.run_attempt,
+        workflowBlob: mainRevision[workflowPath],
+      });
+    }
+    return { ok: true, evidence: { mainRevision, runs } };
   }
 
   function ready(number) {
@@ -147,9 +244,12 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
     files,
     checks,
     queueState,
+    evidence,
     ready,
     enqueue,
   };
 }
 
-module.exports = { createClient, parseJson, ENQUEUE_QUERY };
+module.exports = {
+  createClient, parseJson, flattenPages, flattenRunPages, mapChangedFile, ENQUEUE_QUERY,
+};

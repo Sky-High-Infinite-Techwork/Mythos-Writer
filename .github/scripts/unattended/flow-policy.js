@@ -2,9 +2,10 @@
 
 const {
   HOLD_LABELS,
-  PROOF_BUILDER,
+  EVIDENCE_WORKFLOWS,
   REQUIRED_CHECKS,
   GATE_APP_ID,
+  REPO,
   sha40,
   protectedPath,
 } = require('./constants');
@@ -15,18 +16,32 @@ function hold(reason) {
   return { action: 'hold', reason };
 }
 
-function hasProof(comments, head, author) {
+// A comment is an assertion. It never authorizes undraft or enqueue.
+function authorAssertion(comments, head) {
   if (!sha40(head)) return false;
-  const allowed = new Set([author, PROOF_BUILDER].filter((login) => typeof login === 'string' && login));
   const header = `PROOF @ ${head}`;
-  for (const comment of comments || []) {
-    if (!allowed.has(comment.login)) continue;
-    const lines = String(comment.body || '').split('\n');
-    for (const line of lines) {
-      if (line.trim() === header) return true;
-    }
-  }
-  return false;
+  return (comments || []).some((comment) => String(comment && comment.body || '').split('\n')
+    .some((line) => line.trim() === header));
+}
+
+function evidenceRunOk(run, head, prNumber, revision) {
+  if (!run || run.repository !== REPO || run.headRepository !== REPO) return false;
+  if (run.headSha !== head || run.pr !== prNumber || run.conclusion !== 'success') return false;
+  if (!Number.isInteger(run.runId) || run.runId < 1) return false;
+  if (!Number.isInteger(run.runAttempt) || run.runAttempt < 1) return false;
+  if (!sha40(run.workflowBlob) || run.workflowBlob !== revision) return false;
+  return EVIDENCE_WORKFLOWS.includes(run.path);
+}
+
+// Proof is a successful run of each trusted workflow, for this repository, pull
+// request, and full SHA, using the workflow blob currently on main.
+function evidenceOk(evidence, head, prNumber) {
+  if (!sha40(head) || !Number.isInteger(prNumber) || !evidence || !evidence.mainRevision) return false;
+  const runs = evidence.runs || [];
+  return EVIDENCE_WORKFLOWS.every((workflowPath) => {
+    const revision = evidence.mainRevision[workflowPath];
+    return runs.some((run) => run.path === workflowPath && evidenceRunOk(run, head, prNumber, revision));
+  });
 }
 
 function latestRun(runs) {
@@ -51,7 +66,7 @@ function gateOk(run, head) {
 }
 
 function filesLookProtected(files) {
-  return (files || []).some((file) => protectedPath(file.filename || ''));
+  return (files || []).some((file) => protectedPath(file.filename || '') || protectedPath(file.previous_filename || ''));
 }
 
 function classify(facts) {
@@ -61,15 +76,18 @@ function classify(facts) {
   if (facts.base !== 'main') return hold('base is not main');
   const labels = (facts.labels || []).map((name) => String(name).toLowerCase());
   if (labels.some((name) => HOLD_LABELS.includes(name))) return hold('hold label');
+  if (facts.labelsComplete === false) return hold('label list incomplete');
+  if (facts.scopeKnown === false) return hold('repository scope unknown');
+  if (facts.policyKnown === false) return hold('merge queue policy unknown');
   if (!facts.filesComplete) return hold('file list incomplete');
   if (facts.protectedPath) return hold('protected path');
   if (facts.mergeState === 'BEHIND' || facts.mergeState === 'DIRTY' || facts.mergeState === 'UNMERGEABLE') {
     return hold('rebase needed');
   }
   if (!MERGE_OK.has(facts.mergeState)) return hold('mergeability unknown');
-  if (!facts.proof) return hold('missing independent proof');
+  if (!facts.proof) return hold('missing independent evidence run');
   if (!facts.ciGreen) return hold('required checks are not green');
-  if (facts.draft) return { action: 'undraft', reason: 'draft with independent proof and required checks' };
+  if (facts.draft) return { action: 'undraft', reason: 'draft with an evidence run and required checks' };
   if (!facts.gate) return hold('tip gate missing');
   if (!facts.queueEnabled) return hold('base has no merge queue');
   if (!facts.nodeId) return hold('missing pull request id');
@@ -79,7 +97,8 @@ function classify(facts) {
 
 module.exports = {
   classify,
-  hasProof,
+  authorAssertion,
+  evidenceOk,
   latestRun,
   ciGreen,
   gateOk,

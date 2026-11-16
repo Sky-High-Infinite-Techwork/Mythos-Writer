@@ -40,11 +40,14 @@ function decideQueueEntry(entry, view, passed) {
     return { state: 'in_progress', why: 'git read failed', head, parent: null };
   }
   const parents = view.parents;
+  if (parents.length === 0) return { state: 'in_progress', why: 'git read failed', head, parent: null };
   if ((parents.length !== 1 && parents.length !== 2) || (parents.length === 2 && parents[1] !== head) || !sha40(parents[0])) {
     return { state: 'failure', why: 'queue commit parent shape is not squash or base plus the reviewed head', head, parent: null };
   }
   const parent = parents[0];
-  const parentKnown = parent === view.baseTip || (passed instanceof Set && passed.has(parent));
+  const chain = passed && passed.parents instanceof Set ? passed : null;
+  const sameBase = chain && chain.baseTip === view.baseTip;
+  const parentKnown = parent === view.baseTip || (sameBase && chain.parents.has(parent));
   if (!parentKnown) {
     return { state: 'in_progress', why: 'queue parent is not the base tip or a queue commit passed in this run', head, parent };
   }
@@ -65,7 +68,9 @@ function stillQueue(entry, head, parent, view, passed) {
   if (view.state !== 'open' || view.draft || view.head !== head || view.base !== entry.base) return false;
   if (view.collision !== false) return false;
   if (view.listReadable !== true) return false;
-  return parent === view.baseTip || (passed instanceof Set && passed.has(parent));
+  const chain = passed && passed.parents instanceof Set ? passed : null;
+  const sameBase = chain && chain.baseTip === view.baseTip;
+  return parent === view.baseTip || (sameBase && chain.parents.has(parent));
 }
 
 function queueSummary(entry, why) {

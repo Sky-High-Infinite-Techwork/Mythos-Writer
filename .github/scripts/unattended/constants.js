@@ -9,8 +9,12 @@ const WRITE_INSTALLATION_ID = '182422539';
 const GATE_APP_ID = 5736520;
 const CHECK_NAME = 'mythos/final-gate';
 const REQUIRED_CHECKS = ['ci', 'notes-windows', 'screenshot-check'];
-const PROOF_BUILDER = 'cursor[bot]';
 const HOLD_LABELS = ['tip-freeze', 'do-not-merge', 'hold', 'carve-out'];
+// Independent proof is a successful Actions run of these files at main's blob.
+const EVIDENCE_WORKFLOWS = [
+  '.github/workflows/ci.yml',
+  '.github/workflows/screenshot-check.yml',
+];
 const RESULT_SCHEMA = 'mythos-gate-result/v1';
 
 const PROTECTED_PATH = [
@@ -38,8 +42,8 @@ module.exports = {
   GATE_APP_ID,
   CHECK_NAME,
   REQUIRED_CHECKS,
-  PROOF_BUILDER,
   HOLD_LABELS,
+  EVIDENCE_WORKFLOWS,
   RESULT_SCHEMA,
   sha40,
   protectedPath,

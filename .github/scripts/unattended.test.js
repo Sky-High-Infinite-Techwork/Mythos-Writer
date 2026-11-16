@@ -8,17 +8,20 @@ const path = require('node:path');
 const test = require('node:test');
 const yaml = require('js-yaml');
 
-const { classify, hasProof } = require('./unattended/flow-policy');
+const { classify, authorAssertion, evidenceOk, filesLookProtected } = require('./unattended/flow-policy');
 const { plan, undraft, enqueue } = require('./unattended/flow-run');
-const { ENQUEUE_QUERY } = require('./unattended/flow-client');
+const { ENQUEUE_QUERY, flattenPages, flattenRunPages, mapChangedFile, createClient } = require('./unattended/flow-client');
 const { transportResult, reduce, acceptReducer } = require('./unattended/gate-result');
 const { decideQueueEntry, stillQueue, parseQueueRef } = require('./unattended/queue-policy');
-const { treesMatch, parentsOf, runPublish } = require('./unattended/publish-run');
+const { treesMatch, parentsOf, fetchObjects, runPublish } = require('./unattended/publish-run');
+const { interpretGrant } = require('./unattended/token-grant');
 const { interpretSwitch, readSwitch } = require('./unattended/switch');
 const { gh } = require('./unattended/spawn');
 const { GATE_APP_ID, REPO, WRITE_APP_ID, WRITE_INSTALLATION_ID } = require('./unattended/constants');
 
 const HEAD = 'a'.repeat(40);
+const BLOB_CI = '1'.repeat(40);
+const BLOB_SHOT = '2'.repeat(40);
 const WORKFLOWS = path.join(__dirname, '..', 'workflows');
 
 function triggerOf(doc) {
@@ -96,6 +99,27 @@ function prRecord(over = {}) {
   };
 }
 
+function evidenceFor(head, prNumber) {
+  const files = [
+    ['.github/workflows/ci.yml', BLOB_CI],
+    ['.github/workflows/screenshot-check.yml', BLOB_SHOT],
+  ];
+  return {
+    mainRevision: Object.fromEntries(files),
+    runs: files.map(([workflowPath, blob], index) => ({
+      path: workflowPath,
+      headSha: head,
+      pr: prNumber,
+      repository: REPO,
+      headRepository: REPO,
+      conclusion: 'success',
+      runId: 100 + index,
+      runAttempt: 1,
+      workflowBlob: blob,
+    })),
+  };
+}
+
 function detailFor(pr, over = {}) {
   const head = pr.headRefOid;
   return {
@@ -107,6 +131,7 @@ function detailFor(pr, over = {}) {
       'screenshot-check': { conclusion: 'success', headSha: head },
       gate: { conclusion: 'success', headSha: head, appId: GATE_APP_ID, summary: `Head: ${head}\n` },
     },
+    evidence: evidenceFor(head, pr.number),
     queue: {
       nodeId: 'PR_node',
       queueEnabled: true,
@@ -142,8 +167,11 @@ function clientFor(prs, switches, detailOf) {
     files(number) {
       return { ok: true, files: detailOf(number).files };
     },
-    checks(number) {
-      return { ok: true, checks: detailOf(prs.find((pr) => pr.number === number) || prs[0]).checks };
+    checks() {
+      return { ok: true, checks: detailOf(prs[0].number).checks };
+    },
+    evidence(number) {
+      return { ok: true, evidence: detailOf(number).evidence };
     },
     queueState(number) {
       return { ok: true, queue: detailOf(number).queue };
@@ -199,12 +227,23 @@ test('admit rejects a ref, repository, event, mode, or pull request outside the 
   assert.match(scheduled.outputs, /mode=act/);
 });
 
-test('proof accepts the author and cursor bot for the exact tip and ignores the write app', () => {
-  assert.equal(hasProof(proofComments(HEAD, 'ada'), HEAD, 'ada'), true);
-  assert.equal(hasProof(proofComments(HEAD, 'cursor[bot]'), HEAD, 'ada'), true);
-  assert.equal(hasProof(proofComments(HEAD, 'mythos-writer-flow[bot]'), HEAD, 'ada'), false);
-  assert.equal(hasProof(proofComments('b'.repeat(40), 'ada'), HEAD, 'ada'), false);
-  assert.equal(hasProof([{ login: 'ada', body: `PROOF @ ${HEAD.slice(0, 7)}` }], HEAD, 'ada'), false);
+test('author PROOF comments are assertions and do not authorize', () => {
+  assert.equal(authorAssertion(proofComments(HEAD, 'ada'), HEAD), true);
+  assert.equal(authorAssertion(proofComments(HEAD, 'mythos-writer-flow[bot]'), HEAD), true);
+  assert.equal(evidenceOk(null, HEAD, 7), false);
+  assert.equal(classify(readyFacts({ proof: false })).reason, 'missing independent evidence run');
+  assert.equal(evidenceOk(evidenceFor(HEAD, 7), HEAD, 7), true);
+  const wrongBlob = evidenceFor(HEAD, 7);
+  wrongBlob.runs[0].workflowBlob = '3'.repeat(40);
+  assert.equal(evidenceOk(wrongBlob, HEAD, 7), false);
+  const otherPr = evidenceFor(HEAD, 8);
+  assert.equal(evidenceOk(otherPr, HEAD, 7), false);
+});
+
+test('a rename out of a protected path is held', () => {
+  const renamed = [{ filename: 'src/x.ts', status: 'renamed', previous_filename: 'electron-main/src/db.ts' }];
+  assert.equal(filesLookProtected(renamed), true);
+  assert.equal(classify(readyFacts({ protectedPath: filesLookProtected(renamed) })).reason, 'protected path');
 });
 
 test('classify holds forks, batch bases, protected paths, missing proof, and a missing tip gate', () => {
@@ -213,7 +252,7 @@ test('classify holds forks, batch bases, protected paths, missing proof, and a m
   assert.equal(classify(readyFacts({ base: 'batch/lane' })).reason, 'base is not main');
   assert.equal(classify(readyFacts({ protectedPath: true })).reason, 'protected path');
   assert.equal(classify(readyFacts({ labels: ['tip-freeze'] })).reason, 'hold label');
-  assert.equal(classify(readyFacts({ proof: false })).reason, 'missing independent proof');
+  assert.equal(classify(readyFacts({ proof: false })).reason, 'missing independent evidence run');
   assert.equal(classify(readyFacts({ mergeState: 'BEHIND' })).reason, 'rebase needed');
   assert.equal(classify(readyFacts({ mergeState: 'UNKNOWN' })).reason, 'mergeability unknown');
   assert.equal(classify(readyFacts({ draft: true, gate: false })).action, 'undraft');
@@ -503,7 +542,7 @@ test('privileged workflows are inert controllers with pinned actions and split c
     const on = triggerOf(doc);
     assert.deepEqual(doc.permissions, {});
     assert.deepEqual(Object.keys(on).sort(), ['schedule', 'workflow_dispatch']);
-    assert.equal(text.includes('pull_request'), false, name);
+    assert.equal(triggerOf(doc).pull_request, undefined, name);
     assert.equal(text.includes('pull_request_target'), false, name);
     assert.equal(text.includes('workflow_run'), false, name);
     assert.equal(text.includes('OPENROUTER'), false, name);
@@ -543,7 +582,8 @@ test('privileged workflows are inert controllers with pinned actions and split c
   assert.match(gateText, /permission-checks: write/);
   assert.match(flowText, /MYTHOS_WRITE_APP_PRIVATE_KEY/);
   assert.match(flowText, /enqueuePullRequest|flow-run.js enqueue/);
-  assert.match(flowText, /permission-merge-queues: write/);
+  assert.equal(flowText.includes('permission-merge-queues'), false);
+  assert.match(flowText, /token-grant.js/);
   for (const name of ['transport-claude', 'transport-codex', 'reduce', 'discover']) {
     assert.equal(JSON.stringify(gate.jobs[name]).includes('secrets.'), false, name);
   }
@@ -562,4 +602,237 @@ test('privileged workflows are inert controllers with pinned actions and split c
   assert.ok(Object.prototype.hasOwnProperty.call(triggerOf(contractsDoc), 'pull_request'));
   assert.deepEqual(triggerOf(contractsDoc).merge_group, { types: ['checks_requested'] });
   assert.match(contracts, /npm ci --ignore-scripts/);
+});
+
+test('the switch is read after validation, so a flip during those reads blocks the write', () => {
+  const pr = prRecord();
+  const detail = detailFor(pr);
+  let enabled = true;
+  const calls = { enqueue: [] };
+  const client = {
+    calls,
+    readSwitch() { return { ok: true, enabled }; },
+    listOpen() { return { ok: true, prs: [pr], truncated: false }; },
+    comments() { return { ok: true, comments: detail.comments }; },
+    files() { enabled = false; return { ok: true, files: detail.files }; },
+    checks() { return { ok: true, checks: detail.checks }; },
+    evidence() { return { ok: true, evidence: detail.evidence }; },
+    queueState() { return { ok: true, queue: detail.queue }; },
+    enqueue(id, sha) { calls.enqueue.push({ id, sha }); return { ok: true, entry: { position: 1, state: 'QUEUED' } }; },
+  };
+  assert.equal(enqueue(client, 'act').wrote, 0);
+  assert.deepEqual(calls.enqueue, []);
+});
+
+test('a hold label that appears after the list read blocks the write', () => {
+  const pr = prRecord();
+  const detail = detailFor(pr);
+  let reads = 0;
+  const calls = { enqueue: [] };
+  const client = {
+    calls,
+    readSwitch() { return { ok: true, enabled: true }; },
+    listOpen() { return { ok: true, prs: [pr], truncated: false }; },
+    comments() { return { ok: true, comments: detail.comments }; },
+    files() { return { ok: true, files: detail.files }; },
+    checks() { return { ok: true, checks: detail.checks }; },
+    evidence() { return { ok: true, evidence: detail.evidence }; },
+    queueState() {
+      reads += 1;
+      return {
+        ok: true,
+        queue: { ...detail.queue, labels: reads >= 2 ? ['tip-freeze'] : [], labelsComplete: true },
+      };
+    },
+    enqueue(id, sha) { calls.enqueue.push({ id, sha }); return { ok: true, entry: { position: 1, state: 'QUEUED' } }; },
+  };
+  assert.equal(enqueue(client, 'act').wrote, 0);
+  assert.deepEqual(calls.enqueue, []);
+});
+
+test('paginated JSON pages flatten, and a rename keeps both filenames', () => {
+  const pages = JSON.stringify([
+    [{ filename: 'src/x.ts', status: 'renamed', previous_filename: 'electron-main/src/db.ts' }],
+    [{ filename: 'README.md', status: 'modified' }],
+  ]);
+  const rows = flattenPages(pages).map(mapChangedFile);
+  assert.equal(rows.length, 2);
+  assert.equal(filesLookProtected(rows), true);
+  const runs = flattenRunPages(JSON.stringify([
+    { total_count: 2, workflow_runs: [{ id: 1 }] },
+    { total_count: 2, workflow_runs: [{ id: 2 }] },
+  ]));
+  assert.deepEqual(runs.map((run) => run.id), [1, 2]);
+  assert.equal(flattenRunPages(JSON.stringify([{ total_count: 3, workflow_runs: [{ id: 1 }] }])), null);
+});
+
+test('files() reads every page and both sides of a rename', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pages-'));
+  const bin = path.join(dir, 'gh');
+  const body = JSON.stringify([[
+    { filename: 'src/x.ts', status: 'renamed', previous_filename: 'electron-main/src/db.ts' },
+  ], [
+    { filename: 'README.md', status: 'modified' },
+  ]]);
+  fs.writeFileSync(bin, `#!/bin/sh\nprintf '%s' '${body}'\n`);
+  fs.chmodSync(bin, 0o755);
+  const previous = process.env.GH_BIN;
+  process.env.GH_BIN = bin;
+  try {
+    const client = createClient({ repo: REPO, readToken: 'read' });
+    const got = client.files(7);
+    assert.equal(got.ok, true);
+    assert.equal(filesLookProtected(got.files), true);
+  } finally {
+    if (previous === undefined) delete process.env.GH_BIN;
+    else process.env.GH_BIN = previous;
+  }
+});
+
+test('a passed queue parent is not reused after the base tip changes', () => {
+  const head = HEAD;
+  const oldTip = 'd'.repeat(40);
+  const newTip = 'e'.repeat(40);
+  const entry = {
+    ref: `refs/heads/gh-readonly-queue/main/pr-7-${head}`,
+    base: 'main',
+    pr: 7,
+    sha: 'c'.repeat(40),
+  };
+  const { decideQueueEntry } = require('./unattended/queue-policy');
+  const view = {
+    prReadable: true,
+    state: 'open',
+    draft: false,
+    base: 'main',
+    head,
+    headRunReadable: true,
+    headRun: { status: 'completed', conclusion: 'success', appId: GATE_APP_ID, summary: `Head: ${head}\n` },
+    baseTip: newTip,
+    gitOk: true,
+    parents: [oldTip],
+    tree: { ok: true, equal: true },
+  };
+  const chain = { baseTip: oldTip, parents: new Set([oldTip]) };
+  assert.equal(decideQueueEntry(entry, view, chain).state, 'in_progress');
+  assert.equal(decideQueueEntry(entry, { ...view, parents: [] }, chain).state, 'in_progress');
+});
+
+test('a head gate that disappears before the post is not published as success', () => {
+  const head = HEAD;
+  const parent = 'd'.repeat(40);
+  const entry = {
+    ref: `refs/heads/gh-readonly-queue/main/pr-7-${head}`,
+    base: 'main',
+    pr: 7,
+    sha: 'c'.repeat(40),
+  };
+  let gates = 0;
+  const writes = [];
+  const success = {
+    headRunReadable: true,
+    headRun: { id: 4, status: 'completed', conclusion: 'success', appId: GATE_APP_ID, summary: `Head: ${head}\n` },
+  };
+  const io = {
+    readSwitch: () => ({ ok: true, enabled: true }),
+    listEntries: () => ({ ok: true, entries: [entry] }),
+    pull: () => ({ prReadable: true, state: 'open', draft: false, base: 'main', head }),
+    headGate() {
+      gates += 1;
+      return gates === 1 ? success : { headRunReadable: true, headRun: null };
+    },
+    ourRun: () => ({ headRunReadable: true, headRun: null }),
+    baseTip: () => parent,
+    prepare: () => true,
+    parents: () => [parent],
+    tree: () => ({ ok: true, equal: true }),
+    refSha: () => entry.sha,
+    collision: () => ({ listReadable: true, collision: false }),
+    writeRun(...args) { writes.push(args); return { ok: true }; },
+  };
+  const result = runPublish(io, { mode: 'act', gateAppId: String(GATE_APP_ID), gateToken: 'gate' });
+  assert.equal(result.code, 0);
+  assert.equal(writes.length, 0);
+});
+
+test('publish limits itself to the requested pull request', () => {
+  const head = HEAD;
+  const parent = 'd'.repeat(40);
+  const one = { ref: `refs/heads/gh-readonly-queue/main/pr-7-${head}`, base: 'main', pr: 7, sha: 'c'.repeat(40) };
+  const two = { ref: `refs/heads/gh-readonly-queue/main/pr-8-${head}`, base: 'main', pr: 8, sha: 'b'.repeat(40) };
+  const writes = [];
+  const io = {
+    readSwitch: () => ({ ok: true, enabled: true }),
+    listEntries: () => ({ ok: true, entries: [one, two] }),
+    pull: () => ({ prReadable: true, state: 'open', draft: false, base: 'main', head }),
+    headGate: () => ({
+      headRunReadable: true,
+      headRun: { id: 4, status: 'completed', conclusion: 'success', appId: GATE_APP_ID, summary: `Head: ${head}\n` },
+    }),
+    ourRun: () => ({ headRunReadable: true, headRun: null }),
+    baseTip: () => parent,
+    prepare: () => true,
+    parents: () => [parent],
+    tree: () => ({ ok: true, equal: true }),
+    refSha(ref) { return ref.includes('pr-7-') ? one.sha : two.sha; },
+    collision: () => ({ listReadable: true, collision: false }),
+    writeRun(existing, sha) { writes.push(sha); return { ok: true }; },
+  };
+  const result = runPublish(io, { mode: 'act', gateAppId: String(GATE_APP_ID), gateToken: 'gate', pr: '7' });
+  assert.equal(result.code, 0);
+  assert.deepEqual(writes, [one.sha]);
+});
+
+test('fetch into a fresh bare repository keeps the queue commit parent', () => {
+  const source = fs.mkdtempSync(path.join(os.tmpdir(), 'queue-src-'));
+  const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'queue-dst-'));
+  const git = (dir, args) => spawnSync('git', ['-C', dir, ...args], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: 't',
+      GIT_AUTHOR_EMAIL: 't@example.com',
+      GIT_COMMITTER_NAME: 't',
+      GIT_COMMITTER_EMAIL: 't@example.com',
+    },
+  });
+  assert.equal(git(source, ['init', '-q']).status, 0);
+  fs.writeFileSync(path.join(source, 'a.txt'), 'base\n');
+  git(source, ['add', 'a.txt']);
+  assert.equal(git(source, ['commit', '-q', '-m', 'base']).status, 0);
+  const base = git(source, ['rev-parse', 'HEAD']).stdout.trim();
+  git(source, ['checkout', '-q', '-b', 'side']);
+  fs.writeFileSync(path.join(source, 'b.txt'), 'side\n');
+  git(source, ['add', 'b.txt']);
+  assert.equal(git(source, ['commit', '-q', '-m', 'side']).status, 0);
+  const side = git(source, ['rev-parse', 'HEAD']).stdout.trim();
+  const tree = git(source, ['merge-tree', '--write-tree', base, side]).stdout.trim();
+  const queue = git(source, ['commit-tree', tree, '-p', base, '-m', 'queue']).stdout.trim();
+  assert.equal(git(dest, ['init', '--bare', '-q']).status, 0);
+  assert.equal(fetchObjects(dest, [queue], { depth: 1, url: source }), true);
+  assert.deepEqual(parentsOf(dest, queue), []);
+  assert.equal(fetchObjects(dest, [queue, side], { depth: 2, url: source }), true);
+  assert.deepEqual(parentsOf(dest, queue), [base]);
+  assert.equal(treesMatch(dest, base, side, queue).equal, true);
+});
+
+test('token grant must be the one repository, the requested write, and unexpired', () => {
+  const body = JSON.stringify({
+    total_count: 1,
+    repositories: [{ full_name: REPO }],
+  });
+  const ok = [
+    'HTTP/1.1 200 OK',
+    'X-Accepted-Github-Permissions: metadata=read, pull_requests=write',
+    'Github-Authentication-Token-Expiration: 2099-01-01 00:00:00 UTC',
+    '',
+    body,
+  ].join('\n');
+  assert.equal(interpretGrant(ok, ['pull_requests']).ok, true);
+  const extra = ok.replace('pull_requests=write', 'pull_requests=write, merge_queues=write');
+  assert.equal(interpretGrant(extra, ['pull_requests']).ok, false);
+  const otherRepo = ok.replace(REPO, 'other/repo');
+  assert.equal(interpretGrant(otherRepo, ['pull_requests']).ok, false);
+  const expired = ok.replace('2099-01-01', '2000-01-01');
+  assert.equal(interpretGrant(expired, ['pull_requests']).ok, false);
 });
