@@ -51,10 +51,12 @@ test('ci push branches stay main', () => {
 });
 
 // Merge queue: every workflow that reports a check required on main must also run on merge_group,
-// or a queued PR waits for a check that never reports. Only these two do. The rest are PR-only helpers.
-const MERGE_GROUP_WORKFLOWS = ['ci.yml', 'screenshot-check.yml'];
+// or a queued PR waits for a check that never reports. ci and screenshot-check are those checks
+// (notes-windows is a job in ci.yml). mythos-automation-contracts.yml is secretless and also
+// runs on the queue commit. Privileged unattended workflows stay off merge_group.
+const MERGE_GROUP_WORKFLOWS = ['ci.yml', 'screenshot-check.yml', 'mythos-automation-contracts.yml'];
 
-test('only the workflows that report required checks trigger merge_group', () => {
+test('merge_group is limited to required checks and the secretless contracts workflow', () => {
   for (const name of workflowNames()) {
     const on = triggerOf(loadWorkflow(name)) || {};
     const expected = MERGE_GROUP_WORKFLOWS.includes(name);
@@ -197,3 +199,5 @@ test('deleted workflows are absent', () => {
 
 // batch-automerge.yml rules and run-step behavior (kept in its own file; loaded here so CI runs it).
 require('./batch-automerge.test.js');
+// Phase 1 unattended controller and workflow contracts. Loaded here so CI runs it.
+require('./unattended.test.js');

@@ -1,0 +1,31 @@
+name: Mythos automation contracts
+
+# Secretless checks for the unattended workflows. This job may run pull request
+# and merge-queue code because it has no App key, provider key, or private token.
+
+on:
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+
+permissions: {}
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the pull request or queue commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+      - name: Install dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+      - name: Test unattended workflow contracts
+        run: node .github/scripts/unattended.test.js
+      - name: Test workflow rules
+        run: node .github/scripts/workflow-rules.test.js
