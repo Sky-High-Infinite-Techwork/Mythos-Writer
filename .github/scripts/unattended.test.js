@@ -1359,6 +1359,68 @@ test('a capped or mismatched compare is held', () => {
   assert.equal(review(meta, { modelText: passText, compare: body({ ahead_by: 1 }) }).status, 'pass');
 });
 
+function commitsEnding(head, count) {
+  const commits = [];
+  for (let i = 0; i < count; i += 1) {
+    commits.push({ sha: i === count - 1 ? head : 'e'.repeat(40) });
+  }
+  return commits;
+}
+
+test('a consistent 250-commit compare is held and 249 still passes', () => {
+  const meta = { provider: 'claude', pr: 7, headSha: HEAD, baseSha: BASE, runId: '9', runAttempt: '1' };
+  const passText = JSON.stringify({ risk: 'low', roles: { critic: 'pass', shield: 'pass', probe: 'pass' } });
+  const file = { filename: 'frontend/src/app.ts', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' };
+  function compare(count) {
+    return {
+      base_commit: { sha: BASE },
+      merge_base_commit: { sha: BASE },
+      total_commits: count,
+      ahead_by: count,
+      commits: commitsEnding(HEAD, count),
+      files: [file],
+    };
+  }
+  const capped = review(meta, { modelText: passText, compare: compare(250) });
+  assert.equal(capped.status, 'hold');
+  assert.equal(capped.reason, 'commit-cap');
+  assert.equal(review(meta, { modelText: passText, compare: compare(249) }).status, 'pass');
+});
+
+test('ahead_by at the cap holds when the commit list and total_commits agree', () => {
+  const meta = { provider: 'claude', pr: 7, headSha: HEAD, baseSha: BASE, runId: '9', runAttempt: '1' };
+  const passText = JSON.stringify({ risk: 'low', roles: { critic: 'pass', shield: 'pass', probe: 'pass' } });
+  const held = review(meta, {
+    modelText: passText,
+    compare: {
+      base_commit: { sha: BASE },
+      total_commits: 10,
+      ahead_by: 300,
+      commits: commitsEnding(HEAD, 10),
+      files: [{ filename: 'frontend/src/app.ts', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' }],
+    },
+  });
+  assert.equal(held.status, 'hold');
+  assert.equal(held.reason, 'commit-cap');
+});
+
+test('a commit list longer than total_commits is held', () => {
+  const meta = { provider: 'claude', pr: 7, headSha: HEAD, baseSha: BASE, runId: '9', runAttempt: '1' };
+  const passText = JSON.stringify({ risk: 'low', roles: { critic: 'pass', shield: 'pass', probe: 'pass' } });
+  const held = review(meta, {
+    modelText: passText,
+    compare: {
+      base_commit: { sha: BASE },
+      total_commits: 1,
+      ahead_by: 1,
+      commits: [{ sha: HEAD }, { sha: 'f'.repeat(40) }],
+      files: [{ filename: 'frontend/src/app.ts', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' }],
+    },
+  });
+  assert.equal(held.status, 'hold');
+  assert.notEqual(held.status, 'pass');
+});
+
 test('one unreadable pull request is held and the next one can still be enqueued', () => {
   const bad = prRecord({ number: 4 });
   const good = prRecord({ number: 9 });
