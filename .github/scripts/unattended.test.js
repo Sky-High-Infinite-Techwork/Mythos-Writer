@@ -16,7 +16,7 @@ const {
 } = require('./unattended/flow-client');
 const { selectHead } = require('./unattended/discover-run');
 const { review, modelEnv, claudeInvocation, normalizeDiff, codexResult } = require('./unattended/transport');
-const { transportResult, reduce, acceptReducer } = require('./unattended/gate-result');
+const { transportResult, reduce, acceptReducer, parseProviders, providersFromEnv, parseProvidersJson } = require('./unattended/gate-result');
 const { decideQueueEntry, stillQueue, parseQueueRef } = require('./unattended/queue-policy');
 const { treesMatch, parentsOf, fetchObjects, runPublish } = require('./unattended/publish-run');
 const { interpretGrant } = require('./unattended/token-grant');
@@ -525,6 +525,38 @@ function unavailableRow(provider) {
   return transportResult(provider, { runId: '9', runAttempt: '1' });
 }
 
+test('MYTHOS_GATE_PROVIDERS selects who must pass and fails closed otherwise', () => {
+  const head = HEAD;
+  const expected = { runId: '9', runAttempt: '1' };
+  const roles = { critic: 'pass', shield: 'pass', probe: 'pass' };
+  const pass = (provider, risk = 'low') => ({
+    schema: 'mythos-gate-result/v1', provider, status: 'pass', repository: REPO, headSha: head,
+    runId: '9', runAttempt: '1', risk, pr: 7, roles,
+  });
+  assert.deepEqual(parseProviders(undefined).providers, ['claude', 'codex']);
+  assert.deepEqual(providersFromEnv({}).providers, ['claude', 'codex']);
+  assert.deepEqual(parseProvidersJson('null').providers, ['claude', 'codex']);
+  assert.equal(reduce(pass('claude'), pass('codex'), expected).decision, 'pass');
+  assert.equal(reduce(pass('claude'), unavailableRow('codex'), expected, 'claude').decision, 'pass');
+  assert.equal(reduce(unavailableRow('claude'), pass('codex'), expected, 'claude').decision, 'no-pass');
+  assert.equal(reduce(pass('claude', 'high'), null, expected, 'claude').decision, 'no-pass');
+  assert.equal(reduce(null, pass('codex'), expected, 'codex').decision, 'pass');
+  assert.equal(reduce(unavailableRow('claude'), pass('codex'), expected, 'codex').decision, 'pass');
+  assert.equal(reduce(pass('claude'), pass('codex'), expected, 'claude,codex').decision, 'pass');
+  assert.equal(reduce(pass('claude'), unavailableRow('codex'), expected, 'claude,codex').decision, 'no-pass');
+  assert.equal(reduce(pass('claude'), pass('codex'), expected, '').decision, 'no-pass');
+  assert.equal(parseProviders('').ok, false);
+  assert.equal(parseProviders('   ').ok, false);
+  assert.equal(parseProviders('claude,codex,codex').ok, false);
+  assert.equal(parseProviders('claude,foo').ok, false);
+  assert.equal(parseProviders('Claude').ok, false);
+  assert.equal(parseProvidersJson('""').ok, false);
+  const claudeOnly = reduce(pass('claude'), pass('codex'), expected, 'claude');
+  assert.deepEqual(claudeOnly.providers, ['claude']);
+  assert.equal(acceptReducer(claudeOnly, expected), null);
+  assert.equal(acceptReducer(claudeOnly, expected, 'claude').decision, 'pass');
+});
+
 test('queue policy posts success only for an exact main tree and withholds a moved ref', () => {
   const head = HEAD;
   const parent = 'd'.repeat(40);
@@ -713,6 +745,11 @@ test('privileged workflows are inert controllers with pinned actions and split c
   assert.equal(codexJob.includes('claude-code'), false);
   assert.equal(gate.jobs['transport-claude'].environment, 'mythos-claude');
   assert.equal(gate.jobs['transport-codex'].environment, 'mythos-codex');
+  assert.match(String(gate.jobs['transport-claude'].if), /MYTHOS_GATE_PROVIDERS/);
+  assert.match(String(gate.jobs['transport-claude'].if), /== 'claude'/);
+  assert.equal(String(gate.jobs['transport-claude'].if).includes("== 'codex'"), false);
+  assert.match(String(gate.jobs['transport-codex'].if), /== 'codex'/);
+  assert.match(String(gate.jobs.reduce.if), /skipped/);
   assert.match(gateText, /MYTHOS_GATE_APP_PRIVATE_KEY/);
   assert.match(gateText, /permission-checks: write/);
   assert.match(flowText, /MYTHOS_WRITE_APP_PRIVATE_KEY/);
