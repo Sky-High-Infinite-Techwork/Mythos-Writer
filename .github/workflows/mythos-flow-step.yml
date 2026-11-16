@@ -1,7 +1,8 @@
 name: Mythos flow step
 
-# Phase 1a. Undraft and enqueue from main. The final gate does not review.
-# Enqueue is GraphQL enqueuePullRequest. Batch bases stay held. There is no push.
+# Phase 1b. Undraft and enqueue from main.
+# The enqueue token requests pull requests write and merge queues write.
+# Batch bases stay held. There is no push.
 # See docs/ops/unattended-flow.md.
 
 on:
@@ -172,6 +173,7 @@ jobs:
           owner: Sky-High-Infinite-Techwork
           repositories: Mythos-Writer
           permission-pull-requests: write
+          permission-merge-queues: write
       - name: Check the enqueue token installation
         if: needs.admit.outputs.mode == 'act' && steps.plan.outputs.enqueue == 'true'
         env:

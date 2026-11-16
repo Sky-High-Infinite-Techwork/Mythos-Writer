@@ -12,9 +12,14 @@ const { classify, authorAssertion, evidenceOk, filesLookProtected } = require('.
 const { plan, undraft, enqueue } = require('./unattended/flow-run');
 const {
   ENQUEUE_QUERY, READY_QUERY, flattenPages, flattenRunPages, mapChangedFile, createClient,
-  parseAllowlist, authorMatches, leaseHeldFrom, rulesetMatches,
+  parseAllowlist, authorMatches, leaseHeldFrom, rulesetMatches, httpStatus,
 } = require('./unattended/flow-client');
-const { transportResult, reduce, acceptReducer } = require('./unattended/gate-result');
+const { selectHead } = require('./unattended/discover-run');
+const {
+  review, modelEnv, claudeInvocation, assessDiff, readCompare, userDiff, codexResult, codexBody, CHECKLIST,
+} = require('./unattended/transport');
+const { comparePath } = require('./unattended/transport-run');
+const { transportResult, reduce, acceptReducer, parseProviders, providersFromEnv, parseProvidersJson } = require('./unattended/gate-result');
 const { decideQueueEntry, stillQueue, parseQueueRef } = require('./unattended/queue-policy');
 const { treesMatch, parentsOf, fetchObjects, runPublish } = require('./unattended/publish-run');
 const { interpretGrant } = require('./unattended/token-grant');
@@ -503,15 +508,58 @@ test('model transports are unavailable and cannot reduce to a pass', () => {
   assert.equal(codex.status, 'unavailable');
   assert.equal(reduce(claude, codex, { runId: '9', runAttempt: '1' }).decision, 'no-pass');
   const head = HEAD;
-  const pass = (provider, risk) => ({
+  const roles = { critic: 'pass', shield: 'pass', probe: 'pass' };
+  const pass = (provider, risk, reviewRoles = roles) => ({
     schema: 'mythos-gate-result/v1', provider, status: 'pass', repository: REPO, headSha: head,
-    runId: '9', runAttempt: '1', risk, pr: 7,
+    runId: '9', runAttempt: '1', risk, pr: 7, roles: reviewRoles,
   });
   assert.equal(reduce(pass('claude', 'high'), pass('codex', 'high'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
+  assert.equal(reduce(pass('claude', 'low', { critic: 'pass', shield: 'pass', probe: 'hold' }), pass('codex', 'low'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
+  assert.equal(reduce(unavailableRow('claude'), pass('codex', 'low'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
   const accepted = reduce(pass('claude', 'low'), pass('codex', 'low'), { runId: '9', runAttempt: '1' });
   assert.equal(accepted.decision, 'pass');
+  assert.equal(accepted.roles.claude.critic, 'pass');
   assert.equal(acceptReducer(accepted, { runId: '8', runAttempt: '1' }), null);
   assert.equal(acceptReducer({ ...accepted, risk: 'high' }, { runId: '9', runAttempt: '1' }), null);
+  assert.equal(acceptReducer({ ...accepted, roles: { ...accepted.roles, claude: { provider: 'claude', status: 'pass' } } }, { runId: '9', runAttempt: '1' }), null);
+});
+
+function unavailableRow(provider) {
+  return transportResult(provider, { runId: '9', runAttempt: '1' });
+}
+
+test('MYTHOS_GATE_PROVIDERS selects who must pass and fails closed otherwise', () => {
+  const head = HEAD;
+  const expected = { runId: '9', runAttempt: '1' };
+  const roles = { critic: 'pass', shield: 'pass', probe: 'pass' };
+  const pass = (provider, risk = 'low') => ({
+    schema: 'mythos-gate-result/v1', provider, status: 'pass', repository: REPO, headSha: head,
+    runId: '9', runAttempt: '1', risk, pr: 7, roles,
+  });
+  assert.deepEqual(parseProviders(undefined).providers, ['claude', 'codex']);
+  assert.deepEqual(providersFromEnv({}).providers, ['claude', 'codex']);
+  assert.deepEqual(parseProvidersJson('null').providers, ['claude', 'codex']);
+  assert.equal(reduce(pass('claude'), pass('codex'), expected).decision, 'pass');
+  assert.equal(reduce(pass('claude'), unavailableRow('codex'), expected, 'claude').decision, 'pass');
+  assert.equal(reduce(unavailableRow('claude'), pass('codex'), expected, 'claude').decision, 'no-pass');
+  assert.equal(reduce(pass('claude', 'high'), null, expected, 'claude').decision, 'no-pass');
+  assert.equal(reduce(null, pass('codex'), expected, 'codex').decision, 'pass');
+  assert.equal(reduce(unavailableRow('claude'), pass('codex'), expected, 'codex').decision, 'pass');
+  assert.equal(reduce(pass('claude'), pass('codex'), expected, 'claude,codex').decision, 'pass');
+  assert.equal(reduce(pass('claude'), unavailableRow('codex'), expected, 'claude,codex').decision, 'no-pass');
+  assert.equal(reduce(pass('claude'), pass('codex'), expected, '').decision, 'no-pass');
+  assert.equal(parseProviders('').ok, false);
+  assert.equal(parseProviders('   ').ok, false);
+  assert.equal(parseProviders('claude,codex,codex').ok, false);
+  assert.equal(parseProviders('claude,foo').ok, false);
+  assert.deepEqual(parseProviders('Claude').providers, ['claude']);
+  assert.deepEqual(parseProviders('CLAUDE, Codex').providers, ['claude', 'codex']);
+  assert.equal(parseProviders('claude,FOO').ok, false);
+  assert.equal(parseProvidersJson('""').ok, false);
+  const claudeOnly = reduce(pass('claude'), pass('codex'), expected, 'claude');
+  assert.deepEqual(claudeOnly.providers, ['claude']);
+  assert.equal(acceptReducer(claudeOnly, expected), null);
+  assert.equal(acceptReducer(claudeOnly, expected, 'claude').decision, 'pass');
 });
 
 test('queue policy posts success only for an exact main tree and withholds a moved ref', () => {
@@ -688,10 +736,24 @@ test('privileged workflows are inert controllers with pinned actions and split c
   const flowText = fs.readFileSync(path.join(WORKFLOWS, 'mythos-flow-step.yml'), 'utf8');
   assert.equal(gateText.includes('MYTHOS_WRITE_APP_PRIVATE_KEY'), false);
   assert.equal(flowText.includes('MYTHOS_GATE_APP_PRIVATE_KEY'), false);
-  assert.equal(gateText.includes('CLAUDE_CODE_OAUTH_TOKEN'), false);
-  assert.equal(gateText.includes('OPENAI_API_KEY'), false);
   assert.equal(flowText.includes('CLAUDE_CODE_OAUTH_TOKEN'), false);
   assert.equal(flowText.includes('OPENAI_API_KEY'), false);
+  assert.equal(gateText.includes('OPENROUTER_API_KEY'), false);
+  assert.equal(flowText.includes('OPENROUTER_API_KEY'), false);
+  const claudeJob = JSON.stringify(gate.jobs['transport-claude']);
+  const codexJob = JSON.stringify(gate.jobs['transport-codex']);
+  assert.match(claudeJob, /CLAUDE_CODE_OAUTH_TOKEN/);
+  assert.equal(claudeJob.includes('OPENAI_API_KEY'), false);
+  assert.match(claudeJob, /@anthropic-ai\/claude-code@2\.1\.325/);
+  assert.match(codexJob, /OPENAI_API_KEY/);
+  assert.equal(codexJob.includes('CLAUDE_CODE_OAUTH_TOKEN'), false);
+  assert.equal(codexJob.includes('claude-code'), false);
+  assert.equal(gate.jobs['transport-claude'].environment, 'mythos-claude');
+  assert.equal(gate.jobs['transport-codex'].environment, 'mythos-codex');
+  assert.match(String(gate.jobs['transport-claude'].if), /run_claude == 'true'/);
+  assert.match(String(gate.jobs['transport-codex'].if), /run_codex == 'true'/);
+  assert.equal(String(gate.jobs['transport-claude'].if).includes('OPENAI_API_KEY'), false);
+  assert.match(String(gate.jobs.reduce.if), /skipped/);
   assert.match(gateText, /MYTHOS_GATE_APP_PRIVATE_KEY/);
   assert.match(gateText, /permission-checks: write/);
   assert.match(flowText, /MYTHOS_WRITE_APP_PRIVATE_KEY/);
@@ -701,9 +763,15 @@ test('privileged workflows are inert controllers with pinned actions and split c
   for (const step of allowlisted) {
     assert.equal(step.env.MYTHOS_FLOW_AUTHOR_ALLOWLIST, '${{ vars.MYTHOS_FLOW_AUTHOR_ALLOWLIST }}');
   }
-  assert.equal(flowText.includes('permission-merge-queues'), false);
+  assert.equal((flowText.match(/permission-merge-queues/g) || []).length, 1);
+  const enqueueMint = flow.jobs.act.steps.find((step) => step.id === 'enqueue');
+  const readyMint = flow.jobs.act.steps.find((step) => step.id === 'ready');
+  assert.equal(enqueueMint.with['permission-pull-requests'], 'write');
+  assert.equal(enqueueMint.with['permission-merge-queues'], 'write');
+  assert.equal(readyMint.with['permission-pull-requests'], 'write');
+  assert.equal(readyMint.with['permission-merge-queues'], undefined);
   assert.match(flowText, /token-grant.js/);
-  for (const name of ['transport-claude', 'transport-codex', 'reduce', 'discover']) {
+  for (const name of ['reduce', 'discover']) {
     assert.equal(JSON.stringify(gate.jobs[name]).includes('secrets.'), false, name);
   }
   assert.equal(gate.jobs.publish.environment, 'mythos-publisher');
@@ -967,7 +1035,7 @@ function readScopes(text) {
   if (text.includes('/check-runs') || text.includes('check_runs')) scopes.add('checks');
   if (text.includes('/issues/')) scopes.add('issues');
   if (text.includes('/pulls') || text.includes("pr', 'list'")) scopes.add('pull-requests');
-  if (text.includes('/contents/') || text.includes('/git/')) scopes.add('contents');
+  if (text.includes('/contents/') || text.includes('/git/') || text.includes('/compare/')) scopes.add('contents');
   return scopes;
 }
 
@@ -976,6 +1044,8 @@ test('job permissions cover the API families their scripts call', () => {
   const entryScopes = {
     'flow-run.js': readScopes(`${fs.readFileSync(path.join(scripts, 'flow-run.js'), 'utf8')}\n${fs.readFileSync(path.join(scripts, 'flow-client.js'), 'utf8')}`),
     'publish-run.js': readScopes(fs.readFileSync(path.join(scripts, 'publish-run.js'), 'utf8')),
+    'discover-run.js': readScopes(fs.readFileSync(path.join(scripts, 'discover-run.js'), 'utf8')),
+    'transport-run.js': readScopes(fs.readFileSync(path.join(scripts, 'transport-run.js'), 'utf8')),
   };
   assert.equal(entryScopes['flow-run.js'].has('actions'), true);
   for (const name of ['mythos-flow-step.yml', 'mythos-final-gate.yml']) {
@@ -1062,10 +1132,293 @@ esac
     const missing = createClient({ repo: REPO, readToken: 'read' }).evidence(7, HEAD);
     assert.equal(missing.ok, false);
     assert.equal(missing.authDenied, true);
+    fs.writeFileSync(bin, `#!/bin/sh
+echo 'reviewed 403 files and 404 lines' >&2
+exit 1
+`);
+    fs.chmodSync(bin, 0o755);
+    const falsePositive = createClient({ repo: REPO, readToken: 'read' }).evidence(7, HEAD);
+    assert.equal(falsePositive.ok, false);
+    assert.equal(falsePositive.authDenied, undefined);
+    assert.equal(httpStatus('reviewed 403 files and 404 lines'), null);
+    assert.equal(httpStatus('HTTP/1.1 403 Forbidden'), 403);
   } finally {
     if (previous === undefined) delete process.env.GH_BIN;
     else process.env.GH_BIN = previous;
   }
+});
+
+test('a head workflow lookup 403 denies evidence and a missing file is not proof', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'head-blob-'));
+  const bin = path.join(dir, 'gh');
+  const blob = JSON.stringify({ sha: '1'.repeat(40) });
+  function install(status) {
+    fs.writeFileSync(bin, `#!/bin/sh
+case "$*" in
+  *ref=${HEAD}*) echo 'HTTP ${status}: denied' >&2; exit 1 ;;
+  *) printf '%s' '${blob}' ;;
+esac
+`);
+    fs.chmodSync(bin, 0o755);
+  }
+  const previous = process.env.GH_BIN;
+  process.env.GH_BIN = bin;
+  try {
+    install(403);
+    const denied = createClient({ repo: REPO, readToken: 'read' }).evidence(7, HEAD);
+    assert.equal(denied.ok, false);
+    assert.equal(denied.authDenied, true);
+    install(404);
+    const missing = createClient({ repo: REPO, readToken: 'read' }).evidence(7, HEAD);
+    assert.equal(missing.ok, true);
+    assert.equal(missing.authDenied, undefined);
+    assert.deepEqual(missing.evidence.runs, []);
+  } finally {
+    if (previous === undefined) delete process.env.GH_BIN;
+    else process.env.GH_BIN = previous;
+  }
+});
+
+test('discover selects one open main pull request', () => {
+  const head = HEAD;
+  const open = { number: 9, state: 'open', draft: false, fork: false, base: 'main', baseSha: BASE, head };
+  assert.equal(selectHead([open, { ...open, number: 4 }], '').number, 4);
+  assert.equal(selectHead([open, { ...open, number: 3, fork: true }], '').number, 9);
+  assert.equal(selectHead([{ ...open, draft: true }], '9'), null);
+  assert.equal(selectHead([{ ...open, base: 'batch/lane' }], ''), null);
+  assert.equal(selectHead([open], '9').head, head);
+});
+
+test('transports hold high risk, reject auth and malformed output, and hide the other secret', () => {
+  const meta = { provider: 'claude', pr: 7, headSha: HEAD, runId: '9', runAttempt: '1' };
+  const text = JSON.stringify({ risk: 'low', roles: { critic: 'pass', shield: 'pass', probe: 'pass' } });
+  const readable = [{ filename: 'frontend/src/app.ts', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' }];
+  assert.equal(review(meta, { modelText: text, files: readable }).status, 'pass');
+  const high = review(meta, {
+    modelText: JSON.stringify({ risk: 'high', roles: { critic: 'pass', shield: 'pass', probe: 'pass' } }),
+    files: readable,
+  });
+  assert.equal(high.decision, 'no-pass');
+  assert.equal(high.risk, 'high');
+  assert.equal(review(meta, { authFailed: true, modelText: text }).status, 'unavailable');
+  assert.equal(review(meta, { modelText: 'not json', files: readable }).reason, 'malformed');
+  const held = review({ ...meta, provider: 'codex' }, {
+    modelText: text,
+    files: [{ filename: 'electron-main/src/db.ts' }],
+  });
+  assert.equal(held.reason, 'protected-path');
+  assert.equal(held.risk, 'high');
+  const saved = {
+    GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+    GH_TOKEN: process.env.GH_TOKEN,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+  };
+  process.env.GITHUB_TOKEN = 'gh-token';
+  process.env.GH_TOKEN = 'gh-token';
+  process.env.OPENAI_API_KEY = 'sk-other';
+  process.env.CLAUDE_CODE_OAUTH_TOKEN = 'oauth';
+  try {
+    const env = modelEnv('claude', '/tmp/claude-home');
+    assert.equal(env.GITHUB_TOKEN, undefined);
+    assert.equal(env.GH_TOKEN, undefined);
+    assert.equal(env.OPENAI_API_KEY, undefined);
+    assert.equal(env.READ_TOKEN, undefined);
+    assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, 'oauth');
+    const call = claudeInvocation('/tmp/claude-home');
+    assert.equal(call.args.includes('--bare'), false);
+    assert.equal(call.args.includes('--dangerously-skip-permissions'), false);
+    assert.equal(call.args.includes('--safe-mode'), true);
+    assert.equal(call.args.includes('--restricted'), true);
+    assert.equal(call.args.includes('--strict-mcp-config'), true);
+    assert.equal(call.args.includes('--system-prompt-file'), true);
+    assert.equal(call.systemPrompt, CHECKLIST);
+    assert.equal(call.env.ANTHROPIC_API_KEY, undefined);
+    const message = userDiff(assessDiff([{ filename: 'a.ts', status: 'modified', patch: 'line\n' }]).text);
+    assert.equal(message.includes('critic:'), false);
+    assert.match(message, /^DIFF:\n/);
+    const codex = codexBody('line\n');
+    assert.equal(codex.messages[0].content, CHECKLIST);
+    assert.equal(codex.messages[1].content.includes('critic:'), false);
+    assert.equal(codexResult(401, '{}').authFailed, true);
+    assert.equal(codexResult(200, JSON.stringify({ choices: [{ message: { content: text } }] })).stdout, text);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('an incomplete diff is held and the review uses the discovered SHAs', () => {
+  const meta = { provider: 'claude', pr: 7, headSha: HEAD, runId: '9', runAttempt: '1' };
+  const passText = JSON.stringify({ risk: 'low', roles: { critic: 'pass', shield: 'pass', probe: 'pass' } });
+  const missing = review(meta, {
+    modelText: passText,
+    files: [{ filename: 'electron-main/src/auth.ts', status: 'modified' }],
+  });
+  assert.equal(missing.status, 'hold');
+  assert.equal(missing.reason, 'patch-missing');
+  const binary = review(meta, {
+    modelText: passText,
+    files: [{ filename: 'assets/logo.png', status: 'added' }],
+  });
+  assert.equal(binary.status, 'hold');
+  assert.equal(binary.reason, 'binary-unknown');
+  const over = review(meta, {
+    modelText: passText,
+    files: [{ filename: 'frontend/src/app.ts', status: 'modified', patch: 'x'.repeat(48001) }],
+  });
+  assert.equal(over.status, 'hold');
+  assert.equal(over.reason, 'diff-cap');
+  const truncated = review(meta, {
+    modelText: passText,
+    files: [
+      { filename: 'a.ts', status: 'modified', patch: 'a'.repeat(30000) },
+      { filename: 'b.ts', status: 'modified', patch: 'b'.repeat(30000) },
+    ],
+  });
+  assert.equal(truncated.status, 'hold');
+  assert.equal(truncated.reason, 'diff-truncated');
+  const base = BASE;
+  const route = comparePath(base, HEAD);
+  assert.match(route, new RegExp(`${base}\\.\\.\\.${HEAD}$`));
+  assert.equal(route.includes('/pulls/'), false);
+  assert.equal(comparePath('abc', HEAD), null);
+});
+
+test('a capped or mismatched compare is held', () => {
+  const meta = { provider: 'claude', pr: 7, headSha: HEAD, baseSha: BASE, runId: '9', runAttempt: '1' };
+  const passText = JSON.stringify({ risk: 'low', roles: { critic: 'pass', shield: 'pass', probe: 'pass' } });
+  const file = { filename: 'frontend/src/app.ts', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' };
+  function body(over = {}) {
+    return {
+      base_commit: { sha: BASE },
+      merge_base_commit: { sha: BASE },
+      total_commits: 1,
+      commits: [{ sha: HEAD }],
+      files: [file],
+      ...over,
+    };
+  }
+  const atCap = review(meta, {
+    modelText: passText,
+    compare: body({ total_commits: 250, ahead_by: 1, commits: [{ sha: HEAD }] }),
+  });
+  assert.equal(atCap.status, 'hold');
+  assert.equal(atCap.reason, 'commit-cap');
+  const aheadCap = review(meta, {
+    modelText: passText,
+    compare: body({ total_commits: 1, ahead_by: 250, commits: [{ sha: HEAD }] }),
+  });
+  assert.equal(aheadCap.status, 'hold');
+  assert.equal(aheadCap.reason, 'commit-cap');
+  const short = review(meta, {
+    modelText: passText,
+    compare: body({ total_commits: 2, ahead_by: 2, commits: [{ sha: HEAD }] }),
+  });
+  assert.equal(short.status, 'hold');
+  assert.equal(short.reason, 'commit-cap');
+  const aheadShort = review(meta, {
+    modelText: passText,
+    compare: body({ total_commits: 1, ahead_by: 2, commits: [{ sha: HEAD }] }),
+  });
+  assert.equal(aheadShort.status, 'hold');
+  assert.equal(aheadShort.reason, 'commit-cap');
+  const wrongBase = review(meta, {
+    modelText: passText,
+    compare: body({ base_commit: { sha: 'c'.repeat(40) } }),
+  });
+  assert.equal(wrongBase.status, 'hold');
+  assert.equal(wrongBase.reason, 'sha-mismatch');
+  const wrongHead = review(meta, {
+    modelText: passText,
+    compare: body({ commits: [{ sha: 'd'.repeat(40) }] }),
+  });
+  assert.equal(wrongHead.status, 'hold');
+  assert.equal(wrongHead.reason, 'sha-mismatch');
+  const none = review({ ...meta, headSha: BASE }, {
+    modelText: passText,
+    compare: body({
+      total_commits: 0,
+      ahead_by: 0,
+      commits: [],
+      base_commit: { sha: BASE },
+      files: [file],
+    }),
+  });
+  assert.equal(none.status, 'hold');
+  assert.equal(none.reason, 'patch-missing');
+  const emptyMismatch = review(meta, {
+    modelText: passText,
+    compare: body({ total_commits: 0, ahead_by: 0, commits: [] }),
+  });
+  assert.equal(emptyMismatch.status, 'hold');
+  assert.equal(emptyMismatch.reason, 'sha-mismatch');
+  assert.equal(readCompare(body({ ahead_by: 1 }), BASE, HEAD).ok, true);
+  assert.equal(review(meta, { modelText: passText, compare: body({ ahead_by: 1 }) }).status, 'pass');
+});
+
+function commitsEnding(head, count) {
+  const commits = [];
+  for (let i = 0; i < count; i += 1) {
+    commits.push({ sha: i === count - 1 ? head : 'e'.repeat(40) });
+  }
+  return commits;
+}
+
+test('a consistent 250-commit compare is held and 249 still passes', () => {
+  const meta = { provider: 'claude', pr: 7, headSha: HEAD, baseSha: BASE, runId: '9', runAttempt: '1' };
+  const passText = JSON.stringify({ risk: 'low', roles: { critic: 'pass', shield: 'pass', probe: 'pass' } });
+  const file = { filename: 'frontend/src/app.ts', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' };
+  function compare(count) {
+    return {
+      base_commit: { sha: BASE },
+      merge_base_commit: { sha: BASE },
+      total_commits: count,
+      ahead_by: count,
+      commits: commitsEnding(HEAD, count),
+      files: [file],
+    };
+  }
+  const capped = review(meta, { modelText: passText, compare: compare(250) });
+  assert.equal(capped.status, 'hold');
+  assert.equal(capped.reason, 'commit-cap');
+  assert.equal(review(meta, { modelText: passText, compare: compare(249) }).status, 'pass');
+});
+
+test('ahead_by at the cap holds when the commit list and total_commits agree', () => {
+  const meta = { provider: 'claude', pr: 7, headSha: HEAD, baseSha: BASE, runId: '9', runAttempt: '1' };
+  const passText = JSON.stringify({ risk: 'low', roles: { critic: 'pass', shield: 'pass', probe: 'pass' } });
+  const held = review(meta, {
+    modelText: passText,
+    compare: {
+      base_commit: { sha: BASE },
+      total_commits: 10,
+      ahead_by: 300,
+      commits: commitsEnding(HEAD, 10),
+      files: [{ filename: 'frontend/src/app.ts', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' }],
+    },
+  });
+  assert.equal(held.status, 'hold');
+  assert.equal(held.reason, 'commit-cap');
+});
+
+test('a commit list longer than total_commits is held', () => {
+  const meta = { provider: 'claude', pr: 7, headSha: HEAD, baseSha: BASE, runId: '9', runAttempt: '1' };
+  const passText = JSON.stringify({ risk: 'low', roles: { critic: 'pass', shield: 'pass', probe: 'pass' } });
+  const held = review(meta, {
+    modelText: passText,
+    compare: {
+      base_commit: { sha: BASE },
+      total_commits: 1,
+      ahead_by: 1,
+      commits: [{ sha: HEAD }, { sha: 'f'.repeat(40) }],
+      files: [{ filename: 'frontend/src/app.ts', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' }],
+    },
+  });
+  assert.equal(held.status, 'hold');
+  assert.notEqual(held.status, 'pass');
 });
 
 test('one unreadable pull request is held and the next one can still be enqueued', () => {

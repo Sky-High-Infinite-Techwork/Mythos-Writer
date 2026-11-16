@@ -6,7 +6,7 @@ const path = require('node:path');
 const { REPO, GATE_APP_ID, CHECK_NAME, sha40 } = require('./constants');
 const { gh, git, run } = require('./spawn');
 const { readSwitch } = require('./switch');
-const { acceptReducer } = require('./gate-result');
+const { acceptReducer, providerArgument } = require('./gate-result');
 const { gateOk } = require('./flow-policy');
 const { flattenPages, rulesetMatches } = require('./flow-client');
 const { parseQueueRef, decideQueueEntry, stillQueue, queueSummary, TITLES } = require('./queue-policy');
@@ -377,7 +377,7 @@ function main() {
       headDecision = acceptReducer(JSON.parse(process.env.REDUCER_RESULT), {
         runId: process.env.GITHUB_RUN_ID,
         runAttempt: process.env.GITHUB_RUN_ATTEMPT,
-      });
+      }, providerArgument());
     } catch {
       headDecision = null;
     }

@@ -111,8 +111,14 @@ const READY_QUERY = `mutation($id:ID!){
   }
 }`;
 
+function httpStatus(error) {
+  const match = String(error || '').match(/\bHTTP(?:\/1\.[01])?\s+([1-9][0-9]{2})\b/);
+  return match ? Number(match[1]) : null;
+}
+
 function permissionDenied(error) {
-  return /\b(?:403|404)\b/.test(String(error || ''));
+  const status = httpStatus(error);
+  return status === 403 || status === 404;
 }
 
 function withDenial(result) {
@@ -258,7 +264,10 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
       const onMain = blobSha(workflowPath, 'refs/heads/main');
       if (!onMain.ok) return withDenial(onMain);
       const onHead = blobSha(workflowPath, head);
-      if (!onHead.ok) return { ok: true, evidence: { mainRevision: {}, runs: [] } };
+      if (!onHead.ok) {
+        if (httpStatus(onHead.error) === 403) return withDenial(onHead);
+        return { ok: true, evidence: { mainRevision: {}, runs: [] } };
+      }
       mainRevision[workflowPath] = onMain.sha;
       headRevision[workflowPath] = onHead.sha;
     }
@@ -346,5 +355,5 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
 
 module.exports = {
   createClient, parseJson, flattenPages, flattenRunPages, mapChangedFile, ENQUEUE_QUERY, READY_QUERY,
-  parseAllowlist, canonicalLogin, authorMatches, leaseHeldFrom, rulesetMatches,
+  parseAllowlist, canonicalLogin, authorMatches, leaseHeldFrom, rulesetMatches, httpStatus,
 };
