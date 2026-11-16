@@ -12,6 +12,8 @@ on:
     types: [checks_requested]
   workflow_dispatch:
 
+# Tier 1 (cheap) → tier1-gate → Tier 2 (heavy). New PR pushes cancel the prior run
+# only; main and merge_group runs are not cancelled in-progress.
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-{0}', github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
@@ -273,7 +275,7 @@ jobs:
   # Unit excludes this nested-Downloads file and the oracle-class / equivalence shards.
   oracle-sweeps:
     name: oracle-sweeps (${{ matrix.shard }}/2)
-    needs: [setup]
+    needs: [tier1-gate]
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -328,7 +330,8 @@ jobs:
     # SKY-8081: flattened dependency chain — now only needs [setup] instead of
     # [lint, typecheck, unit], allowing this job to run in parallel with those
     # checks and reducing wall-clock latency from ~4 hops to ~3 hops.
-    needs: [setup]
+    # Tiered CI: build-electron is Tier 2 — starts only after tier1-gate.
+    needs: [tier1-gate]
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -1122,16 +1125,36 @@ jobs:
       - name: Scan the diff for committed secrets
         run: node .github/scripts/diff-guard.js
 
+  tier1-gate:
+    name: tier1-gate
+    # Tier 1 barrier: every cheap check must pass before Tier 2 jobs are scheduled.
+    needs: [setup, lint, typecheck, unit, diff-guard, paths-filter]
+    runs-on: ubuntu-latest
+    if: always()
+    timeout-minutes: 5
+    steps:
+      - name: Tier 1 checks passed
+        run: |
+          tier1="${{ needs.setup.result }} ${{ needs.lint.result }} ${{ needs.typecheck.result }} ${{ needs.unit.result }} ${{ needs.diff-guard.result }} ${{ needs.paths-filter.result }}"
+          echo "Tier 1 results: $tier1"
+          for r in $tier1; do
+            if [ "$r" != "success" ]; then
+              echo "ERROR: Tier 1 job outcome '$r' — expected 'success'. Tier 2 jobs will not run. tier1-gate: FAILED."
+              exit 1
+            fi
+          done
+          echo "Tier 1 green — Tier 2 (oracle-sweeps, build-electron, notes-windows, e2e) may run."
+
   ci:
     # Required check aggregator — always runs (if: always()) so branch protection
     # gets a definitive pass/fail rather than a "pending" indefinite skipped state
-    # when Stage 1 (lint/typecheck/unit) fails and downstream jobs are skipped.
+    # when Tier 1 (lint/typecheck/unit/diff-guard) fails and downstream jobs are skipped.
     # Explicit outcome check ensures any failure or skip in upstream jobs → failure here.
     # SKY-8090: e2e shards may be legitimately skipped if the diff cannot affect them
     # (e.g., docs-only changes). Accept 'skipped' as valid for e2e shards only.
     # oracle-sweeps is a matrix in `needs`. needs.oracle-sweeps.result == success
     # only when every leg succeeded. skipped, cancelled, and failed are not success.
-    needs: [lint, typecheck, unit, oracle-sweeps, paths-filter, e2e-shard-1, e2e-shard-2, e2e-shard-3, e2e-shard-4, diff-guard]
+    needs: [tier1-gate, lint, typecheck, unit, oracle-sweeps, paths-filter, e2e-shard-1, e2e-shard-2, e2e-shard-3, e2e-shard-4, diff-guard]
     runs-on: ubuntu-latest
     if: always()
     timeout-minutes: 5
@@ -1139,20 +1162,24 @@ jobs:
     steps:
       - name: All checks passed
         run: |
-          # Stage 1 checks must always succeed. For the oracle-sweeps matrix,
-          # needs.oracle-sweeps.result == success only when every leg succeeded.
-          stage1="${{ needs.lint.result }} ${{ needs.typecheck.result }} ${{ needs.unit.result }} ${{ needs.oracle-sweeps.result }} ${{ needs.diff-guard.result }}"
-          echo "Stage 1 (lint/typecheck/unit/oracle-sweeps/diff-guard) results: $stage1"
+          if [ "${{ needs.tier1-gate.result }}" != "success" ]; then
+            echo "ERROR: needs.tier1-gate.result is '${{ needs.tier1-gate.result }}' — expected 'success'. CI aggregator: FAILED."
+            exit 1
+          fi
+
+          tier1="${{ needs.lint.result }} ${{ needs.typecheck.result }} ${{ needs.unit.result }} ${{ needs.diff-guard.result }}"
+          echo "Tier 1 (lint/typecheck/unit/diff-guard) results: $tier1"
+          for r in $tier1; do
+            if [ "$r" != "success" ]; then
+              echo "ERROR: Required Tier 1 job outcome '$r' — expected 'success'. CI aggregator: FAILED."
+              exit 1
+            fi
+          done
+
           if [ "${{ needs.oracle-sweeps.result }}" != "success" ]; then
             echo "ERROR: needs.oracle-sweeps.result is '${{ needs.oracle-sweeps.result }}' — expected 'success'. Skipped, cancelled, or failed legs are not success. CI aggregator: FAILED."
             exit 1
           fi
-          for r in $stage1; do
-            if [ "$r" != "success" ]; then
-              echo "ERROR: Required Stage 1 job outcome '$r' — expected 'success'. CI aggregator: FAILED."
-              exit 1
-            fi
-          done
 
           # E2E shards may be legitimately skipped if path-filter determined they cannot be affected
           e2e="${{ needs.e2e-shard-1.result }} ${{ needs.e2e-shard-2.result }} ${{ needs.e2e-shard-3.result }} ${{ needs.e2e-shard-4.result }}"
@@ -1185,7 +1212,7 @@ jobs:
     # skipped status issue from SKY-2421 no longer applies. Packaging steps still
     # guard at step level as a safety redundancy.
     if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
-    needs: [setup]
+    needs: [tier1-gate]
     runs-on: ubuntu-latest
     timeout-minutes: 40
     concurrency:
@@ -1351,7 +1378,7 @@ jobs:
     # limit; the repo is now public (35507aea), so hosted Windows minutes are free
     # and native packaging is simpler and more reliable than a wine cross-build.
     if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
-    needs: [setup]
+    needs: [tier1-gate]
     runs-on: windows-latest
     timeout-minutes: 40
     continue-on-error: true
@@ -1469,7 +1496,8 @@ jobs:
   # fast enough to require on every PR. `.github/` change — merge path is
   # ESCALATE-IVY per COMPANY-STANDARDS §3.
   notes-windows:
-    needs: [setup]
+    needs: [tier1-gate]
+    if: always()
     runs-on: windows-latest
     # SKY-10910: raised from 20 — this job grew 5 more native-Windows Electron
     # launches (vault delete/migration/quit-teardown x4 lifecycle specs) to
@@ -1482,6 +1510,15 @@ jobs:
         shell: bash
 
     steps:
+      # Required check on every PR head — must fail (not skip) when Tier 1 is red.
+      - name: Require Tier 1 green before native Windows suites
+        if: always()
+        run: |
+          if [ "${{ needs.tier1-gate.result }}" != "success" ]; then
+            echo "ERROR: Tier 1 did not pass (tier1-gate: ${{ needs.tier1-gate.result }}). notes-windows: FAILED without running heavy suites."
+            exit 1
+          fi
+
       - uses: actions/checkout@v7
 
       - name: Deinit stale git submodule registrations

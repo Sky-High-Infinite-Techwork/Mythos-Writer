@@ -91,12 +91,63 @@ test('ci needs includes diff-guard', () => {
   assert.ok(doc.jobs.ci.needs.includes('diff-guard'));
 });
 
-test('stage1 includes needs.diff-guard.result', () => {
+test('ci aggregator tier1 includes needs.diff-guard.result (not oracle-sweeps)', () => {
   const doc = loadWorkflow('ci.yml');
   const run = doc.jobs.ci.steps.map((step) => step.run || '').join('\n');
-  const stage = run.match(/stage1="([^"]*)"/);
-  assert.ok(stage, 'stage1 assignment');
-  assert.match(stage[1], /needs\.diff-guard\.result/);
+  const tier1 = run.match(/tier1="([^"]*)"/);
+  assert.ok(tier1, 'tier1 assignment');
+  assert.match(tier1[1], /needs\.diff-guard\.result/);
+  assert.doesNotMatch(tier1[1], /oracle-sweeps/);
+  assert.match(run, /needs\.tier1-gate\.result/);
+});
+
+const TIER1_JOBS = ['lint', 'typecheck', 'unit', 'diff-guard', 'paths-filter'];
+const TIER2_JOBS = ['oracle-sweeps', 'build-electron', 'notes-windows', 'build-linux', 'build-windows'];
+
+test('tier1-gate needs every Tier 1 job plus setup', () => {
+  const doc = loadWorkflow('ci.yml');
+  const gate = doc.jobs['tier1-gate'];
+  assert.ok(gate, 'tier1-gate job');
+  assert.equal(gate.if, 'always()');
+  for (const job of ['setup', ...TIER1_JOBS]) {
+    assert.ok(gate.needs.includes(job), `tier1-gate needs ${job}`);
+  }
+});
+
+test('Tier 2 jobs need tier1-gate (not setup alone)', () => {
+  const jobs = loadWorkflow('ci.yml').jobs;
+  for (const job of TIER2_JOBS) {
+    assert.ok(jobs[job].needs.includes('tier1-gate'), job);
+    assert.equal(jobs[job].needs.includes('setup') && !jobs[job].needs.includes('tier1-gate'), false, job);
+  }
+  for (const job of ['e2e-shard-1', 'e2e-shard-2', 'e2e-shard-3', 'e2e-shard-4']) {
+    assert.ok(jobs[job].needs.includes('build-electron'), job);
+    assert.ok(jobs[job].needs.includes('paths-filter'), job);
+  }
+});
+
+test('notes-windows fails closed when tier1-gate is not success', () => {
+  const steps = loadWorkflow('ci.yml').jobs['notes-windows'].steps;
+  const gate = steps[0];
+  assert.match(gate.name, /Tier 1/i);
+  assert.equal(gate.if, 'always()');
+  assert.match(String(gate.run), /needs\.tier1-gate\.result/);
+});
+
+test('ci concurrency cancels in-progress only for pull_request (not merge_group)', () => {
+  const text = fs.readFileSync(path.join(WORKFLOWS, 'ci.yml'), 'utf8');
+  const block = text.slice(text.indexOf('concurrency:'), text.indexOf('permissions:'));
+  assert.match(block, /cancel-in-progress:\s*\$\{\{ github\.event_name == 'pull_request'/);
+  assert.doesNotMatch(block, /merge_group.*cancel-in-progress/);
+});
+
+const REQUIRED_CHECK_JOB_NAMES = ['ci', 'notes-windows'];
+
+test('required ci.yml check job names are unchanged', () => {
+  const jobs = loadWorkflow('ci.yml').jobs;
+  for (const name of REQUIRED_CHECK_JOB_NAMES) {
+    assert.ok(jobs[name], name);
+  }
 });
 
 test('draft-ready-on-green is retired so hygiene cannot undraft', () => {
