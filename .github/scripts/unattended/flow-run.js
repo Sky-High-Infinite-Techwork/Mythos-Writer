@@ -194,12 +194,6 @@ function actOn(client, mode, action, write) {
       process.stdout.write(`#${row.pr.number} changed before the write; skipped\n`);
       continue;
     }
-    const again = client.readSwitch();
-    if (!again.ok) return { ok: false, error: 'control read failed', wrote };
-    if (!again.enabled) {
-      process.stdout.write('UNATTENDED_ENABLED is not true; stopping before the next write\n');
-      return { ok: true, enabled: false, wrote };
-    }
     let rulesNow;
     try {
       rulesNow = client.ruleset();
@@ -210,6 +204,12 @@ function actOn(client, mode, action, write) {
     if (!rulesNow || !rulesNow.ok || !rulesNow.ruleset || rulesNow.ruleset.known !== true || rulesNow.ruleset.match !== true) {
       process.stdout.write(`#${row.pr.number} ruleset is not the main queue policy; skipped\n`);
       continue;
+    }
+    const again = client.readSwitch();
+    if (!again.ok) return { ok: false, error: 'control read failed', wrote };
+    if (!again.enabled) {
+      process.stdout.write('UNATTENDED_ENABLED is not true; stopping before the next write\n');
+      return { ok: true, enabled: false, wrote };
     }
     const result = write(row.pr, fresh);
     if (!result.ok) return { ...result, wrote };

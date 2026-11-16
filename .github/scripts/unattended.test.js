@@ -12,7 +12,7 @@ const { classify, authorAssertion, evidenceOk, filesLookProtected } = require('.
 const { plan, undraft, enqueue } = require('./unattended/flow-run');
 const {
   ENQUEUE_QUERY, flattenPages, flattenRunPages, mapChangedFile, createClient,
-  parseAllowlist, leaseHeldFrom, rulesetMatches,
+  parseAllowlist, authorMatches, leaseHeldFrom, rulesetMatches,
 } = require('./unattended/flow-client');
 const { transportResult, reduce, acceptReducer } = require('./unattended/gate-result');
 const { decideQueueEntry, stillQueue, parseQueueRef } = require('./unattended/queue-policy');
@@ -953,7 +953,12 @@ test('the author allow-list and head repository are explicit holds', () => {
   assert.equal(parseAllowlist(undefined), null);
   assert.equal(parseAllowlist(''), null);
   assert.equal(parseAllowlist(' , '), null);
-  assert.deepEqual([...parseAllowlist('SkyyPlayz, cursor[bot] ')], ['SkyyPlayz', 'cursor[bot]']);
+  assert.deepEqual([...parseAllowlist('SkyyPlayz, cursor[bot] ')], ['skyyplayz', 'cursor[bot]']);
+  const bots = parseAllowlist('cursor[bot]');
+  assert.equal(authorMatches({ __typename: 'Bot', login: 'cursor' }, bots), true);
+  assert.equal(authorMatches({ __typename: 'Bot', login: 'Cursor' }, parseAllowlist('CURSOR[bot]')), true);
+  assert.equal(authorMatches({ __typename: 'User', login: 'SKYYPLAYZ' }, parseAllowlist('SkyyPlayz')), true);
+  assert.equal(authorMatches({ __typename: 'User', login: 'cursor' }, bots), false);
   assert.equal(leaseHeldFrom(['LEASE']), true);
   assert.equal(leaseHeldFrom(['Lease:active']), true);
   assert.equal(leaseHeldFrom(['release']), false);
@@ -977,11 +982,11 @@ test('the author allow-list and head repository are explicit holds', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'allow-'));
   const bin = path.join(dir, 'gh');
   function install(payload) {
-    fs.writeFileSync(bin, `#!/bin/sh\nprintf '%s' '${JSON.stringify(payload)}'\n`);
+    fs.writeFileSync(bin, `#!/bin/sh\ninput=$(cat)\nprintf '%s' "$input" | grep -q '__typename' || exit 1\nprintf '%s' '${JSON.stringify(payload)}'\n`);
     fs.chmodSync(bin, 0o755);
     process.env.GH_BIN = bin;
   }
-  function pull(author, head, labels) {
+  function pull(author, head, labels, typename) {
     return {
       data: {
         repository: {
@@ -995,7 +1000,7 @@ test('the author allow-list and head repository are explicit holds', () => {
             baseRefOid: BASE,
             state: 'OPEN',
             mergeStateStatus: 'CLEAN',
-            author: { login: author },
+            author: { __typename: typename || 'User', login: author },
             headRepository: head ? { nameWithOwner: head } : null,
             labels: { pageInfo: { hasNextPage: false }, nodes: labels.map((name) => ({ name })) },
           },
@@ -1025,6 +1030,17 @@ test('the author allow-list and head repository are explicit holds', () => {
     assert.equal(fork.leaseHeld, true);
     install(pull('SkyyPlayz', null, []));
     assert.equal(createClient({ repo: REPO, readToken: 'read' }).queueState(7).queue.scopeKnown, false);
+    install(pull('cursor', REPO, [], 'Bot'));
+    const bot = createClient({ repo: REPO, readToken: 'read' }).queueState(7).queue;
+    assert.equal(bot.author, 'cursor[bot]');
+    assert.equal(bot.authorAllowed, true);
+    install(pull('cursor', REPO, [], 'User'));
+    const sameName = createClient({ repo: REPO, readToken: 'read' }).queueState(7).queue;
+    assert.equal(sameName.author, 'cursor');
+    assert.equal(sameName.authorAllowed, false);
+    process.env.MYTHOS_FLOW_AUTHOR_ALLOWLIST = 'CURSOR[BOT],SKYYPLAYZ';
+    install(pull('Cursor', REPO, [], 'Bot'));
+    assert.equal(createClient({ repo: REPO, readToken: 'read' }).queueState(7).queue.authorAllowed, true);
   } finally {
     if (previous === undefined) delete process.env.MYTHOS_FLOW_AUTHOR_ALLOWLIST;
     else process.env.MYTHOS_FLOW_AUTHOR_ALLOWLIST = previous;
@@ -1056,6 +1072,107 @@ test('a ruleset that changes before the write is not used', () => {
   assert.equal(enqueue(client, 'act').wrote, 0);
   assert.equal(reads, 3);
   assert.deepEqual(calls.enqueue, []);
+});
+
+function flowClient(action) {
+  const pr = prRecord(action === 'undraft' ? { isDraft: true } : {});
+  const detail = detailFor(pr);
+  let enabled = true;
+  let rules = 0;
+  const calls = { ready: [], enqueue: [] };
+  const client = {
+    calls,
+    readSwitch() { return { ok: true, enabled }; },
+    listOpen() { return { ok: true, prs: [pr], truncated: false }; },
+    comments() { return { ok: true, comments: detail.comments }; },
+    files() { return { ok: true, files: detail.files }; },
+    checks() { return { ok: true, checks: detail.checks }; },
+    evidence() { return { ok: true, evidence: detail.evidence }; },
+    queueState() { return { ok: true, queue: detail.queue }; },
+    ruleset() {
+      rules += 1;
+      if (rules === 3) enabled = false;
+      return { ok: true, ruleset: { known: true, match: true } };
+    },
+    ready(number) { calls.ready.push(number); return { ok: true }; },
+    enqueue(id, sha) {
+      calls.enqueue.push({ id, sha });
+      return { ok: true, entry: { position: 1, state: 'QUEUED' } };
+    },
+  };
+  return { client, calls };
+}
+
+test('a switch that flips during the ruleset re-read blocks undraft and enqueue', () => {
+  const undrafted = flowClient('undraft');
+  assert.equal(undraft(undrafted.client, 'act').wrote, 0);
+  assert.deepEqual(undrafted.calls.ready, []);
+  const queued = flowClient('enqueue');
+  assert.equal(enqueue(queued.client, 'act').wrote, 0);
+  assert.deepEqual(queued.calls.enqueue, []);
+});
+
+test('a switch that flips during the ruleset re-read blocks queue and head check posts', () => {
+  const head = HEAD;
+  const parent = 'd'.repeat(40);
+  const entry = {
+    ref: `refs/heads/gh-readonly-queue/main/pr-7-${head}`,
+    base: 'main',
+    pr: 7,
+    sha: 'c'.repeat(40),
+  };
+  const writes = [];
+  let enabled = true;
+  const queueIo = {
+    readSwitch() { return { ok: true, enabled }; },
+    ruleset() {
+      enabled = false;
+      return { ok: true, ruleset: { known: true, match: true } };
+    },
+    listEntries: () => ({ ok: true, entries: [entry] }),
+    pull: () => ({ prReadable: true, state: 'open', draft: false, base: 'main', head }),
+    headGate: () => ({
+      headRunReadable: true,
+      headRun: { id: 4, status: 'completed', conclusion: 'success', appId: GATE_APP_ID, summary: `Head: ${head}\n` },
+    }),
+    ourRun(sha) {
+      if (sha === entry.sha) return { headRunReadable: true, headRun: null };
+      return this.headGate();
+    },
+    baseTip: () => parent,
+    prepare: () => true,
+    parents: () => [parent],
+    tree: () => ({ ok: true, equal: true }),
+    refSha: () => entry.sha,
+    collision: () => ({ listReadable: true, collision: false }),
+    writeRun() { writes.push('queue'); return { ok: true }; },
+  };
+  const queued = runPublish(queueIo, { mode: 'act', gateAppId: String(GATE_APP_ID), gateToken: 'gate' });
+  assert.equal(queued.code, 0);
+  assert.equal(queued.posted, 0);
+  assert.deepEqual(writes, []);
+
+  enabled = true;
+  const headIo = {
+    readSwitch() { return { ok: true, enabled }; },
+    ruleset() {
+      enabled = false;
+      return { ok: true, ruleset: { known: true, match: true } };
+    },
+    listEntries: () => ({ ok: true, entries: [] }),
+    pull: () => ({ prReadable: true, state: 'open', draft: false, head }),
+    ourRun: () => ({ headRunReadable: true, headRun: null }),
+    writeRun() { writes.push('head'); return { ok: true }; },
+  };
+  const posted = runPublish(headIo, {
+    mode: 'act',
+    gateAppId: String(GATE_APP_ID),
+    gateToken: 'gate',
+    headDecision: { pr: 7, headSha: head },
+  });
+  assert.equal(posted.code, 0);
+  assert.equal(posted.posted, 0);
+  assert.deepEqual(writes, []);
 });
 
 test('a check post re-reads the ruleset and skips a weaker policy', () => {

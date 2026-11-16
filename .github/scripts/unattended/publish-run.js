@@ -321,13 +321,13 @@ function runPublish(io, opts) {
           progress = true;
         }
       } else {
-        const again = io.readSwitch();
-        if (!again.ok || !again.enabled) return { code: again.ok ? 0 : 1, posted };
         if (!rulesAllow(io)) {
           process.stdout.write(`queue #${entry.pr} ruleset is not the main queue policy; no post\n`);
           done.add(entry.sha);
           continue;
         }
+        const again = io.readSwitch();
+        if (!again.ok || !again.enabled) return { code: again.ok ? 0 : 1, posted };
         const wrote = io.writeRun(existing, entry.sha, status, conclusion, summary);
         if (!wrote.ok) return { code: 1, posted };
         sent.add(stamp);
@@ -349,13 +349,13 @@ function runPublish(io, opts) {
       if (!current.headRunReadable) return { code: 1, posted };
       const summary = `Head: ${head.headSha}\nRisk: low\nRule: reducer pass for this run`;
       if (!samePosted(current.headRun, 'completed', 'success', summary)) {
-        const again = io.readSwitch();
-        if (!again.ok) return { code: 1, posted };
-        if (!again.enabled) return { code: 0, posted };
         if (!rulesAllow(io)) {
           process.stdout.write(`head #${head.pr} ruleset is not the main queue policy; no success posted\n`);
           return { code: 0, posted };
         }
+        const again = io.readSwitch();
+        if (!again.ok) return { code: 1, posted };
+        if (!again.enabled) return { code: 0, posted };
         const wrote = io.writeRun(current.headRun, head.headSha, 'completed', 'success', summary);
         if (!wrote.ok) return { code: 1, posted };
         posted += 1;

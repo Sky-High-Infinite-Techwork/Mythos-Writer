@@ -42,8 +42,22 @@ function flattenPages(text) {
 
 function parseAllowlist(raw) {
   if (typeof raw !== 'string') return null;
-  const names = raw.split(',').map((name) => name.trim()).filter((name) => name.length > 0);
+  const names = raw.split(',').map((name) => name.trim().toLowerCase()).filter((name) => name.length > 0);
   return names.length === 0 ? null : new Set(names);
+}
+
+// GraphQL author.login for a bot omits the [bot] suffix that REST includes.
+function canonicalLogin(author) {
+  const login = author && typeof author.login === 'string' ? author.login.trim() : '';
+  if (!login) return '';
+  if (author.__typename === 'Bot' && !login.toLowerCase().endsWith('[bot]')) return `${login}[bot]`;
+  return login;
+}
+
+function authorMatches(author, allowlist) {
+  if (!allowlist) return false;
+  const login = canonicalLogin(author).toLowerCase();
+  return login.length > 0 && allowlist.has(login);
 }
 
 function leaseHeldFrom(labels) {
@@ -162,7 +176,7 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
       repository(owner:$owner,name:$name){
         pullRequest(number:$n){
           id isDraft isInMergeQueue isMergeQueueEnabled headRefOid baseRefName baseRefOid state mergeStateStatus
-          author { login }
+          author { __typename login }
           headRepository { nameWithOwner }
           labels(first: 100) { pageInfo { hasNextPage } nodes { name } }
         }
@@ -184,7 +198,7 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
     const scopeKnown = typeof headName === 'string' && headName.length > 0;
     const fork = scopeKnown && headName !== REPO;
     const allowlist = parseAllowlist(process.env.MYTHOS_FLOW_AUTHOR_ALLOWLIST);
-    const author = pr.author && pr.author.login;
+    const author = canonicalLogin(pr.author);
     const allowlistKnown = allowlist !== null;
     return {
       ok: true,
@@ -202,7 +216,7 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
         fork,
         scopeKnown,
         allowlistKnown,
-        authorAllowed: allowlistKnown && scopeKnown && !fork && typeof author === 'string' && allowlist.has(author),
+        authorAllowed: allowlistKnown && scopeKnown && !fork && authorMatches(pr.author, allowlist),
         teamScopeKnown: allowlistKnown && scopeKnown,
         labels,
         labelsComplete,
@@ -306,5 +320,5 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
 
 module.exports = {
   createClient, parseJson, flattenPages, flattenRunPages, mapChangedFile, ENQUEUE_QUERY,
-  parseAllowlist, leaseHeldFrom, rulesetMatches,
+  parseAllowlist, canonicalLogin, authorMatches, leaseHeldFrom, rulesetMatches,
 };

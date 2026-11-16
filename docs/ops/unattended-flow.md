@@ -4,7 +4,7 @@ Phase 1a undrafts and enqueues pull requests that already have independent evide
 
 These workflows do nothing until the repository variable `UNATTENDED_ENABLED` is the literal string `true`. Any other value, including a missing variable, exits without a write and without posting `mythos/final-gate`.
 
-The switch is read again, with `MYTHOS_CONTROL_READ_TOKEN`, after eligibility is loaded and immediately before each undraft, enqueue, and check post. One API call that was already authorized can still finish. Turning the variable off does not cancel a merge GitHub has already accepted and does not erase a green check.
+The switch is read again, with `MYTHOS_CONTROL_READ_TOKEN`, after every other check, including the ruleset re-read. That switch read is the last call before each undraft, enqueue, and check post. One API call that was already authorized can still finish. Turning the variable off does not cancel a merge GitHub has already accepted and does not erase a green check.
 
 ## Workflows
 
@@ -26,9 +26,13 @@ Phase 1a proof is required CI green from `main`'s workflow revision on the exact
 
 For each of `.github/workflows/ci.yml` and `.github/workflows/screenshot-check.yml`, the latest Actions run on that tip must have `event` `pull_request`, `status` `completed`, and `conclusion` `success`. `run.head_sha` is the tip. The run's pull request link head SHA, base ref, and base SHA match the pull request now. The workflow file blob at that tip equals the blob on `main`. A later failure, cancellation, or in-progress run on that SHA voids an earlier success. An author `PROOF @ <sha>` comment is an assertion and does not count. The write App does not post one.
 
-`MYTHOS_FLOW_AUTHOR_ALLOWLIST` is an author allow-list. It is not a team-membership check. The value is a comma-separated list of GitHub logins. A missing or empty variable holds every pull request. The head repository must be `Sky-High-Infinite-Techwork/Mythos-Writer`; a fork is held. An author whose login is not in the list is held. The suggested initial value is `SkyyPlayz,cursor[bot]`.
+`MYTHOS_FLOW_AUTHOR_ALLOWLIST` is an author allow-list. It is not a team-membership check. The value is a comma-separated list of GitHub logins, compared case-insensitively. A missing or empty variable holds every pull request. The head repository must be `Sky-High-Infinite-Techwork/Mythos-Writer`; a fork is held. An author whose login is not in the list is held. The suggested initial value is `SkyyPlayz,cursor[bot]`.
 
-A pull request is also held when the lease label list or the `main` ruleset cannot be read. `lease` and `lease:` labels match without regard to case. Immediately before each undraft, enqueue, and check post, the ruleset is read again. That fresh read must still require GitHub Actions (`integration_id` 15368) on `ci`, `notes-windows`, and `screenshot-check`, the gate App (`5736520`) on `mythos/final-gate`, `strict_required_status_checks_policy` true, and a merge queue whose `merge_method` is `SQUASH`. Ruleset 25235759 on `main` is that policy. A stale or weaker ruleset holds the write.
+GraphQL `author.login` for a bot omits the `[bot]` suffix that REST includes (`cursor` versus `cursor[bot]`). The flow reads `author.__typename`. When that is `Bot` and the login does not already end in `[bot]`, the comparison uses `login[bot]`. A User named `cursor` does not match the allow-list entry `cursor[bot]`.
+
+The publisher does not read `MYTHOS_FLOW_AUTHOR_ALLOWLIST`. It only mirrors an existing trusted head gate onto a queue commit, and it cannot undraft or enqueue.
+
+A pull request is also held when the lease label list or the `main` ruleset cannot be read. `lease` and `lease:` labels match without regard to case. After the other eligibility checks, the ruleset is read again. That fresh read must still require GitHub Actions (`integration_id` 15368) on `ci`, `notes-windows`, and `screenshot-check`, the gate App (`5736520`) on `mythos/final-gate`, `strict_required_status_checks_policy` true, and a merge queue whose `merge_method` is `SQUASH`. Ruleset 25235759 on `main` is that policy. A stale or weaker ruleset holds the write. The switch is read after that ruleset re-read and is the last call before the write.
 
 ## Variables
 
