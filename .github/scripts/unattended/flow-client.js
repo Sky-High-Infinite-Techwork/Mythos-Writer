@@ -190,28 +190,6 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
     return { ok: true, checks: byName };
   }
 
-  function commits(number) {
-    const got = api(['api', '--paginate', '--slurp', `repos/${repo}/pulls/${number}/commits?per_page=100`], readToken);
-    if (!got.ok) return got;
-    const rows = flattenPages(got.stdout);
-    if (!rows) return { ok: false, error: 'commits were not pages of JSON' };
-    return {
-      ok: true,
-      commits: rows.map((row) => {
-        const commit = (row && row.commit) || {};
-        const verification = commit.verification || {};
-        return {
-          sha: row && row.sha,
-          authorLogin: (row && row.author && row.author.login) || '',
-          committerLogin: (row && row.committer && row.committer.login) || '',
-          verified: verification.verified === true,
-          reason: typeof verification.reason === 'string' ? verification.reason : '',
-          message: typeof commit.message === 'string' ? commit.message : '',
-        };
-      }),
-    };
-  }
-
   function queueState(number) {
     const parts = splitRepo(repo);
     if (!parts) return { ok: false, error: 'repository' };
@@ -367,7 +345,6 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
     comments,
     files,
     checks,
-    commits,
     queueState,
     evidence,
     ruleset,

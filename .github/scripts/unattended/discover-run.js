@@ -1,9 +1,10 @@
 'use strict';
 
 const fs = require('node:fs');
-const { REPO, sha40 } = require('./constants');
+const { REPO, sha40, CHECK_NAME, GATE_APP_ID } = require('./constants');
 const { gh } = require('./spawn');
 const { parseProvidersJson } = require('./gate-result');
+const { parseAllowlist, authorMatches } = require('./flow-client');
 const { readCompare } = require('./transport');
 const { reviewPlan } = require('./risk-policy');
 
@@ -16,7 +17,11 @@ function selectHead(prs, only) {
     && sha40(pr.head)
     && sha40(pr.baseSha)
     && Number.isInteger(pr.number)
-    && pr.number > 0);
+    && pr.number > 0
+    && pr.authorAllowed === true
+    && pr.author !== 'dependabot[bot]'
+    && pr.ownerPath !== true
+    && pr.gatePosted !== true);
   if (only) return rows.find((pr) => String(pr.number) === String(only)) || null;
   rows.sort((left, right) => left.number - right.number);
   return rows[0] || null;
@@ -32,7 +37,37 @@ function mapPull(row) {
     base: row && row.base && row.base.ref,
     baseSha: row && row.base && row.base.sha,
     head: row && row.head && row.head.sha,
+    author: row && row.user && row.user.login,
   };
+}
+
+function gatePosted(head) {
+  const route = `repos/${REPO}/commits/${head}/check-runs?check_name=${encodeURIComponent(CHECK_NAME)}&per_page=100`;
+  const result = gh(['api', route], process.env.READ_TOKEN);
+  if (result.status !== 0) return null;
+  let body;
+  try {
+    body = JSON.parse(result.stdout);
+  } catch {
+    return null;
+  }
+  if (!body || !Array.isArray(body.check_runs)) return null;
+  if (body.total_count > body.check_runs.length) return null;
+  return body.check_runs.some((run) => run && run.head_sha === head && run.app && run.app.id === GATE_APP_ID);
+}
+
+function compareClass(baseSha, headSha) {
+  const compared = gh(['api', `repos/${REPO}/compare/${baseSha}...${headSha}`], process.env.READ_TOKEN);
+  if (compared.status !== 0) return null;
+  let body;
+  try {
+    body = JSON.parse(compared.stdout);
+  } catch {
+    return null;
+  }
+  const threshold = thresholdFromCompare(body, baseSha, headSha);
+  if (threshold !== 'strict' && threshold !== 'standard' && threshold !== 'owner') return null;
+  return { ownerPath: threshold === 'owner', threshold };
 }
 
 // The class is the compare's file list at the discovered SHAs, not the live pull request files.
@@ -72,19 +107,35 @@ function main() {
     return 1;
   }
   const flat = Array.isArray(pages) && pages.length && Array.isArray(pages[0]) ? pages.flat() : pages;
-  const chosen = selectHead((flat || []).map(mapPull), only);
-  const providers = parseProvidersJson(process.env.MYTHOS_GATE_PROVIDERS_JSON);
-  let threshold = '';
-  if (chosen) {
-    const compared = gh(['api', `repos/${REPO}/compare/${chosen.baseSha}...${chosen.head}`], process.env.READ_TOKEN);
-    if (compared.status === 0) {
-      try {
-        threshold = thresholdFromCompare(JSON.parse(compared.stdout), chosen.baseSha, chosen.head);
-      } catch {
-        threshold = '';
+  const allowlist = parseAllowlist(process.env.MYTHOS_FLOW_AUTHOR_ALLOWLIST);
+  const annotated = [];
+  for (const pr of (flat || []).map(mapPull)) {
+    const authorAllowed = authorMatches({ login: pr.author }, allowlist);
+    let gate = false;
+    let ownerPath = false;
+    let threshold = '';
+    if (authorAllowed && pr.author !== 'dependabot[bot]') {
+      const posted = sha40(pr.head) ? gatePosted(pr.head) : null;
+      if (posted === null) {
+        annotated.push({ ...pr, authorAllowed, gatePosted: true });
+        continue;
+      }
+      gate = posted;
+      if (!posted && sha40(pr.baseSha) && sha40(pr.head)) {
+        const compared = compareClass(pr.baseSha, pr.head);
+        if (!compared) {
+          annotated.push({ ...pr, authorAllowed, ownerPath: true });
+          continue;
+        }
+        ownerPath = compared.ownerPath;
+        threshold = compared.threshold;
       }
     }
+    annotated.push({ ...pr, authorAllowed, gatePosted: gate, ownerPath, threshold });
   }
+  const chosen = selectHead(annotated, only);
+  const providers = parseProvidersJson(process.env.MYTHOS_GATE_PROVIDERS_JSON);
+  const threshold = chosen && (chosen.threshold === 'strict' || chosen.threshold === 'standard') ? chosen.threshold : '';
   setOutput('pr', chosen ? String(chosen.number) : '');
   setOutput('head', chosen ? chosen.head : '');
   setOutput('base', chosen ? chosen.baseSha : '');

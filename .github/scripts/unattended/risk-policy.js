@@ -35,44 +35,6 @@ function reviewPlan(files) {
   return { threshold: 'standard', prompt: STANDARD_REVIEW_PROMPT };
 }
 
-function worstUpdate(kinds) {
-  if (kinds.includes('major')) return 'major';
-  if (kinds.includes('unknown')) return 'unknown';
-  if (kinds.includes('minor')) return 'minor';
-  if (kinds.includes('patch')) return 'patch';
-  return 'unknown';
-}
-
-// One "from x.y.z to x.y.z" bump. Pre-releases, ranges, and grouped titles are unknown.
-function parseDependabotTitle(title) {
-  if (typeof title !== 'string') return 'unknown';
-  const match = title.trim().match(/^(?:[\w.-]+(?:\([^)]+\))?!?:\s*)?bumps?\s+.+\s+from\s+v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?\s+to\s+v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?(?:\s+in\s+\S+)?$/i);
-  if (!match) return 'unknown';
-  if (match[4] || match[8]) return 'unknown';
-  const from = [Number(match[1]), Number(match[2]), Number(match[3])];
-  const to = [Number(match[5]), Number(match[6]), Number(match[7])];
-  if (to[0] !== from[0]) return to[0] > from[0] ? 'major' : 'unknown';
-  if (to[1] !== from[1]) return to[1] < from[1] ? 'unknown' : (from[0] === 0 ? 'major' : 'minor');
-  if (to[2] > from[2]) return 'patch';
-  return 'unknown';
-}
-
-// The class comes from signed dependabot commit subjects only. Commit bodies and
-// pull request text are ignored: release notes can carry a forged update-type line.
-function resolveDependabotCommits(commits) {
-  if (!Array.isArray(commits) || commits.length === 0) return 'unknown';
-  const kinds = [];
-  for (const commit of commits) {
-    if (!commit || commit.authorLogin !== 'dependabot[bot]' || commit.committerLogin !== 'dependabot[bot]') {
-      return 'unknown';
-    }
-    if (commit.verified !== true || commit.reason !== 'valid') return 'unknown';
-    const subject = String(commit.message || '').split('\n')[0];
-    kinds.push(parseDependabotTitle(subject));
-  }
-  return worstUpdate(kinds);
-}
-
 function headGateSummary(headSha, threshold) {
   const lines = [`Head: ${headSha}`, 'Risk: low'];
   if (threshold === 'strict') lines.push('Review: strict');
@@ -86,7 +48,5 @@ module.exports = {
   pathClass,
   fileClasses,
   reviewPlan,
-  parseDependabotTitle,
-  resolveDependabotCommits,
   headGateSummary,
 };

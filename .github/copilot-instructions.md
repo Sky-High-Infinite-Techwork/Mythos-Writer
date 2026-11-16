@@ -27,7 +27,7 @@ You are the **CI-red fixer** for this repository. Other agents build the product
 6. **Never work outside the PR you were asked to fix.** No sweeps, refactors or "while I was here" changes.
 
 ## Merge model (context)
-Required checks on the tip: `ci`, `notes-windows`, `screenshot-check`, and `mythos/final-gate` posted by gate App `5736520` from provider review (Claude) for that exact head. The merge queue re-tests the merged result. `.github/**` is owner-merged. Other high-risk paths need a strict provider pass (`Risk: low` and `Review: strict`); a block or any other risk stays held. Dependabot patch and minor bumps can be enqueued when CI and that gate are green. Major bumps stay held. Do not wait for Critic, Shield, Probe, or an Ivy merge. Releases stay draft until the owner publishes. Full rules: `docs/MERGE_GATE.md`.
+Required checks on the tip: `ci`, `notes-windows`, `screenshot-check`, and `mythos/final-gate` posted by gate App `5736520` from provider review (Claude) for that exact head. The merge queue re-tests the merged result. `.github/**` is owner-merged. Other high-risk paths need a strict provider pass (`Risk: low` and `Review: strict`); a block or any other risk stays held. Dependabot pull requests stay held. Do not wait for Critic, Shield, Probe, or an Ivy merge. Releases stay draft until the owner publishes. Full rules: `docs/MERGE_GATE.md`.
 
 ## How to diagnose here
 

@@ -26,8 +26,7 @@ Workflow: [`.github/workflows/mythos-pr-hygiene.yml`](../.github/workflows/mytho
 
 `draft-ready-on-green` is retired. Two CI greens do not mark a draft ready.
 Undraft is `mythos-flow-step`, and only when `UNATTENDED_ENABLED` is `true`
-and the flow policy passes (allow-list, or a Dependabot patch/minor, plus
-evidence). This workflow does not call `gh pr ready`. It never auto-closes drafts.
+and the flow policy passes (allow-list plus evidence). This workflow does not call `gh pr ready`. It never auto-closes drafts.
 
 ## Tip-freeze soft cap
 

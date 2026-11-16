@@ -210,7 +210,7 @@ test('protected paths: not armed, auto-merge disabled, exit 0', () => {
     '.github/workflows/ci.yml', 'docs/vendor/.github/workflows/ci.yml', 'package.json', 'package-lock.json', 'electron-main/src/db.ts',
     'src/apiSecrets.ts', 'src/user-secrets.ts', 'src/clientSecret.ts', 'config/app-secret.yaml',
     'electron-main/src/vault/manifest/migrations/v1.ts', 'electron-main/src/authStore.ts', 'electron-main/src/secrets.ts',
-    '.env', 'AGENTS.md', 'CLAUDE.md', 'electron-builder.json', 'build/installer.nsh', 'frontend/vite.config.ts',
+    '.env', '.env.', 'frontend/.env.', 'AGENTS.md', 'CLAUDE.md', 'electron-builder.json', 'build/installer.nsh', 'frontend/vite.config.ts',
     'docs/CODEOWNERS', 'release-notes/0.5.7.md', 'electron-main/src/stripeClient.ts', '.husky/pre-commit',
   ];
   for (const p of paths) {

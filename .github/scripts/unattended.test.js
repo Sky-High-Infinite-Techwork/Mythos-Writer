@@ -26,7 +26,7 @@ const { interpretGrant } = require('./unattended/token-grant');
 const { interpretSwitch, readSwitch } = require('./unattended/switch');
 const { gh } = require('./unattended/spawn');
 const { CI_INTEGRATION_ID, CHECK_NAME, GATE_APP_ID, REPO, WRITE_APP_ID, WRITE_INSTALLATION_ID, PROTECTED_RE_SOURCE, protectedPath } = require('./unattended/constants');
-const { resolveDependabotCommits, reviewPlan, headGateSummary, STRICT_REVIEW_PROMPT } = require('./unattended/risk-policy');
+const { reviewPlan, headGateSummary, STRICT_REVIEW_PROMPT } = require('./unattended/risk-policy');
 
 const HEAD = 'a'.repeat(40);
 const BASE = 'b'.repeat(40);
@@ -372,65 +372,30 @@ test('high-risk paths need a strict low-risk pass, and .github stays owner-held'
   assert.equal(duplicate.blocked, true);
   assert.equal(duplicate.pass, false);
   assert.equal(duplicate.strict, false);
+  const duplicateReview = inspectGate({
+    conclusion: 'success', headSha: HEAD, appId: GATE_APP_ID,
+    summary: `Head: ${HEAD}\nRisk: low\nReview: strict\nReview: standard\n`,
+  }, HEAD);
+  assert.equal(duplicateReview.blocked, true);
+  assert.equal(duplicateReview.pass, false);
+  assert.equal(duplicateReview.strict, false);
 });
 
 test('a high-risk draft undrafts before the strict gate exists', () => {
   const draft = readyFacts({ draft: true, highRisk: true, strictGate: false, gate: false, gateBlocked: true });
   assert.equal(classify(draft).action, 'undraft');
+  assert.equal(classify(readyFacts({ draft: true, labels: ['carve-out'], highRisk: true, strictGate: true })).reason, 'hold label');
   assert.equal(classify(readyFacts({ highRisk: true, strictGate: false, gate: false })).reason, 'high-risk review required');
 });
 
-test('dependabot patch and minor can enqueue, major and unknown stay held', () => {
-  const eligible = (over) => classify(readyFacts({
+test('dependabot stays held', () => {
+  assert.equal(classify(readyFacts({
     author: 'dependabot[bot]',
-    authorAllowed: false,
+    authorAllowed: true,
     highRisk: true,
     strictGate: true,
     gate: true,
-    ...over,
-  }));
-  assert.equal(eligible({ dependabotUpdate: 'patch' }).action, 'enqueue');
-  assert.equal(eligible({ dependabotUpdate: 'minor' }).action, 'enqueue');
-  assert.equal(eligible({ dependabotUpdate: 'major' }).reason, 'dependabot major');
-  assert.equal(eligible({ dependabotUpdate: 'unknown' }).reason, 'dependabot update unknown');
-  assert.equal(eligible({ dependabotUpdate: null }).reason, 'dependabot update unknown');
-  assert.equal(eligible({ dependabotUpdate: 'patch', protectedPath: true, strictGate: true }).reason, 'protected path');
-  assert.equal(eligible({ dependabotUpdate: 'patch', strictGate: false }).reason, 'high-risk review required');
-  assert.equal(eligible({ dependabotUpdate: 'patch', ciGreen: false, strictGate: true }).reason, 'required checks are not green');
-  const signed = (subject, over = {}) => ({
-    authorLogin: 'dependabot[bot]',
-    committerLogin: 'dependabot[bot]',
-    verified: true,
-    reason: 'valid',
-    message: subject,
-    ...over,
-  });
-  assert.equal(resolveDependabotCommits([signed('Bump left-pad from 1.2.3 to 1.2.4')]), 'patch');
-  assert.equal(resolveDependabotCommits([signed('chore(deps): bump left-pad from 1.2.3 to 1.3.0')]), 'minor');
-  assert.equal(resolveDependabotCommits([signed('Bump left-pad from 1.2.3 to 2.0.0 in /frontend')]), 'major');
-  assert.equal(resolveDependabotCommits([signed('Bump left-pad from 0.2.1 to 0.3.0')]), 'major');
-  assert.equal(resolveDependabotCommits([signed('Bump left-pad from 0.2.1 to 0.2.2')]), 'patch');
-  assert.equal(resolveDependabotCommits([signed('Bump the npm_and_yarn group with 3 updates')]), 'unknown');
-  assert.equal(resolveDependabotCommits([signed('Bump left-pad from 1.2.3-beta.1 to 1.2.3')]), 'unknown');
-  assert.equal(resolveDependabotCommits([
-    signed('Bump left-pad from 1.2.3 to 2.0.0\n\nupdate-type: version-update:semver-patch\n'),
-  ]), 'major');
-  assert.equal(resolveDependabotCommits([
-    signed('Bump left-pad from 1.2.3 to 1.2.4', { authorLogin: 'ada', committerLogin: 'ada' }),
-  ]), 'unknown');
-  assert.equal(resolveDependabotCommits([
-    signed('Bump left-pad from 1.2.3 to 1.2.4', { committerLogin: 'web-flow' }),
-  ]), 'unknown');
-  assert.equal(resolveDependabotCommits([
-    signed('Bump left-pad from 1.2.3 to 1.2.4', { verified: false, reason: 'unsigned' }),
-  ]), 'unknown');
-  assert.equal(resolveDependabotCommits([]), 'unknown');
-});
-
-test('the flow client reads dependabot commits and ignores pull request text', () => {
-  const src = fs.readFileSync(path.join(__dirname, 'unattended', 'flow-client.js'), 'utf8');
-  assert.match(src, /pulls\/\$\{number\}\/commits/);
-  assert.equal(src.includes('update-type'), false);
+  })).reason, 'dependabot');
 });
 
 test('the new path list still matches every old main protected pattern', () => {
@@ -450,6 +415,8 @@ test('the new path list still matches every old main protected pattern', () => {
     'electron-builder.json',
     'frontend/.env',
     '.env.local',
+    '.env.',
+    'frontend/.env.',
     'apiSecrets.ts',
     'user-secrets.ts',
     'clientSecret.ts',
@@ -464,18 +431,9 @@ test('the new path list still matches every old main protected pattern', () => {
   }
 });
 
-test('factsFrom reads a signed dependabot commit and a strict gate summary', () => {
-  const pr = prRecord({
-    author: { login: 'dependabot[bot]' },
-  });
+test('factsFrom reads a strict gate summary for a high-risk path', () => {
+  const pr = prRecord();
   const detail = detailFor(pr, {
-    commits: [{
-      authorLogin: 'dependabot[bot]',
-      committerLogin: 'dependabot[bot]',
-      verified: true,
-      reason: 'valid',
-      message: 'Bump left-pad from 1.2.3 to 1.2.4\n\nupdate-type: version-update:semver-major\n',
-    }],
     files: [{ filename: 'package.json' }],
     checks: {
       ci: { conclusion: 'success', headSha: HEAD },
@@ -485,7 +443,6 @@ test('factsFrom reads a signed dependabot commit and a strict gate summary', () 
     },
   });
   const facts = factsFrom(pr, detail);
-  assert.equal(facts.dependabotUpdate, 'patch');
   assert.equal(facts.highRisk, true);
   assert.equal(facts.strictGate, true);
   assert.equal(classify(facts).action, 'enqueue');
@@ -686,8 +643,10 @@ test('model transports are unavailable and cannot reduce to a pass', () => {
   const roles = { critic: 'pass', shield: 'pass', probe: 'pass' };
   const pass = (provider, risk, reviewRoles = roles) => ({
     schema: 'mythos-gate-result/v1', provider, status: 'pass', repository: REPO, headSha: head,
-    runId: '9', runAttempt: '1', risk, pr: 7, roles: reviewRoles,
+    runId: '9', runAttempt: '1', risk, pr: 7, roles: reviewRoles, threshold: 'standard',
   });
+  const standard = { runId: '9', runAttempt: '1', threshold: 'standard' };
+  const strictExpected = { runId: '9', runAttempt: '1', threshold: 'strict' };
   assert.equal(reduce(pass('claude', 'high'), pass('codex', 'high'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
   assert.equal(reduce(pass('claude', 'low', { critic: 'pass', shield: 'pass', probe: 'hold' }), pass('codex', 'low'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
   assert.equal(reduce(unavailableRow('claude'), pass('codex', 'low'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
@@ -695,23 +654,34 @@ test('model transports are unavailable and cannot reduce to a pass', () => {
   const blocked = { ...pass('claude', 'low'), status: 'block' };
   assert.equal(reduce(blocked, pass('codex', 'low'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
   const strictRow = (provider) => ({ ...pass(provider, 'low'), threshold: 'strict' });
-  assert.equal(reduce(strictRow('claude'), pass('codex', 'low'), { runId: '9', runAttempt: '1', threshold: 'strict' }).decision, 'no-pass');
-  const strict = reduce(strictRow('claude'), strictRow('codex'), { runId: '9', runAttempt: '1', threshold: 'strict' });
+  assert.equal(reduce(strictRow('claude'), pass('codex', 'low'), strictExpected).decision, 'no-pass');
+  assert.equal(reduce(strictRow('claude'), strictRow('codex'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
+  assert.equal(reduce(strictRow('claude'), strictRow('codex'), { runId: '9', runAttempt: '1', threshold: '' }).decision, 'no-pass');
+  assert.equal(reduce(strictRow('claude'), strictRow('codex'), { runId: '9', runAttempt: '1', threshold: 'bogus' }).decision, 'no-pass');
+  const strict = reduce(strictRow('claude'), strictRow('codex'), strictExpected);
   assert.equal(strict.decision, 'pass');
   assert.equal(strict.risk, 'low');
   assert.equal(strict.threshold, 'strict');
   assert.equal(strictClaimOk(strict), true);
-  assert.equal(acceptReducer({ ...strict, threshold: 'standard' }, { runId: '9', runAttempt: '1' }), null);
-  const accepted = reduce(pass('claude', 'low'), pass('codex', 'low'), { runId: '9', runAttempt: '1' });
+  assert.equal(acceptReducer({ ...strict, threshold: 'standard' }, strictExpected), null);
+  assert.equal(acceptReducer({
+    ...strict,
+    roles: { ...strict.roles, claude: { ...strict.roles.claude, threshold: 'standard' } },
+  }, strictExpected), null);
+  const accepted = reduce(pass('claude', 'low'), pass('codex', 'low'), standard);
   assert.equal(accepted.decision, 'pass');
   assert.equal(accepted.threshold, 'standard');
   assert.equal(accepted.roles.claude.critic, 'pass');
-  assert.equal(acceptReducer({ ...accepted, threshold: 'strict' }, { runId: '9', runAttempt: '1' }), null);
-  const claudeOnly = reduce(strictRow('claude'), pass('codex', 'low'), { runId: '9', runAttempt: '1', threshold: 'strict' }, 'claude');
+  assert.equal(acceptReducer({ ...accepted, threshold: 'strict' }, standard), null);
+  assert.equal(acceptReducer({
+    ...accepted,
+    roles: { ...accepted.roles, codex: { ...accepted.roles.codex, threshold: 'strict' } },
+  }, standard), null);
+  const claudeOnly = reduce(strictRow('claude'), pass('codex', 'low'), strictExpected, 'claude');
   assert.equal(claudeOnly.decision, 'pass');
   assert.equal(claudeOnly.threshold, 'strict');
   assert.equal(claudeOnly.providers.length, 1);
-  assert.equal(reduce(pass('claude', 'low'), strictRow('codex'), { runId: '9', runAttempt: '1', threshold: 'strict' }, 'claude').decision, 'no-pass');
+  assert.equal(reduce(pass('claude', 'low'), strictRow('codex'), strictExpected, 'claude').decision, 'no-pass');
   assert.equal(acceptReducer(accepted, { runId: '8', runAttempt: '1' }), null);
   assert.equal(acceptReducer({ ...accepted, risk: 'high' }, { runId: '9', runAttempt: '1' }), null);
   assert.equal(acceptReducer({ ...accepted, roles: { ...accepted.roles, claude: { provider: 'claude', status: 'pass' } } }, { runId: '9', runAttempt: '1' }), null);
@@ -723,11 +693,11 @@ function unavailableRow(provider) {
 
 test('MYTHOS_GATE_PROVIDERS selects who must pass and fails closed otherwise', () => {
   const head = HEAD;
-  const expected = { runId: '9', runAttempt: '1' };
+  const expected = { runId: '9', runAttempt: '1', threshold: 'standard' };
   const roles = { critic: 'pass', shield: 'pass', probe: 'pass' };
   const pass = (provider, risk = 'low') => ({
     schema: 'mythos-gate-result/v1', provider, status: 'pass', repository: REPO, headSha: head,
-    runId: '9', runAttempt: '1', risk, pr: 7, roles,
+    runId: '9', runAttempt: '1', risk, pr: 7, roles, threshold: 'standard',
   });
   assert.deepEqual(parseProviders(undefined).providers, ['claude', 'codex']);
   assert.deepEqual(providersFromEnv({}).providers, ['claude', 'codex']);
@@ -1374,12 +1344,22 @@ esac
 
 test('discover selects one open main pull request', () => {
   const head = HEAD;
-  const open = { number: 9, state: 'open', draft: false, fork: false, base: 'main', baseSha: BASE, head };
+  const open = {
+    number: 9, state: 'open', draft: false, fork: false, base: 'main', baseSha: BASE, head,
+    authorAllowed: true, author: 'ada',
+  };
   assert.equal(selectHead([open, { ...open, number: 4 }], '').number, 4);
   assert.equal(selectHead([open, { ...open, number: 3, fork: true }], '').number, 9);
   assert.equal(selectHead([{ ...open, draft: true }], '9'), null);
   assert.equal(selectHead([{ ...open, base: 'batch/lane' }], ''), null);
   assert.equal(selectHead([open], '9').head, head);
+  const held = { ...open, number: 4, ownerPath: true };
+  const newer = { ...open, number: 9 };
+  assert.equal(selectHead([held, newer], '').number, 9);
+  assert.equal(selectHead([held, newer], '').number, 9);
+  assert.equal(selectHead([{ ...open, number: 4, gatePosted: true }, newer], '').number, 9);
+  assert.equal(selectHead([{ ...open, number: 4, author: 'dependabot[bot]' }, newer], '').number, 9);
+  assert.equal(selectHead([{ ...open, number: 4, authorAllowed: false }, newer], '').number, 9);
 });
 
 test('transports hold high risk, reject auth and malformed output, and hide the other secret', () => {

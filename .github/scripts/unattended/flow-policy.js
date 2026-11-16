@@ -80,11 +80,6 @@ function gateOk(run, head) {
   return first === `Head: ${head}`;
 }
 
-function summaryField(summary, label) {
-  const line = String(summary || '').split('\n').find((row) => row.startsWith(`${label}: `));
-  return line ? line.slice(label.length + 2).trim() : '';
-}
-
 // Flow-step view of the gate check. A success that is not Risk: low is not a pass.
 // strict is that pass plus Review: strict, bound to this head.
 function inspectGate(run, head) {
@@ -92,10 +87,11 @@ function inspectGate(run, head) {
   if (!run || run.headSha !== head || run.appId !== GATE_APP_ID) return empty;
   const lines = String(run.summary || '').split('\n');
   const riskLines = lines.filter((row) => row.startsWith('Risk: '));
-  if (riskLines.length > 1) return { pass: false, strict: false, blocked: true };
+  const reviewLines = lines.filter((row) => row.startsWith('Review: '));
+  if (riskLines.length > 1 || reviewLines.length > 1) return { pass: false, strict: false, blocked: true };
   const bound = lines[0] === `Head: ${head}`;
   const risk = riskLines.length === 1 ? riskLines[0].slice('Risk: '.length).trim() : '';
-  const review = summaryField(run.summary, 'Review');
+  const review = reviewLines.length === 1 ? reviewLines[0].slice('Review: '.length).trim() : '';
   const failure = run.conclusion === 'failure' || run.conclusion === 'cancelled' || run.conclusion === 'timed_out';
   const nonLow = risk === 'block' || (risk !== '' && risk !== 'low');
   if (!bound && !failure && !nonLow) return empty;
@@ -121,11 +117,8 @@ function classify(facts) {
   if (facts.allowlistKnown !== true) return hold('author allow-list missing');
   if (facts.scopeKnown !== true) return hold('team/scope unknown');
   if (facts.fork) return hold('fork');
-  // Dependabot patch and minor are eligible without an allow-list entry. The bump
-  // class is checked after the owner-path hold, so a .github change stays protected.
-  if (facts.author !== 'dependabot[bot]' && facts.authorAllowed !== true) {
-    return hold('author not allow-listed');
-  }
+  if (facts.author === 'dependabot[bot]') return hold('dependabot');
+  if (facts.authorAllowed !== true) return hold('author not allow-listed');
   if (!sha40(facts.head)) return hold('head sha');
   if (facts.base !== 'main') return hold('base is not main');
   const labels = (facts.labels || []).map((name) => String(name).toLowerCase());
@@ -143,17 +136,12 @@ function classify(facts) {
   if (facts.policyKnown === false) return hold('merge queue policy unknown');
   if (!facts.filesComplete) return hold('file list incomplete');
   if (facts.protectedPath) return hold('protected path');
-  if (facts.author === 'dependabot[bot]') {
-    if (facts.dependabotUpdate === 'major') return hold('dependabot major');
-    if (facts.dependabotUpdate !== 'patch' && facts.dependabotUpdate !== 'minor') {
-      return hold('dependabot update unknown');
-    }
-  }
   if (facts.mergeState === 'DIRTY') return hold('merge conflicts');
   if (facts.mergeState === 'UNMERGEABLE') return hold('unmergeable');
   if (!MERGE_OK.has(facts.mergeState)) return hold('mergeability unknown');
   if (!facts.proof) return hold('missing independent evidence run');
   if (!facts.ciGreen) return hold('required checks are not green');
+  if (facts.draft && labels.includes('carve-out')) return hold('hold label');
   // The gate is not posted for drafts. Undraft first, then the gate runs, then enqueue.
   if (facts.draft) return { action: 'undraft', reason: 'draft with an evidence run and required checks' };
   if (facts.gateBlocked) return hold('provider review blocked');

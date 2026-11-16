@@ -14,7 +14,7 @@ enqueue.
 | Path | What happens |
 | --- | --- |
 | Ordinary product and docs pull requests | `mythos-flow-step` enqueues into the `main` merge queue when the checks below are green on the exact head. The queue re-tests the merged result, so a pull request that is behind `main` can still be enqueued. A merge conflict (`DIRTY`) stays held. |
-| Dependabot | Patch and minor bumps are eligible when CI and `mythos/final-gate` are green on the exact head. Major bumps stay held. An update type that cannot be read stays held. |
+| Dependabot | Held. Patch and minor auto-merge is a follow-up. |
 | `.github/**` | Owner-merged. The flow holds these, including a rename out of `.github/`. |
 | Other high-risk paths | Eligible only after a strict provider review for the exact head. The gate check must be success from gate App `5736520`, with `Risk: low` and `Review: strict`. Any block, or any risk other than low, stays held. |
 | Releases | [`release.yml`](../.github/workflows/release.yml) stays draft until the owner publishes. |

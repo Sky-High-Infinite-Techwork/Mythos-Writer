@@ -83,34 +83,27 @@ function sameProviders(left, right) {
   return left.length === right.length && left.every((name, index) => name === right[index]);
 }
 
-function rowThreshold(row) {
-  if (!row || row.status !== 'pass' || row.risk !== 'low') return null;
-  if (row.threshold === undefined || row.threshold === 'standard') return 'standard';
-  if (row.threshold === 'strict') return 'strict';
-  return null;
+function knownThreshold(value) {
+  return value === 'strict' || value === 'standard';
 }
 
-// Only the configured providers vote. They must agree. A caller cannot upgrade
-// a standard row to strict by setting expected.threshold.
+function rowThreshold(row) {
+  if (!row || row.status !== 'pass' || row.risk !== 'low') return null;
+  return knownThreshold(row.threshold) ? row.threshold : null;
+}
+
+// Discover's class is mandatory. An empty or invalid THRESHOLD cannot pass,
+// and a listed provider that disagrees cannot be upgraded.
 function agreedThreshold(rows, providers, expected) {
-  if (expected && expected.threshold === 'owner') return null;
-  const values = [];
+  if (!expected || !knownThreshold(expected.threshold)) return null;
   for (const name of providers) {
-    const value = rowThreshold(rows[name]);
-    if (!value) return null;
-    values.push(value);
+    if (rowThreshold(rows[name]) !== expected.threshold) return null;
   }
-  const agreed = values.every((value) => value === values[0]) ? values[0] : null;
-  if (!agreed) return null;
-  if (expected && (expected.threshold === 'strict' || expected.threshold === 'standard') && expected.threshold !== agreed) {
-    return null;
-  }
-  return agreed;
+  return expected.threshold;
 }
 
 function strictClaimOk(value) {
-  if (!value) return false;
-  if (value.threshold !== 'strict' && value.threshold !== 'standard') return value.threshold === undefined;
+  if (!value || !knownThreshold(value.threshold)) return false;
   const providers = value.providers;
   if (!Array.isArray(providers) || providers.length === 0) return false;
   return providers.every((name) => value.roles && value.roles[name] && value.roles[name].threshold === value.threshold);
@@ -171,10 +164,12 @@ function acceptReducer(value, expected, rawProviders) {
       return null;
     }
   }
-  if (!strictClaimOk(value)) return null;
-  if (expected && (expected.threshold === 'strict' || expected.threshold === 'standard') && value.threshold !== expected.threshold) {
-    return null;
+  if (!expected || !knownThreshold(expected.threshold)) return null;
+  if (value.threshold !== expected.threshold) return null;
+  for (const name of parsed.providers) {
+    if (!roles[name] || roles[name].threshold !== expected.threshold) return null;
   }
+  if (!strictClaimOk(value)) return null;
   return value;
 }
 
@@ -204,11 +199,10 @@ function main(argv) {
     return 0;
   }
   if (command === 'reduce') {
-    const threshold = process.env.THRESHOLD;
-    const expected = (threshold === 'strict' || threshold === 'standard' || threshold === 'owner')
-      ? { ...meta, threshold }
-      : meta;
-    const result = reduce(readJsonEnv('CLAUDE_RESULT'), readJsonEnv('CODEX_RESULT'), expected, providerArgument());
+    const result = reduce(readJsonEnv('CLAUDE_RESULT'), readJsonEnv('CODEX_RESULT'), {
+      ...meta,
+      threshold: process.env.THRESHOLD,
+    }, providerArgument());
     const line = JSON.stringify(result);
     setOutput('result', line);
     setOutput('decision', result.decision);

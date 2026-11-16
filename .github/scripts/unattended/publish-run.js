@@ -348,7 +348,7 @@ function runPublish(io, opts) {
     if (pull.prReadable && pull.state === 'open' && !pull.draft && pull.head === head.headSha) {
       const current = io.ourRun(head.headSha);
       if (!current.headRunReadable) return { code: 1, posted };
-      if (!strictClaimOk(head)) {
+      if (!strictClaimOk(head) || head.threshold !== opts.threshold) {
         process.stdout.write(`head #${head.pr} threshold is not consistent; no success posted\n`);
         return { code: 0, posted };
       }
@@ -382,6 +382,7 @@ function main() {
       headDecision = acceptReducer(JSON.parse(process.env.REDUCER_RESULT), {
         runId: process.env.GITHUB_RUN_ID,
         runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+        threshold: process.env.THRESHOLD,
       }, providerArgument());
     } catch {
       headDecision = null;
@@ -389,7 +390,13 @@ function main() {
   }
   const io = createIo(process.env.READ_TOKEN, process.env.GATE_TOKEN);
   try {
-    const result = runPublish(io, { mode, gateAppId, gateToken: process.env.GATE_TOKEN, headDecision });
+    const result = runPublish(io, {
+      mode,
+      gateAppId,
+      gateToken: process.env.GATE_TOKEN,
+      headDecision,
+      threshold: process.env.THRESHOLD,
+    });
     return result.code;
   } finally {
     io.close();
