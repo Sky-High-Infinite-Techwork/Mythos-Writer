@@ -14,7 +14,7 @@ const {
   ENQUEUE_QUERY, READY_QUERY, flattenPages, flattenRunPages, mapChangedFile, createClient,
   parseAllowlist, authorMatches, leaseHeldFrom, rulesetMatches, httpStatus,
 } = require('./unattended/flow-client');
-const { selectHead, thresholdFromCompare } = require('./unattended/discover-run');
+const { selectHead, thresholdFromCompare, DISCOVER_SLOT_SECONDS } = require('./unattended/discover-run');
 const {
   review, modelEnv, claudeInvocation, assessDiff, readCompare, userDiff, systemPrompt, codexResult, codexBody, CHECKLIST,
 } = require('./unattended/transport');
@@ -384,7 +384,11 @@ test('high-risk paths need a strict low-risk pass, and .github stays owner-held'
 test('a high-risk draft undrafts before the strict gate exists', () => {
   const draft = readyFacts({ draft: true, highRisk: true, strictGate: false, gate: false, gateBlocked: true });
   assert.equal(classify(draft).action, 'undraft');
-  assert.equal(classify(readyFacts({ draft: true, labels: ['carve-out'], highRisk: true, strictGate: true })).reason, 'hold label');
+  assert.equal(classify(readyFacts({
+    draft: true, labels: ['carve-out'], highRisk: true, strictGate: false, gate: false,
+  })).action, 'undraft');
+  assert.equal(classify(readyFacts({ draft: true, labels: ['carve-out'] })).reason, 'hold label');
+  assert.equal(classify(readyFacts({ draft: true, protectedPath: true, labels: ['carve-out'] })).reason, 'protected path');
   assert.equal(classify(readyFacts({ highRisk: true, strictGate: false, gate: false })).reason, 'high-risk review required');
 });
 
@@ -1348,7 +1352,7 @@ test('discover selects one open main pull request', () => {
     number: 9, state: 'open', draft: false, fork: false, base: 'main', baseSha: BASE, head,
     authorAllowed: true, author: 'ada',
   };
-  assert.equal(selectHead([open, { ...open, number: 4 }], '').number, 4);
+  assert.equal(selectHead([open, { ...open, number: 4 }], '', 0).number, 4);
   assert.equal(selectHead([open, { ...open, number: 3, fork: true }], '').number, 9);
   assert.equal(selectHead([{ ...open, draft: true }], '9'), null);
   assert.equal(selectHead([{ ...open, base: 'batch/lane' }], ''), null);
@@ -1360,6 +1364,18 @@ test('discover selects one open main pull request', () => {
   assert.equal(selectHead([{ ...open, number: 4, gatePosted: true }, newer], '').number, 9);
   assert.equal(selectHead([{ ...open, number: 4, author: 'dependabot[bot]' }, newer], '').number, 9);
   assert.equal(selectHead([{ ...open, number: 4, authorAllowed: false }, newer], '').number, 9);
+  assert.equal(selectHead([{ ...open, number: 4, labels: ['hold'] }, newer], '', 0).number, 9);
+  assert.equal(selectHead([{ ...open, number: 4, labels: ['do-not-merge'] }, newer], '', 0).number, 9);
+  assert.equal(selectHead([{ ...open, number: 4, labels: ['carve-out'], ownerPath: true }, newer], '', 0).number, 9);
+  assert.equal(selectHead([{ ...open, number: 4, gatePosted: true }], '4').number, 4);
+  const heads = [
+    { ...open, number: 4 },
+    { ...open, number: 9 },
+    { ...open, number: 15 },
+  ];
+  const scans = [0, DISCOVER_SLOT_SECONDS, DISCOVER_SLOT_SECONDS * 2, DISCOVER_SLOT_SECONDS * 3]
+    .map((seconds) => selectHead(heads, '', seconds).number);
+  assert.deepEqual(scans, [4, 9, 15, 4]);
 });
 
 test('transports hold high risk, reject auth and malformed output, and hide the other secret', () => {
@@ -1874,8 +1890,12 @@ test('a switch that flips during the ruleset re-read blocks queue and head check
   assert.deepEqual(writes, []);
 
   enabled = true;
+  let switchReads = 0;
   const headIo = {
-    readSwitch() { return { ok: true, enabled }; },
+    readSwitch() {
+      switchReads += 1;
+      return { ok: true, enabled };
+    },
     ruleset() {
       enabled = false;
       return { ok: true, ruleset: { known: true, match: true } };
@@ -1889,10 +1909,22 @@ test('a switch that flips during the ruleset re-read blocks queue and head check
     mode: 'act',
     gateAppId: String(GATE_APP_ID),
     gateToken: 'gate',
-    headDecision: { pr: 7, headSha: head },
+    threshold: 'standard',
+    headDecision: {
+      pr: 7,
+      headSha: head,
+      threshold: 'standard',
+      providers: ['claude'],
+      roles: {
+        claude: {
+          provider: 'claude', status: 'pass', critic: 'pass', shield: 'pass', probe: 'pass', threshold: 'standard',
+        },
+      },
+    },
   });
   assert.equal(posted.code, 0);
   assert.equal(posted.posted, 0);
+  assert.equal(switchReads, 2);
   assert.deepEqual(writes, []);
 });
 

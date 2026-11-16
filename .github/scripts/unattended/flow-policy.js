@@ -141,7 +141,7 @@ function classify(facts) {
   if (!MERGE_OK.has(facts.mergeState)) return hold('mergeability unknown');
   if (!facts.proof) return hold('missing independent evidence run');
   if (!facts.ciGreen) return hold('required checks are not green');
-  if (facts.draft && labels.includes('carve-out')) return hold('hold label');
+  if (facts.draft && labels.includes('carve-out') && !facts.highRisk) return hold('hold label');
   // The gate is not posted for drafts. Undraft first, then the gate runs, then enqueue.
   if (facts.draft) return { action: 'undraft', reason: 'draft with an evidence run and required checks' };
   if (facts.gateBlocked) return hold('provider review blocked');

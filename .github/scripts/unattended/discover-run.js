@@ -8,8 +8,10 @@ const { parseAllowlist, authorMatches } = require('./flow-client');
 const { readCompare } = require('./transport');
 const { reviewPlan } = require('./risk-policy');
 
-function selectHead(prs, only) {
-  const rows = (prs || []).filter((pr) => pr
+const DISCOVER_SLOT_SECONDS = 600;
+
+function shapeOk(pr) {
+  return Boolean(pr
     && pr.state === 'open'
     && pr.draft !== true
     && pr.fork !== true
@@ -17,14 +19,31 @@ function selectHead(prs, only) {
     && sha40(pr.head)
     && sha40(pr.baseSha)
     && Number.isInteger(pr.number)
-    && pr.number > 0
+    && pr.number > 0);
+}
+
+function holdLabel(pr) {
+  const labels = (pr.labels || []).map((name) => String(name).toLowerCase());
+  if (labels.includes('hold') || labels.includes('do-not-merge')) return true;
+  return labels.includes('carve-out') && pr.ownerPath === true;
+}
+
+function eligible(pr) {
+  return shapeOk(pr)
     && pr.authorAllowed === true
     && pr.author !== 'dependabot[bot]'
     && pr.ownerPath !== true
-    && pr.gatePosted !== true);
-  if (only) return rows.find((pr) => String(pr.number) === String(only)) || null;
+    && pr.gatePosted !== true
+    && !holdLabel(pr);
+}
+
+function selectHead(prs, only, nowSeconds) {
+  if (only) return (prs || []).find((pr) => shapeOk(pr) && String(pr.number) === String(only)) || null;
+  const rows = (prs || []).filter(eligible);
   rows.sort((left, right) => left.number - right.number);
-  return rows[0] || null;
+  if (!rows.length) return null;
+  const now = Number.isFinite(nowSeconds) ? nowSeconds : Math.floor(Date.now() / 1000);
+  return rows[Math.floor(now / DISCOVER_SLOT_SECONDS) % rows.length];
 }
 
 function mapPull(row) {
@@ -38,6 +57,9 @@ function mapPull(row) {
     baseSha: row && row.base && row.base.sha,
     head: row && row.head && row.head.sha,
     author: row && row.user && row.user.login,
+    labels: Array.isArray(row && row.labels)
+      ? row.labels.map((label) => (label && label.name) || label).filter((name) => typeof name === 'string')
+      : [],
   };
 }
 
@@ -111,20 +133,28 @@ function main() {
   const annotated = [];
   for (const pr of (flat || []).map(mapPull)) {
     const authorAllowed = authorMatches({ login: pr.author }, allowlist);
+    const manual = only && String(pr.number) === String(only);
     let gate = false;
     let ownerPath = false;
     let threshold = '';
-    if (authorAllowed && pr.author !== 'dependabot[bot]') {
-      const posted = sha40(pr.head) ? gatePosted(pr.head) : null;
-      if (posted === null) {
-        annotated.push({ ...pr, authorAllowed, gatePosted: true });
-        continue;
+    const reviewable = authorAllowed && pr.author !== 'dependabot[bot]';
+    if (reviewable || manual) {
+      if (!manual) {
+        const posted = sha40(pr.head) ? gatePosted(pr.head) : null;
+        if (posted === null) {
+          annotated.push({ ...pr, authorAllowed, gatePosted: true });
+          continue;
+        }
+        gate = posted;
+        if (posted) {
+          annotated.push({ ...pr, authorAllowed, gatePosted: true });
+          continue;
+        }
       }
-      gate = posted;
-      if (!posted && sha40(pr.baseSha) && sha40(pr.head)) {
+      if (sha40(pr.baseSha) && sha40(pr.head)) {
         const compared = compareClass(pr.baseSha, pr.head);
         if (!compared) {
-          annotated.push({ ...pr, authorAllowed, ownerPath: true });
+          annotated.push({ ...pr, authorAllowed, ownerPath: !manual });
           continue;
         }
         ownerPath = compared.ownerPath;
@@ -133,7 +163,7 @@ function main() {
     }
     annotated.push({ ...pr, authorAllowed, gatePosted: gate, ownerPath, threshold });
   }
-  const chosen = selectHead(annotated, only);
+  const chosen = selectHead(annotated, only, Math.floor(Date.now() / 1000));
   const providers = parseProvidersJson(process.env.MYTHOS_GATE_PROVIDERS_JSON);
   const threshold = chosen && (chosen.threshold === 'strict' || chosen.threshold === 'standard') ? chosen.threshold : '';
   setOutput('pr', chosen ? String(chosen.number) : '');
@@ -148,4 +178,4 @@ function main() {
 
 if (require.main === module) process.exit(main());
 
-module.exports = { selectHead, mapPull, thresholdFromCompare };
+module.exports = { selectHead, mapPull, thresholdFromCompare, DISCOVER_SLOT_SECONDS };
