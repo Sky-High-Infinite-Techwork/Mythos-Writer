@@ -27,5 +27,7 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Test unattended workflow contracts
         run: node .github/scripts/unattended.test.js
+      - name: Test Phase 2 dispatch modules
+        run: node .github/scripts/unattended/dispatch.test.js
       - name: Test workflow rules
         run: node .github/scripts/workflow-rules.test.js
