@@ -7,6 +7,7 @@ const REPO = 'Sky-High-Infinite-Techwork/Mythos-Writer';
 const WRITE_APP_ID = '5777914';
 const WRITE_INSTALLATION_ID = '182422539';
 const GATE_APP_ID = 5736520;
+const CI_INTEGRATION_ID = 15368;
 const CHECK_NAME = 'mythos/final-gate';
 const REQUIRED_CHECKS = ['ci', 'notes-windows', 'screenshot-check'];
 const HOLD_LABELS = ['tip-freeze', 'do-not-merge', 'hold', 'carve-out'];
@@ -40,6 +41,7 @@ module.exports = {
   WRITE_APP_ID,
   WRITE_INSTALLATION_ID,
   GATE_APP_ID,
+  CI_INTEGRATION_ID,
   CHECK_NAME,
   REQUIRED_CHECKS,
   HOLD_LABELS,

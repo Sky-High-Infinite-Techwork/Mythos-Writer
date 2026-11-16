@@ -26,7 +26,9 @@ Phase 1a proof is required CI green from `main`'s workflow revision on the exact
 
 For each of `.github/workflows/ci.yml` and `.github/workflows/screenshot-check.yml`, the latest Actions run on that tip must have `event` `pull_request`, `status` `completed`, and `conclusion` `success`. `run.head_sha` is the tip. The run's pull request link head SHA, base ref, and base SHA match the pull request now. The workflow file blob at that tip equals the blob on `main`. A later failure, cancellation, or in-progress run on that SHA voids an earlier success. An author `PROOF @ <sha>` comment is an assertion and does not count. The write App does not post one.
 
-A pull request is held, with no write, when team/scope, lease, or the `main` ruleset cannot be read or is unknown. A known fork, an active `lease` label, or a ruleset that does not require the merge queue and the four checks is also held.
+`MYTHOS_FLOW_AUTHOR_ALLOWLIST` is an author allow-list. It is not a team-membership check. The value is a comma-separated list of GitHub logins. A missing or empty variable holds every pull request. The head repository must be `Sky-High-Infinite-Techwork/Mythos-Writer`; a fork is held. An author whose login is not in the list is held. The suggested initial value is `SkyyPlayz,cursor[bot]`.
+
+A pull request is also held when the lease label list or the `main` ruleset cannot be read. `lease` and `lease:` labels match without regard to case. Immediately before each undraft, enqueue, and check post, the ruleset is read again. That fresh read must still require GitHub Actions (`integration_id` 15368) on `ci`, `notes-windows`, and `screenshot-check`, the gate App (`5736520`) on `mythos/final-gate`, `strict_required_status_checks_policy` true, and a merge queue whose `merge_method` is `SQUASH`. Ruleset 25235759 on `main` is that policy. A stale or weaker ruleset holds the write.
 
 ## Variables
 
@@ -35,6 +37,7 @@ Repository Actions variables:
 | Name | Value |
 | --- | --- |
 | `UNATTENDED_ENABLED` | `false` until the checklist below is done. `true` arms new runs. |
+| `MYTHOS_FLOW_AUTHOR_ALLOWLIST` | Author allow-list. Suggested initial value `SkyyPlayz,cursor[bot]`. Missing or empty holds every pull request. |
 | `MYTHOS_WRITE_APP_ID` | `5777914` |
 | `MYTHOS_WRITE_APP_INSTALLATION_ID` | `182422539` |
 | `MYTHOS_GATE_APP_ID` | `5736520` |
@@ -65,7 +68,7 @@ Do not add `OPENROUTER_API_KEY`.
 
 Confirm each of these in the GitHub API or settings UI. The workflows cannot see environment branch policy or repository-secret copies.
 
-1. `UNATTENDED_ENABLED` is still `false`.
+1. `UNATTENDED_ENABLED` is still `false`. `MYTHOS_FLOW_AUTHOR_ALLOWLIST` is set to the logins that may be undrafted or enqueued. Start with `SkyyPlayz,cursor[bot]`.
 2. Environments `mythos-writer`, `mythos-publisher`, `mythos-control`, `mythos-claude`, and `mythos-codex` exist, and each deployment branch policy allows only `main`.
 3. `MYTHOS_WRITE_APP_PRIVATE_KEY` exists only in `mythos-writer`. `MYTHOS_GATE_APP_PRIVATE_KEY` exists only in `mythos-publisher`. Neither exists as a repository Actions secret.
 4. `MYTHOS_CONTROL_READ_TOKEN` exists in `mythos-control`, `mythos-writer`, and `mythos-publisher`. It is a Writer-only fine-grained PAT with Actions variables read and metadata read, and it has no contents or pull-request write.

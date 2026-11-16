@@ -122,6 +122,7 @@ jobs:
           PR_NUMBER: ${{ needs.admit.outputs.pr }}
           CONTROL_TOKEN: ${{ secrets.MYTHOS_CONTROL_READ_TOKEN }}
           READ_TOKEN: ${{ github.token }}
+          MYTHOS_FLOW_AUTHOR_ALLOWLIST: ${{ vars.MYTHOS_FLOW_AUTHOR_ALLOWLIST }}
         run: node .github/scripts/unattended/flow-run.js plan
       - name: Mint a pull-request token for undraft
         id: ready
@@ -159,6 +160,7 @@ jobs:
           READY_TOKEN: ${{ steps.ready.outputs.token }}
           WRITE_APP_ID: ${{ vars.MYTHOS_WRITE_APP_ID }}
           WRITE_INSTALLATION_ID: ${{ vars.MYTHOS_WRITE_APP_INSTALLATION_ID }}
+          MYTHOS_FLOW_AUTHOR_ALLOWLIST: ${{ vars.MYTHOS_FLOW_AUTHOR_ALLOWLIST }}
         run: node .github/scripts/unattended/flow-run.js undraft
       - name: Mint a merge-queue token for enqueue
         id: enqueue
@@ -196,4 +198,5 @@ jobs:
           ENQUEUE_TOKEN: ${{ steps.enqueue.outputs.token }}
           WRITE_APP_ID: ${{ vars.MYTHOS_WRITE_APP_ID }}
           WRITE_INSTALLATION_ID: ${{ vars.MYTHOS_WRITE_APP_INSTALLATION_ID }}
+          MYTHOS_FLOW_AUTHOR_ALLOWLIST: ${{ vars.MYTHOS_FLOW_AUTHOR_ALLOWLIST }}
         run: node .github/scripts/unattended/flow-run.js enqueue

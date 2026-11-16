@@ -1,7 +1,9 @@
 'use strict';
 
 const { gh } = require('./spawn');
-const { CHECK_NAME, EVIDENCE_WORKFLOWS, GATE_APP_ID, REPO, REQUIRED_CHECKS, sha40 } = require('./constants');
+const {
+  CHECK_NAME, CI_INTEGRATION_ID, EVIDENCE_WORKFLOWS, GATE_APP_ID, REPO, REQUIRED_CHECKS, sha40,
+} = require('./constants');
 const { readSwitch } = require('./switch');
 const { latestRun } = require('./flow-policy');
 
@@ -36,6 +38,37 @@ function flattenPages(text) {
     for (const row of page) rows.push(row);
   }
   return rows;
+}
+
+function parseAllowlist(raw) {
+  if (typeof raw !== 'string') return null;
+  const names = raw.split(',').map((name) => name.trim()).filter((name) => name.length > 0);
+  return names.length === 0 ? null : new Set(names);
+}
+
+function leaseHeldFrom(labels) {
+  return (labels || []).some((name) => {
+    const label = String(name || '').toLowerCase();
+    return label === 'lease' || label.startsWith('lease:');
+  });
+}
+
+function rulesetMatches(rules) {
+  if (!Array.isArray(rules)) return { known: false, match: false };
+  const required = rules.find((rule) => rule && rule.type === 'required_status_checks');
+  const params = required && required.parameters;
+  const list = params && Array.isArray(params.required_status_checks) ? params.required_status_checks : null;
+  const queueRule = rules.find((rule) => rule && rule.type === 'merge_queue');
+  if (!required || !list || !queueRule) return { known: true, match: false };
+  const pinned = (context, integrationId) => list.some((row) => row
+    && row.context === context && row.integration_id === integrationId);
+  const checks = pinned('ci', CI_INTEGRATION_ID)
+    && pinned('notes-windows', CI_INTEGRATION_ID)
+    && pinned('screenshot-check', CI_INTEGRATION_ID)
+    && pinned(CHECK_NAME, GATE_APP_ID);
+  const strict = params.strict_required_status_checks_policy === true;
+  const squash = Boolean(queueRule.parameters && queueRule.parameters.merge_method === 'SQUASH');
+  return { known: true, match: checks && strict && squash };
 }
 
 function mapChangedFile(row) {
@@ -145,6 +178,14 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
     if (!pr || body.errors) return { ok: false, error: 'pull request query failed' };
     const labelConn = pr.labels || {};
     const labelNodes = labelConn.nodes || [];
+    const labels = labelNodes.map((node) => node && node.name).filter((name) => typeof name === 'string');
+    const labelsComplete = Boolean(labelConn.pageInfo) && labelConn.pageInfo.hasNextPage !== true;
+    const headName = pr.headRepository && pr.headRepository.nameWithOwner;
+    const scopeKnown = typeof headName === 'string' && headName.length > 0;
+    const fork = scopeKnown && headName !== REPO;
+    const allowlist = parseAllowlist(process.env.MYTHOS_FLOW_AUTHOR_ALLOWLIST);
+    const author = pr.author && pr.author.login;
+    const allowlistKnown = allowlist !== null;
     return {
       ok: true,
       queue: {
@@ -157,16 +198,16 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
         base: pr.baseRefName,
         state: pr.state,
         mergeState: pr.mergeStateStatus,
-        author: pr.author && pr.author.login,
-        fork: Boolean(pr.headRepository && pr.headRepository.nameWithOwner) && pr.headRepository.nameWithOwner !== repo,
-        scopeKnown: Boolean(pr.headRepository && pr.headRepository.nameWithOwner),
-        teamScopeKnown: Boolean(pr.headRepository && pr.headRepository.nameWithOwner)
-          && typeof (pr.author && pr.author.login) === 'string' && pr.author.login.length > 0,
-        labels: labelNodes.map((node) => node && node.name).filter(Boolean),
-        labelsComplete: Boolean(labelConn.pageInfo) && labelConn.pageInfo.hasNextPage !== true,
-        leaseKnown: Boolean(labelConn.pageInfo) && labelConn.pageInfo.hasNextPage !== true,
-        leaseHeld: Boolean(labelConn.pageInfo) && labelConn.pageInfo.hasNextPage !== true
-          && labelNodes.some((node) => node && (node.name === 'lease' || String(node.name || '').startsWith('lease:'))),
+        author,
+        fork,
+        scopeKnown,
+        allowlistKnown,
+        authorAllowed: allowlistKnown && scopeKnown && !fork && typeof author === 'string' && allowlist.has(author),
+        teamScopeKnown: allowlistKnown && scopeKnown,
+        labels,
+        labelsComplete,
+        leaseKnown: labelsComplete,
+        leaseHeld: labelsComplete && leaseHeldFrom(labels),
         baseSha: pr.baseRefOid,
       },
     };
@@ -225,24 +266,10 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
     return { ok: true, evidence: { mainRevision, runs } };
   }
 
-  let rulesetCache = null;
   function ruleset() {
-    if (rulesetCache) return rulesetCache;
     const got = api(['api', `repos/${repo}/rules/branches/main`], readToken);
     const rules = got.ok ? parseJson(got.stdout) : null;
-    if (!Array.isArray(rules)) {
-      rulesetCache = { ok: true, ruleset: { known: false, match: false } };
-      return rulesetCache;
-    }
-    const required = rules.find((rule) => rule && rule.type === 'required_status_checks');
-    const contexts = required && required.parameters && required.parameters.required_status_checks;
-    const list = Array.isArray(contexts) ? contexts : [];
-    const names = new Set(list.map((row) => row && row.context));
-    const gate = list.some((row) => row && row.context === CHECK_NAME && row.integration_id === GATE_APP_ID);
-    const checks = REQUIRED_CHECKS.every((name) => names.has(name)) && gate;
-    const queue = rules.some((rule) => rule && rule.type === 'merge_queue');
-    rulesetCache = { ok: true, ruleset: { known: true, match: queue && checks } };
-    return rulesetCache;
+    return { ok: true, ruleset: rulesetMatches(rules) };
   }
 
   function ready(number) {
@@ -279,4 +306,5 @@ function createClient({ repo, readToken, controlToken, readyToken, enqueueToken 
 
 module.exports = {
   createClient, parseJson, flattenPages, flattenRunPages, mapChangedFile, ENQUEUE_QUERY,
+  parseAllowlist, leaseHeldFrom, rulesetMatches,
 };

@@ -8,7 +8,7 @@ const { gh, git, run } = require('./spawn');
 const { readSwitch } = require('./switch');
 const { acceptReducer } = require('./gate-result');
 const { gateOk } = require('./flow-policy');
-const { flattenPages } = require('./flow-client');
+const { flattenPages, rulesetMatches } = require('./flow-client');
 const { parseQueueRef, decideQueueEntry, stillQueue, queueSummary, TITLES } = require('./queue-policy');
 
 function parentsOf(repoDir, sha) {
@@ -88,6 +88,10 @@ function createIo(readToken, gateToken) {
       if (bare) fs.rmSync(bare, { recursive: true, force: true });
     },
     readSwitch: () => readSwitch(REPO, process.env.CONTROL_TOKEN),
+    ruleset() {
+      const got = api(['api', `repos/${REPO}/rules/branches/main`], readToken);
+      return { ok: true, ruleset: rulesetMatches(got.ok ? got.value : null) };
+    },
     listEntries() {
       const result = gh(['api', '--paginate', '--slurp', `repos/${REPO}/git/matching-refs/heads/gh-readonly-queue/`], readToken);
       if (result.status !== 0) return { ok: false, entries: [] };
@@ -221,6 +225,16 @@ function viewFor(io, entry) {
   return view;
 }
 
+function rulesAllow(io) {
+  if (typeof io.ruleset !== 'function') return false;
+  try {
+    const got = io.ruleset();
+    return Boolean(got && got.ok !== false && got.ruleset && got.ruleset.known === true && got.ruleset.match === true);
+  } catch {
+    return false;
+  }
+}
+
 function chainFor(chain, baseTip) {
   if (!sha40(baseTip) || chain.baseTip !== baseTip) {
     chain.baseTip = sha40(baseTip) ? baseTip : null;
@@ -309,6 +323,11 @@ function runPublish(io, opts) {
       } else {
         const again = io.readSwitch();
         if (!again.ok || !again.enabled) return { code: again.ok ? 0 : 1, posted };
+        if (!rulesAllow(io)) {
+          process.stdout.write(`queue #${entry.pr} ruleset is not the main queue policy; no post\n`);
+          done.add(entry.sha);
+          continue;
+        }
         const wrote = io.writeRun(existing, entry.sha, status, conclusion, summary);
         if (!wrote.ok) return { code: 1, posted };
         sent.add(stamp);
@@ -333,6 +352,10 @@ function runPublish(io, opts) {
         const again = io.readSwitch();
         if (!again.ok) return { code: 1, posted };
         if (!again.enabled) return { code: 0, posted };
+        if (!rulesAllow(io)) {
+          process.stdout.write(`head #${head.pr} ruleset is not the main queue policy; no success posted\n`);
+          return { code: 0, posted };
+        }
         const wrote = io.writeRun(current.headRun, head.headSha, 'completed', 'success', summary);
         if (!wrote.ok) return { code: 1, posted };
         posted += 1;

@@ -83,16 +83,20 @@ function filesLookProtected(files) {
 }
 
 function classify(facts) {
+  if (facts.allowlistKnown !== true) return hold('author allow-list missing');
+  if (facts.scopeKnown !== true) return hold('team/scope unknown');
   if (facts.fork) return hold('fork');
+  if (facts.authorAllowed !== true) return hold('author not allow-listed');
   if (facts.author === 'dependabot[bot]') return hold('dependabot');
   if (!sha40(facts.head)) return hold('head sha');
   if (facts.base !== 'main') return hold('base is not main');
   const labels = (facts.labels || []).map((name) => String(name).toLowerCase());
   if (labels.some((name) => HOLD_LABELS.includes(name))) return hold('hold label');
   if (facts.labelsComplete === false) return hold('label list incomplete');
-  if (facts.teamScopeKnown !== true) return hold('team/scope unknown');
   if (facts.leaseKnown !== true) return hold('lease unknown');
-  if (facts.leaseHeld === true) return hold('lease');
+  if (facts.leaseHeld === true || labels.some((name) => name === 'lease' || name.startsWith('lease:'))) {
+    return hold('lease');
+  }
   if (facts.rulesetKnown !== true) return hold('ruleset policy unknown');
   if (facts.rulesetMatch !== true) return hold('ruleset policy mismatch');
   if (facts.scopeKnown === false) return hold('repository scope unknown');

@@ -34,6 +34,8 @@ function factsFrom(pr, detail) {
     draft: pr.isDraft === true,
     fork,
     scopeKnown: typeof queue.scopeKnown === 'boolean' ? queue.scopeKnown : typeof pr.isCrossRepository === 'boolean',
+    allowlistKnown: queue.allowlistKnown === true,
+    authorAllowed: queue.authorAllowed === true,
     teamScopeKnown: queue.teamScopeKnown === true,
     leaseKnown: queue.leaseKnown === true,
     leaseHeld: queue.leaseHeld === true,
@@ -197,6 +199,17 @@ function actOn(client, mode, action, write) {
     if (!again.enabled) {
       process.stdout.write('UNATTENDED_ENABLED is not true; stopping before the next write\n');
       return { ok: true, enabled: false, wrote };
+    }
+    let rulesNow;
+    try {
+      rulesNow = client.ruleset();
+    } catch (err) {
+      process.stderr.write(`#${row.pr.number} ruleset read failed; skipped\n`);
+      continue;
+    }
+    if (!rulesNow || !rulesNow.ok || !rulesNow.ruleset || rulesNow.ruleset.known !== true || rulesNow.ruleset.match !== true) {
+      process.stdout.write(`#${row.pr.number} ruleset is not the main queue policy; skipped\n`);
+      continue;
     }
     const result = write(row.pr, fresh);
     if (!result.ok) return { ...result, wrote };
