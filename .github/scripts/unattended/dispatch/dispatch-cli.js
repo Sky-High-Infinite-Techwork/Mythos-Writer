@@ -141,6 +141,13 @@ async function main(options = {}) {
   }
 
   if (command === 'plan') {
+    let findBoundPlanPass = null;
+    try {
+      // eslint-disable-next-line global-require
+      findBoundPlanPass = require('./plan-gate').findBoundPlanPass;
+    } catch {
+      findBoundPlanPass = null;
+    }
     const env = {
       MODE: process.env.MODE,
       REPO: repo,
@@ -150,6 +157,7 @@ async function main(options = {}) {
       MAIN_SHA: process.env.MAIN_SHA || '',
       client,
       activeClaimsFromRefs: (refs) => activeClaimsFromRefs(refs),
+      findBoundPlanPass,
     };
     return runDispatchPlanFn(env);
   }

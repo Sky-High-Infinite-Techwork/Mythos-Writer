@@ -9,7 +9,7 @@ This document is the design contract for implementation and grading. The prototy
 | PR | Title | Delivers |
 | --- | --- | --- |
 | 1 | `unattended: Phase 2 dispatcher core (atomic claims, cap, dry run)` | Plan doc, claim/lane/cap/sweep modules, build-order discovery, dry-run dispatcher workflow, unit tests including 20-way claim simulation |
-| 2 | Plan gate + build lanes | Opus plan + Fable grade loop, Claude Code / Codex lanes, trusted write job with path guard, fix-round orchestration stubs |
+| 2 | Plan gate + build lanes | `mythos-plan-gate.yml`, `mythos-build-lane.yml`, plan grade binding in `dispatch-run.js`, transport stubs to arm in canary |
 
 PR 1 must not mint provider tokens or run model steps. PR 2 must not relax PR 1 claim invariants.
 

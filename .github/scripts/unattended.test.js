@@ -884,6 +884,18 @@ function usesOf(doc) {
   return found;
 }
 
+test('mythos plan gate and build lane have no OpenRouter and split provider jobs', () => {
+  for (const name of ['mythos-plan-gate.yml', 'mythos-build-lane.yml']) {
+    const text = fs.readFileSync(path.join(WORKFLOWS, name), 'utf8');
+    assert.equal(text.includes('OPENROUTER'), false, name);
+    assert.equal(text.includes('pull_request_target'), false, name);
+    assert.deepEqual(loadWorkflow(name).permissions, {}, name);
+  }
+  const buildText = fs.readFileSync(path.join(WORKFLOWS, 'mythos-build-lane.yml'), 'utf8');
+  assert.equal(buildText.includes('MYTHOS_WRITE_APP_PRIVATE_KEY'), false);
+  assert.match(buildText, /anthropics\/claude-code-action@f3b070c88125d33dbae5653df5f143101d4ea9dc/);
+});
+
 test('mythos-dispatch schedule never claims; discover uses mythos-control', () => {
   const name = 'mythos-dispatch.yml';
   const text = fs.readFileSync(path.join(WORKFLOWS, name), 'utf8');
