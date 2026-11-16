@@ -21,11 +21,15 @@ function noPass(status) {
   return { schema: RESULT_SCHEMA, decision: 'no-pass', status: status || 'unavailable', repository: REPO };
 }
 
+function reviewRolesPass(roles) {
+  return Boolean(roles && roles.critic === 'pass' && roles.shield === 'pass' && roles.probe === 'pass');
+}
+
 function rolePass(row, role, head, runId, runAttempt) {
   return Boolean(row && row.schema === RESULT_SCHEMA && row.provider === role && row.status === 'pass'
     && row.repository === REPO && row.headSha === head && sha40(head)
     && String(row.runId) === String(runId) && String(row.runAttempt) === String(runAttempt)
-    && row.risk === 'low');
+    && row.risk === 'low' && reviewRolesPass(row.roles));
 }
 
 // A pass requires both isolated transports to pass the same low-risk head in this run.
@@ -46,8 +50,8 @@ function reduce(claude, codex, expected) {
     runId: String(expected.runId),
     runAttempt: String(expected.runAttempt),
     roles: {
-      claude: { provider: 'claude', status: 'pass' },
-      codex: { provider: 'codex', status: 'pass' },
+      claude: { provider: 'claude', status: 'pass', critic: 'pass', shield: 'pass', probe: 'pass' },
+      codex: { provider: 'codex', status: 'pass', critic: 'pass', shield: 'pass', probe: 'pass' },
     },
   };
 }
@@ -59,8 +63,8 @@ function acceptReducer(value, expected) {
   if (String(value.runId) !== String(expected.runId) || String(value.runAttempt) !== String(expected.runAttempt)) return null;
   if (value.appId && value.appId !== GATE_APP_ID) return null;
   const roles = value.roles || {};
-  if (!roles.claude || roles.claude.status !== 'pass' || roles.claude.provider !== 'claude') return null;
-  if (!roles.codex || roles.codex.status !== 'pass' || roles.codex.provider !== 'codex') return null;
+  if (!rolePass({ ...value, provider: 'claude', roles: roles.claude }, 'claude', value.headSha, expected.runId, expected.runAttempt)) return null;
+  if (!rolePass({ ...value, provider: 'codex', roles: roles.codex }, 'codex', value.headSha, expected.runId, expected.runAttempt)) return null;
   return value;
 }
 
@@ -103,4 +107,4 @@ function main(argv) {
 
 if (require.main === module) process.exit(main(process.argv));
 
-module.exports = { transportResult, reduce, acceptReducer, noPass };
+module.exports = { transportResult, reduce, acceptReducer, noPass, reviewRolesPass };

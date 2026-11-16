@@ -1,8 +1,8 @@
 name: Mythos final gate
 
-# Phase 1a. Schedule and workflow_dispatch from main only.
-# Model jobs do not review. The publisher mirrors an existing head success
-# onto a matching main queue commit. See docs/ops/unattended-flow.md.
+# Phase 1b. Schedule and workflow_dispatch from main only.
+# Model jobs review a normalized diff. The publisher posts a head success
+# only after the reducer accepts both transports. See docs/ops/unattended-flow.md.
 
 on:
   schedule:
@@ -91,6 +91,10 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      pull-requests: read
+    outputs:
+      pr: ${{ steps.pick.outputs.pr }}
+      head: ${{ steps.pick.outputs.head }}
     steps:
       - name: Confirm the trusted ref before checkout
         env:
@@ -107,23 +111,28 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
           submodules: false
-      - name: Select no head while the model transport is unapproved
-        run: |
-          set -euo pipefail
-          echo "Phase 1a selects no head. No model review runs, so this job cannot post a new tip success."
+      - name: Select one open main pull request
+        id: pick
+        env:
+          REPO: Sky-High-Infinite-Techwork/Mythos-Writer
+          PR_NUMBER: ${{ needs.admit.outputs.pr }}
+          READ_TOKEN: ${{ github.token }}
+        run: node .github/scripts/unattended/discover-run.js
 
   transport-claude:
     needs: [admit, discover]
     if: needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    environment: mythos-claude
     concurrency:
       group: mythos-unattended-model
       cancel-in-progress: false
     permissions:
       contents: read
+      pull-requests: read
     outputs:
-      result: ${{ steps.emit.outputs.result }}
+      result: ${{ steps.review.outputs.result }}
     steps:
       - name: Confirm the trusted ref before checkout
         env:
@@ -140,26 +149,33 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
           submodules: false
-      - name: Emit an unavailable Claude result
-        id: emit
+      - name: Install the Claude Code CLI
+        run: npm install --global @anthropic-ai/claude-code@2.1.325
+      - name: Review the normalized diff with Claude
+        id: review
         env:
           PROVIDER: claude
-          GITHUB_TOKEN: ''
-          GH_TOKEN: ''
-        run: node .github/scripts/unattended/gate-result.js transport
+          REPO: Sky-High-Infinite-Techwork/Mythos-Writer
+          PR_NUMBER: ${{ needs.discover.outputs.pr }}
+          HEAD_SHA: ${{ needs.discover.outputs.head }}
+          READ_TOKEN: ${{ github.token }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: node .github/scripts/unattended/transport-run.js
 
   transport-codex:
     needs: [admit, discover]
     if: needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    environment: mythos-codex
     concurrency:
       group: mythos-unattended-model
       cancel-in-progress: false
     permissions:
       contents: read
+      pull-requests: read
     outputs:
-      result: ${{ steps.emit.outputs.result }}
+      result: ${{ steps.review.outputs.result }}
     steps:
       - name: Confirm the trusted ref before checkout
         env:
@@ -176,13 +192,16 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
           submodules: false
-      - name: Emit an unavailable Codex result
-        id: emit
+      - name: Review the normalized diff with Codex
+        id: review
         env:
           PROVIDER: codex
-          GITHUB_TOKEN: ''
-          GH_TOKEN: ''
-        run: node .github/scripts/unattended/gate-result.js transport
+          REPO: Sky-High-Infinite-Techwork/Mythos-Writer
+          PR_NUMBER: ${{ needs.discover.outputs.pr }}
+          HEAD_SHA: ${{ needs.discover.outputs.head }}
+          READ_TOKEN: ${{ github.token }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: node .github/scripts/unattended/transport-run.js
 
   reduce:
     needs: [admit, transport-claude, transport-codex]
