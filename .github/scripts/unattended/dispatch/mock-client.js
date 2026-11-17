@@ -1,6 +1,13 @@
 'use strict';
 
-const { refUpdateCreate, refUpdateDelete, refUpdateRenew, UPDATE_REFS_REF_EXISTS, OID_HEX } = require('./refs-graphql');
+const {
+  refUpdateCreate,
+  refUpdateDelete,
+  refUpdateRenew,
+  UPDATE_REFS_REF_EXISTS,
+  OID_HEX,
+  ZERO_OID,
+} = require('./refs-graphql');
 
 function rollbackRefs(refs, commitMessages, snapshot, msgSnapshot) {
   refs.clear();
@@ -14,7 +21,10 @@ function validateRefUpdateRow(row) {
   if ('oid' in row) return { ok: false, message: 'unexpected_oid_key' };
   if (!row.name) return { ok: false, message: 'missing_name' };
   const { afterOid, beforeOid } = row;
-  if (afterOid !== undefined && afterOid !== '0000000000000000000000000000000000000000' && !OID_HEX.test(afterOid)) {
+  if (afterOid === undefined) {
+    return { ok: false, message: 'missing_after_oid' };
+  }
+  if (afterOid !== ZERO_OID && !OID_HEX.test(afterOid)) {
     return { ok: false, message: 'invalid_after_oid' };
   }
   if (beforeOid !== undefined && !OID_HEX.test(beforeOid)) {
@@ -60,6 +70,7 @@ function createMockRefClient(options = {}) {
     for (const row of refUpdates) {
       const check = validateRefUpdateRow(row);
       if (!check.ok) {
+        updateLog.push({ rejected: true, row, message: check.message });
         return { ok: false, fatal: true, errors: [{ message: check.message }], error: check.message };
       }
     }

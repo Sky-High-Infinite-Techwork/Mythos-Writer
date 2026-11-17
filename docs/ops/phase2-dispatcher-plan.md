@@ -77,7 +77,7 @@ refs/mythos/dispatch/lane-19
 
 1. Read `MYTHOS_DISPATCH_LANE_CAP` (`N`, fail-closed if not an integer 1–20).
 2. For the first free slot `i` in `0 .. N-1` with no live lease, call GraphQL **`updateRefs`** with **two** `refUpdates` in one request: `lane-{ii}` and `claim/{issue}-{slice}`, each `beforeOid` = zero OID, `afterOid` = lease commit SHA.
-3. Before the mutation, `GET` both refs (`lane-{ii}` and `claim/{issue}-{slice}`). GraphQL message **`Reference already exists`** ⇒ try next slot. Any other error ⇒ fail closed (exit non-zero). After ambiguous errors, `GET` the ref; treat as success only for idempotent **same-run** retry (`recoverSameSha`). **Release** of our claim pair always CAS-deletes with `beforeOid` set to the holder’s known `leaseSha` for **each** ref, not a fresh `GET`.
+3. Before the mutation, `GET` both refs (`lane-{ii}` and `claim/{issue}-{slice}`). GraphQL message **`Reference already exists`** ⇒ try next slot. Any other error ⇒ fail closed (exit non-zero). After ambiguous errors, `GET` both refs again and **CAS-release only the half we successfully created** in this run (never release a ref we do not hold). Treat as success only for idempotent **same-run** retry (`recoverSameSha`). **Release** of our claim pair always CAS-deletes with `beforeOid` set to the holder’s known `leaseSha` for **each** ref, not a fresh `GET`.
 4. Enforce **file disjointness** against live leases (normalized `files[]` in lease JSON).
 
 **Lease commit:** commit on `main`’s tree with message JSON (`schema: mythos-dispatch-lease/v1`):
@@ -98,7 +98,7 @@ refs/mythos/dispatch/lane-19
 
 Default TTL: **180** minutes (`MYTHOS_DISPATCH_LEASE_MINUTES`, clamped **30–360**). Must exceed longest lane job timeout plus margin.
 
-**Release / sweep / renew:** GraphQL `updateRefs` with `afterOid` = zero OID (delete) or a new lease commit SHA (renew). **`beforeOid` semantics:** **release** — the holder’s known `leaseSha` (never a pre-delete `GET`); **sweep** — the SHA observed when listing refs before delete; **renew** — current ref SHA with `force: true` because the new lease commit is a sibling of the old on `main`. Re-read `UNATTENDED_ENABLED` and `MYTHOS_DISPATCH_ENABLED` before **every** delete in sweep (lane-`NN` and `claim/*` only — never `attempts/`, `done/`, or `canary/`). **`renewLeaseHeartbeat`** CAS-updates **both** lane and claim refs in one `updateRefs` to a new lease commit with a fresh `expiresAt`; holders call **`assertHolderBeforePublish`**.
+**Release / sweep / renew:** GraphQL `updateRefs` with `afterOid` = zero OID (delete) or a new lease commit SHA (renew). **`beforeOid` semantics:** **release** — the holder’s known `leaseSha` (never a pre-delete `GET`); **sweep** — the SHA observed when listing refs before delete; **renew** — the holder’s known `leaseSha` with `force: true` because the new lease commit is a sibling of the old on `main`. Re-read `UNATTENDED_ENABLED` and `MYTHOS_DISPATCH_ENABLED` before **every** delete in sweep (lane-`NN` and `claim/*` only — never `attempts/`, `done/`, or `canary/`). **`renewLeaseHeartbeat`** CAS-updates **both** lane and claim refs in one `updateRefs` to a new lease commit with a fresh `expiresAt`; holders call **`assertHolderBeforePublish`**.
 
 **Identity:** `refs/mythos/dispatch/claim/{issue}-{slice}` (no body SHA in the ref name).
 
@@ -108,11 +108,11 @@ Default TTL: **180** minutes (`MYTHOS_DISPATCH_LEASE_MINUTES`, clamped **30–36
 
 ### Proof (unit test + live canary)
 
-The **mock** proves CAS-shaped `updateRefs` usage (including `afterOid` / `beforeOid`) and 20-way single-winner behavior in memory. It does **not** prove GitHub’s live GraphQL atomicity.
+The **mock** proves CAS-shaped **two-ref** `updateRefs` pair creates (lane + claim) and 20-way single-winner behavior in memory. It does **not** prove GitHub’s live GraphQL atomicity.
 
 **Unit:** Parallel `Promise.all` of 20 attempts on **one** slot → exactly **one** success, **19** `Reference already exists`, **0** fatal errors.
 
-**Live canary (`mythos-dispatch.yml`, `MODE=act`, switches on):** six parallel jobs race on `refs/mythos/dispatch/canary/scratch-shared`; exactly one `canary_win`, the rest record `Reference already exists`; `canary-verify` CAS-deletes the scratch ref.
+**Live canary (`mythos-dispatch.yml`, `MODE=act`, switches on):** six parallel jobs race on `refs/mythos/dispatch/canary/scratch-shared`; exactly one `canary_win`, the rest record `Reference already exists` — this proves **single-ref create** atomicity only. The **two-ref claim pair** is proven by the mock, not the live canary. `canary-verify` CAS-deletes the scratch ref when its SHA matches `MAIN_SHA`.
 
 ## Global lane cap across jobs
 

@@ -902,6 +902,12 @@ test('mythos-dispatch schedule never claims; discover uses mythos-control', () =
   );
   assert.equal(JSON.stringify(doc.jobs.discover).includes('MYTHOS_WRITE_APP_PRIVATE_KEY'), false);
   assert.match(text, /permission-contents: write/);
+  assert.match(text, /CANARY_OUTCOME_PATH: canary-outcome-\$\{\{ matrix\.index \}\}\.json/);
+  assert.match(text, /actions\/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4\.6\.0/);
+  assert.match(text, /actions\/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4\.3\.0/);
+  assert.equal(doc.jobs.canary.concurrency, undefined);
+  assert.equal(doc.jobs['canary-verify'].concurrency, undefined);
+  assert.match(text, /mythos-dispatch-canary/);
 });
 
 test('privileged workflows are inert controllers with pinned actions and split credentials', () => {

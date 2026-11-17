@@ -41,6 +41,9 @@ function refUpdateRenew(ref, afterOid, beforeOid) {
   if (beforeOid === ZERO_OID) {
     throw new Error('beforeOid must not be the zero OID for renew');
   }
+  if (afterOid === ZERO_OID) {
+    throw new Error('afterOid must not be the zero OID for renew');
+  }
   return { name: ref, afterOid, beforeOid, force: true };
 }
 

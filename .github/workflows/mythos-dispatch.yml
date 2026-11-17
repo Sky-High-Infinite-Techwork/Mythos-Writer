@@ -28,6 +28,10 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.event.inputs.canary_scratch == 'true' && format('mythos-dispatch-canary-{0}', github.ref) || format('mythos-dispatch-run-{0}', github.run_id) }}
+  cancel-in-progress: false
+
 jobs:
   admit:
     runs-on: ubuntu-latest
@@ -295,7 +299,7 @@ jobs:
         run: node .github/scripts/unattended/dispatch/dispatch-cli.js canary-ref
       - name: Upload canary leg outcome
         if: always()
-        uses: actions/upload-artifact@52084008e1a45ac05fc2b12e7b2d03f02b899a9b # v4.6.0
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: canary-outcome-${{ matrix.index }}
           path: canary-outcome-${{ matrix.index }}.json
@@ -324,12 +328,6 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
           submodules: false
-      - name: Download canary leg outcomes
-        uses: actions/download-artifact@52084008e1a45ac05fc2b12e7b2d03f02b899a9b # v4.6.0
-        with:
-          pattern: canary-outcome-*
-          merge-multiple: true
-          path: canary-outcomes
       - name: Mint a contents token for canary cleanup
         id: write
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -347,7 +345,15 @@ jobs:
           set -euo pipefail
           test "$MINTED" = "182422539"
           test "$MINTED" = "$EXPECTED"
+      - name: Download canary leg outcomes
+        id: download
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: canary-outcome-*
+          merge-multiple: true
+          path: canary-outcomes
       - name: Assert single scratch ref and CAS delete
+        if: ${{ always() && steps.write.outcome == 'success' }}
         env:
           MODE: act
           MAIN_SHA: ${{ github.sha }}

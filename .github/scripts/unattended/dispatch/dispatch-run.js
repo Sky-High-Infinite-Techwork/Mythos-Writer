@@ -281,14 +281,40 @@ async function runDispatchPlan(env) {
     const holder = await assertHolderBeforePublish(client, [claim.ref, claim.claimRef], leaseSha);
     if (!holder.ok) {
       console.error(JSON.stringify({ kind: 'dispatch_fail', issue: issueNumber, reason: holder.reason }));
-      await releaseClaimPair(client, { laneRef: claim.ref, claimRef: claim.claimRef, leaseSha }, reReadSwitch);
+      const releaseResults = await releaseClaimPair(
+        client,
+        { laneRef: claim.ref, claimRef: claim.claimRef, leaseSha },
+        reReadSwitch,
+      );
+      const releaseFailed = releaseResults.filter((row) => !row.ok);
+      if (releaseFailed.length) {
+        console.error(JSON.stringify({
+          kind: 'dispatch_release_failed',
+          laneRef: claim.ref,
+          claimRef: claim.claimRef,
+          results: releaseResults,
+        }));
+      }
       return 1;
     }
 
     const record = await recordDispatchAttempt(client, issueNumber, slice.index, { reReadSwitch, mintLeaseSha });
     if (!record.ok) {
       console.error(`dispatch: attempt record failed: ${record.reason}`);
-      await releaseClaimPair(client, { laneRef: claim.ref, claimRef: claim.claimRef, leaseSha }, reReadSwitch);
+      const releaseResults = await releaseClaimPair(
+        client,
+        { laneRef: claim.ref, claimRef: claim.claimRef, leaseSha },
+        reReadSwitch,
+      );
+      const releaseFailed = releaseResults.filter((row) => !row.ok);
+      if (releaseFailed.length) {
+        console.error(JSON.stringify({
+          kind: 'dispatch_release_failed',
+          laneRef: claim.ref,
+          claimRef: claim.claimRef,
+          results: releaseResults,
+        }));
+      }
       return 1;
     }
 
