@@ -205,3 +205,31 @@ test('cap read failure is exit 1', async () => {
 test('untrusted editor hold', () => {
   assert.equal(issueEditedByUntrusted([{ event: 'edited', actor: { login: 'evil' } }]).hold, true);
 });
+
+test('max attempts backoff hold', async () => {
+  const client = createMockRefClient();
+  const { attemptsRef, doneRef } = require('./dispatch/constants');
+  const { attemptsMessage } = require('./dispatch/slice-progress');
+  const ref = attemptsRef(1, 0);
+  const msg = attemptsMessage({ count: 5, lastAttemptAt: new Date().toISOString() });
+  client.setRefMessage(ref, msg);
+  await client.createRef({ ref, sha: 'b'.repeat(40) });
+  const { assessSliceProgress } = require('./dispatch/slice-progress');
+  const state = await assessSliceProgress(client, 1, 0);
+  assert.equal(state.hold, true);
+  assert.equal(state.reason, 'max_attempts');
+  assert.equal(doneRef(1, 0).includes('done/'), true);
+});
+
+test('CAS release race surfaces failure', async () => {
+  const client = createMockRefClient();
+  const { releaseRefCas } = require('./dispatch/claim');
+  const { releaseResultsOk } = require('./dispatch/slice-progress');
+  const ref = 'refs/mythos/dispatch/lane-00';
+  const leaseSha = 'c'.repeat(40);
+  client.refs.set(ref, leaseSha);
+  client.refs.set(ref, 'd'.repeat(40));
+  const del = await releaseRefCas(client, ref, leaseSha, null);
+  assert.equal(del.ok, false);
+  assert.equal(releaseResultsOk([del]), false);
+});

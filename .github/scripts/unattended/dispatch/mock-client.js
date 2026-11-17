@@ -87,8 +87,9 @@ function createMockRefClient(options = {}) {
     async createRefPair({ laneRef, claimRef: claimRefName, oid }) {
       return updateRefs([refUpdateCreate(laneRef, oid), refUpdateCreate(claimRefName, oid)]);
     },
-    async createRef({ ref, sha }) {
-      return updateRefs([refUpdateCreate(ref, sha)]);
+    async createRef({ ref, sha, oid }) {
+      const target = sha || oid;
+      return updateRefs([refUpdateCreate(ref, target)]);
     },
     async deleteRef({ ref, beforeOid }) {
       const sha = beforeOid || refs.get(ref);
@@ -96,7 +97,7 @@ function createMockRefClient(options = {}) {
     },
     async getRef({ ref }) {
       if (!exists(ref)) return { ok: false, status: 404 };
-      return { ok: true, ref, sha: refs.get(ref) };
+      return { ok: true, ref, sha: refs.get(ref), message: commitMessages.get(ref) || null };
     },
     async listRefs({ prefix }) {
       const rows = [];

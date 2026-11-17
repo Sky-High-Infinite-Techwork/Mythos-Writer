@@ -19,6 +19,11 @@ const {
 } = require('./claim');
 const { parseBuildOrderIssues, pickNextBuildOrderIssue } = require('./build-order');
 const { leaseMessage: formatLeaseMessage } = require('./constants');
+const {
+  assessSliceProgress,
+  recordDispatchAttempt,
+  releaseResultsOk,
+} = require('./slice-progress');
 
 function createDispatchClient(env) {
   return env.client || null;
@@ -155,6 +160,22 @@ async function runDispatchPlan(env) {
     runAttempt: env.RUN_ATTEMPT || 1,
   }, leaseMinutes);
 
+  const progress = await assessSliceProgress(client, issueNumber, slice.index);
+  if (!progress.ok) {
+    if (progress.hold) {
+      console.log(JSON.stringify({
+        kind: 'dispatch_hold',
+        issue: issueNumber,
+        slice: slice.index,
+        reason: progress.reason,
+        waitMinutes: progress.waitMinutes,
+      }));
+      return 0;
+    }
+    console.error('dispatch: slice progress read failed');
+    return 1;
+  }
+
   if (mode === 'dry-run') {
     const slotProbe = computeWouldClaimSlot(listed.refs, capParsed.value, leasePayload);
     const wouldSlot = slotProbe.ok ? slotProbe.slot : null;
@@ -190,6 +211,13 @@ async function runDispatchPlan(env) {
     return 1;
   }
 
+  const reReadSwitch = () => reReadSwitchFn(repo, controlToken, readSwitches);
+  const mintLeaseSha = async (message) => {
+    if (!client.createLeaseCommit || !env.MAIN_SHA) return null;
+    const created = await client.createLeaseCommit(message, env.MAIN_SHA);
+    return created.ok ? created.sha : null;
+  };
+
   const claim = await claimLaneAndSlice(client, {
     cap: capParsed.value,
     leaseSha,
@@ -198,13 +226,24 @@ async function runDispatchPlan(env) {
   });
   if (!claim.ok) {
     if (claim.fatal) return 1;
+    const record = await recordDispatchAttempt(client, issueNumber, slice.index, { reReadSwitch, mintLeaseSha });
+    if (!record.ok) console.error(`dispatch: attempt record failed: ${record.reason}`);
     console.log(JSON.stringify({ kind: 'dispatch_skip', reason: claim.reason }));
     return 0;
   }
 
   const holder = await assertHolderBeforePublish(client, [claim.ref, claim.claimRef], leaseSha);
   if (!holder.ok) {
-    await releaseClaimPair(client, { laneRef: claim.ref, claimRef: claim.claimRef, leaseSha }, null);
+    const released = await releaseClaimPair(
+      client,
+      { laneRef: claim.ref, claimRef: claim.claimRef, leaseSha },
+      reReadSwitch,
+    );
+    if (!releaseResultsOk(released)) {
+      console.error('dispatch: release after holder mismatch failed');
+      return 1;
+    }
+    await recordDispatchAttempt(client, issueNumber, slice.index, { reReadSwitch, mintLeaseSha });
     console.log(JSON.stringify({ kind: 'dispatch_skip', reason: holder.reason }));
     return 0;
   }
