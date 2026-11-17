@@ -97,36 +97,36 @@ function findOfficialPlan(comments) {
       commentId: comment.id,
       databaseId: comment.databaseId,
       author: canonicalAuthorLogin(comment.author),
-      editor: comment.editor ? canonicalAuthorLogin(comment.editor) : canonicalAuthorLogin(comment.author),
       body: comment.body,
       bodySha256,
       files: section.files,
       createdAt: comment.createdAt,
       updatedAt: comment.updatedAt,
-      lastEditedAt: comment.lastEditedAt || comment.updatedAt,
     };
   }
   return null;
 }
 
-function planCommentEditedByUntrusted(official) {
-  if (!official) return { hold: false };
+async function verifyPlanCommentEditors(client, issueNumber, official) {
+  if (!official || official.hold) return { hold: false };
   const created = official.createdAt || '';
-  const edited = official.lastEditedAt || official.updatedAt || created;
-  if (edited && created && edited !== created) {
-    const editor = official.editor || official.author;
-    const login = typeof editor === 'string' ? editor.trim().toLowerCase() : canonicalAuthorLogin(editor);
-    if (!OFFICIAL_PLAN_AUTHORS.has(login)) return { hold: true, editor: login };
-  }
-  return { hold: false };
-}
+  const updated = official.updatedAt || created;
+  const edited = Boolean(created && updated && updated !== created);
+  if (!edited) return { hold: false };
 
-/** @deprecated use planCommentEditedByUntrusted */
-function issueEditedByUntrusted(events) {
-  for (const ev of events || []) {
-    if (ev.event !== 'edited') continue;
-    const login = canonicalAuthorLogin(ev.actor || { login: ev.actor && ev.actor.login });
-    if (!OFFICIAL_PLAN_AUTHORS.has(login)) return { hold: true, editor: login };
+  if (!client || typeof client.issueCommentContentEdits !== 'function') {
+    return { hold: true, reason: 'editor_verify_unavailable' };
+  }
+  const edits = await client.issueCommentContentEdits({
+    issue: issueNumber,
+    commentDatabaseId: official.databaseId || official.commentId,
+  });
+  if (!edits.ok) return { hold: true, reason: 'editor_fetch_failed' };
+  for (const editor of edits.editors || []) {
+    const login = canonicalAuthorLogin(editor);
+    if (!OFFICIAL_PLAN_AUTHORS.has(login)) {
+      return { hold: true, reason: 'untrusted_editor', editor: login };
+    }
   }
   return { hold: false };
 }
@@ -137,6 +137,6 @@ module.exports = {
   stripFencedRegions,
   parseFilesSection,
   findOfficialPlan,
-  planCommentEditedByUntrusted,
-  issueEditedByUntrusted,
+  verifyPlanCommentEditors,
+  OFFICIAL_FILES_HEADING,
 };

@@ -3,9 +3,9 @@
 const { interpretSwitch } = require('../switch');
 const { gh } = require('../spawn');
 
-function readRepoVariable(repo, token, name) {
+function readRepoVariable(repo, token, name, ghFn = gh) {
   if (!token) return { ok: false, value: null, reason: 'no_token' };
-  const result = gh(
+  const result = ghFn(
     ['api', `repos/${repo}/actions/variables/${name}`, '--jq', '.value'],
     token,
   );
@@ -17,13 +17,13 @@ function readRepoVariable(repo, token, name) {
   return { ok: false, value: null, reason: 'access_denied' };
 }
 
-function readDispatchSwitches(repo, controlToken) {
-  const unattended = gh(
+function readDispatchSwitches(repo, controlToken, ghFn = gh) {
+  const unattended = ghFn(
     ['api', `repos/${repo}/actions/variables/UNATTENDED_ENABLED`, '--jq', '.value'],
     controlToken,
   );
   const u = interpretSwitch(unattended);
-  const dispatch = readRepoVariable(repo, controlToken, 'MYTHOS_DISPATCH_ENABLED');
+  const dispatch = readRepoVariable(repo, controlToken, 'MYTHOS_DISPATCH_ENABLED', ghFn);
   const enabled = u.ok && u.enabled === true
     && dispatch.ok && dispatch.value === 'true';
   if (!u.ok || !dispatch.ok) return { ok: false, enabled: false, unattended: u, dispatch };

@@ -97,7 +97,55 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
           error: 'invalid_sha',
         };
       }
-      return { ok: true, ref, sha };
+      const commit = gh(['api', `${base}/git/commits/${sha}`, '--jq', '.message'], readToken);
+      if (commit.status !== 0) {
+        const parsedHttp = httpStatusFromGh(commit.stderr, commit.status);
+        return {
+          ok: false,
+          status: parsedHttp ?? commit.status,
+          ghStatus: commit.status,
+          error: commit.stderr || 'commit_message_failed',
+        };
+      }
+      const message = commit.stdout.replace(/\r?\n$/, '');
+      return { ok: true, ref, sha, message };
+    },
+    async issueCommentContentEdits({ issue, commentDatabaseId }) {
+      if (!readToken) return { ok: false, editors: [], error: 'no_read_token' };
+      const issueNumber = parseInt(String(issue), 10);
+      const commentId = parseInt(String(commentDatabaseId), 10);
+      if (!Number.isInteger(issueNumber) || issueNumber < 1) {
+        return { ok: false, editors: [], error: 'bad_issue' };
+      }
+      if (!Number.isInteger(commentId) || commentId < 1) {
+        return { ok: false, editors: [], error: 'bad_comment' };
+      }
+      const query = [
+        'query($owner:String!,$name:String!,$number:Int!) {',
+        'repository(owner:$owner,name:$name) {',
+        'issue(number:$number) {',
+        'comments(first:100) {',
+        'nodes { databaseId userContentEdits(first:100) {',
+        'nodes { editor { login __typename } } } } } } } }',
+      ].join(' ');
+      const body = JSON.stringify({
+        query,
+        variables: { owner: target.owner, name: target.name, number: issueNumber },
+      });
+      const result = gh(['api', 'graphql', '--input', '-'], readToken, body);
+      if (result.status !== 0) {
+        return { ok: false, editors: [], error: result.stderr || 'graphql_http' };
+      }
+      const parsed = parseGhJson(result.stdout);
+      const nodes = parsed?.data?.repository?.issue?.comments?.nodes;
+      if (!Array.isArray(nodes)) {
+        return { ok: false, editors: [], error: 'graphql_parse' };
+      }
+      const row = nodes.find((n) => Number(n.databaseId) === commentId);
+      if (!row) return { ok: false, editors: [], error: 'comment_not_found' };
+      const edits = row.userContentEdits?.nodes || [];
+      const editors = edits.map((n) => (n.editor ? { login: n.editor.login, __typename: n.editor.__typename } : null)).filter(Boolean);
+      return { ok: true, editors };
     },
     async issueComments({ issue }) {
       if (!readToken) return { ok: false, comments: [], error: 'no_read_token' };
@@ -130,21 +178,6 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
         });
       }
       return { ok: true, comments };
-    },
-    async issueEvents({ issue }) {
-      if (!readToken) return { ok: false, events: [], error: 'no_read_token' };
-      const result = gh(
-        ['api', `${base}/issues/${issue}/events`, '--paginate', '--jq', '.[] | {event, actor: {login: .actor.login, type: .actor.type}}'],
-        readToken,
-      );
-      if (result.status !== 0) return { ok: false, events: [], error: result.stderr || 'events_failed' };
-      const events = [];
-      for (const line of (result.stdout || '').split('\n').filter(Boolean)) {
-        const row = parseGhJson(line);
-        if (!row) return { ok: false, events: [], error: 'event_parse' };
-        events.push(row);
-      }
-      return { ok: true, events };
     },
     async getIssue({ issue }) {
       if (!readToken) return { ok: false, error: 'no_read_token' };
@@ -263,10 +296,10 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
       listRefs: (args) => read.listRefs(args),
       getRef: (args) => read.getRef(args),
       issueComments: (args) => read.issueComments(args),
+      issueCommentContentEdits: (args) => read.issueCommentContentEdits(args),
       getIssue: (args) => read.getIssue(args),
       updateRefs: (updates) => write.updateRefs(updates),
       createRefPair: (args) => write.createRefPair(args),
-      issueEvents: (args) => read.issueEvents(args),
       createLeaseCommit: (msg, parent) => write.createLeaseCommit(msg, parent),
       renewRef: (args) => write.renewRef(args),
       renewRefPair: (args) => write.renewRefPair(args),
@@ -278,13 +311,8 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
   return { read, write, combined: legacyCombined() };
 }
 
-function createGhDispatchClient(readToken, writeToken, repo = REPO) {
-  return createDispatchClients({ repo, readToken, writeToken }).combined;
-}
-
 module.exports = {
   createDispatchClients,
-  createGhDispatchClient,
   parseGhJson,
   UPDATE_REFS_REF_EXISTS,
 };

@@ -14,8 +14,12 @@ const {
   findOfficialPlan,
   parseFilesSection,
   canonicalAuthorLogin,
-  issueEditedByUntrusted,
+  verifyPlanCommentEditors,
 } = require('./dispatch/official-plan');
+const {
+  issueEditedByUntrusted,
+  planCommentEditedByUntrusted,
+} = require('./dispatch/official-plan-test-helpers');
 const {
   globEntryOverlaps,
   diffWithinClaim,
@@ -23,16 +27,17 @@ const {
 } = require('./dispatch/slice');
 const {
   claimLaneAndSlice,
-  concurrentSlotRace,
   sweepDispatchRefs,
   buildLeasePayload,
   computeWouldClaimSlot,
-  renewLeaseHeartbeat,
   assertHolderBeforePublish,
 } = require('./dispatch/claim');
+const {
+  concurrentSlotRace,
+  renewLeaseHeartbeat,
+} = require('./dispatch/claim-test-helpers');
 const { claimRef: claimRefFn } = require('./dispatch/constants');
 const { globOrPathProtected, globsOverlap } = require('./dispatch/path-policy');
-const { planCommentEditedByUntrusted } = require('./dispatch/official-plan');
 const { createMockRefClient, createYieldingRaceClient } = require('./dispatch/mock-client');
 const { runDispatchPlan } = require('./dispatch/dispatch-run');
 const { activeClaimsFromRefs } = require('./dispatch/dispatch-helpers');
@@ -176,7 +181,6 @@ test('dry-run switches off', async () => {
     comments: [{ id: '1', databaseId: 1, author: { login: 'SkyyPlayz' }, body: '## Files\na.ts', createdAt: '1' }],
   });
   client.getIssue = async () => ({ ok: true, issue: { state: 'open' } });
-  client.issueEvents = async () => ({ ok: true, events: [] });
   const lines = [];
   const orig = process.stdout.write;
   process.stdout.write = (c) => { lines.push(String(c)); return true; };

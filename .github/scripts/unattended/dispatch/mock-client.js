@@ -169,14 +169,15 @@ function createMockRefClient(options = {}) {
     async getIssue() {
       return { ok: true, issue: { state: 'open' } };
     },
-    async issueEvents() {
-      return { ok: true, events: [] };
-    },
-    async renewRef({ ref, newAfterOid, beforeOid }) {
-      if (!newAfterOid || !OID_HEX.test(newAfterOid)) {
+    async renewRef({ ref, newAfterOid, newOid, beforeOid }) {
+      const afterOid = newAfterOid || newOid;
+      if (!afterOid || !OID_HEX.test(afterOid)) {
         return { ok: false, fatal: true, errors: [{ message: 'invalid_after_oid' }], error: 'invalid_after_oid' };
       }
-      return updateRefs([refUpdateRenew(ref, newAfterOid, beforeOid)]);
+      return updateRefs([refUpdateRenew(ref, afterOid, beforeOid)]);
+    },
+    async issueCommentContentEdits() {
+      return { ok: true, editors: [] };
     },
     async renewRefPair({ laneRef, claimRef, afterOid, beforeOid }) {
       return updateRefs([

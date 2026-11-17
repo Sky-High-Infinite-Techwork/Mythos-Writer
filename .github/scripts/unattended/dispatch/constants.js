@@ -15,7 +15,7 @@ const LEASE_SCHEMA = 'mythos-dispatch-lease/v1';
 const MAX_DISPATCH_ATTEMPTS = 5;
 const ZERO_OID = '0000000000000000000000000000000000000000';
 
-const OFFICIAL_PLAN_AUTHORS = new Set(['skyyplayz', 'skyhigh-mythos-bot']);
+const OFFICIAL_PLAN_AUTHORS = new Set(['skyyplayz', 'skyhigh-mythos-bot[bot]']);
 const OFFICIAL_FILES_HEADING = '## Files';
 
 function parseLaneCap(raw) {
@@ -47,10 +47,6 @@ function attemptsRef(issueNumber, sliceIndex) {
 
 function doneRef(issueNumber, sliceIndex) {
   return `${DISPATCH_REF_PREFIX}/done/${issueNumber}-${sliceIndex}`;
-}
-
-function scratchCanaryRef(matrixIndex) {
-  return `${DISPATCH_REF_PREFIX}/canary/scratch-${matrixIndex}`;
 }
 
 const CANARY_SCRATCH_SHARED_REF = `${DISPATCH_REF_PREFIX}/canary/scratch-shared`;
@@ -129,7 +125,6 @@ module.exports = {
   claimRef,
   attemptsRef,
   doneRef,
-  scratchCanaryRef,
   CANARY_SCRATCH_SHARED_REF,
   protectedLiteralPrefix,
   sha256Hex,

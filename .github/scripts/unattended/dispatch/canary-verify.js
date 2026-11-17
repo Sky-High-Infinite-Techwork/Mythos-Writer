@@ -74,11 +74,6 @@ async function runCanaryVerify(client, {
     return 1;
   }
 
-  if (!deletedRef) {
-    console.error(JSON.stringify({ kind: 'canary_verify_fail', reason: 'delete_required' }));
-    return 1;
-  }
-
   console.log(JSON.stringify({ kind: 'canary_verify_ok', deleted: deletedRef }));
   return 0;
 }

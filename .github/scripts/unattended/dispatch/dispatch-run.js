@@ -8,7 +8,7 @@ const {
   clampLeaseMinutes,
 } = require('./constants');
 const { readDispatchSwitches, readRepoVariable, actWritesEnabled } = require('./switch');
-const { findOfficialPlan, planCommentEditedByUntrusted } = require('./official-plan');
+const { findOfficialPlan, verifyPlanCommentEditors } = require('./official-plan');
 const { defaultSlices, anyProtectedInPlanFiles } = require('./slice');
 const {
   buildLeasePayload,
@@ -143,12 +143,12 @@ async function runDispatchPlan(env) {
       }));
       continue;
     }
-    const edit = planCommentEditedByUntrusted(official);
+    const edit = await verifyPlanCommentEditors(client, issueNumber, official);
     if (edit.hold) {
       console.log(JSON.stringify({
         kind: 'dispatch_hold',
         issue: issueNumber,
-        reason: 'untrusted_editor',
+        reason: edit.reason || 'untrusted_editor',
         editor: edit.editor,
       }));
       continue;
@@ -158,7 +158,15 @@ async function runDispatchPlan(env) {
       continue;
     }
 
-    if (mode === 'act' && findBoundPlanPass) {
+    if (mode === 'act') {
+      if (typeof findBoundPlanPass !== 'function') {
+        console.log(JSON.stringify({
+          kind: 'dispatch_hold',
+          issue: issueNumber,
+          reason: 'plan_not_graded',
+        }));
+        continue;
+      }
       const gradePass = findBoundPlanPass(comments.comments, official);
       if (!gradePass.ok) {
         console.log(JSON.stringify({

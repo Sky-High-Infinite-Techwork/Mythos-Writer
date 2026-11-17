@@ -114,11 +114,11 @@ async function recordDispatchAttempt(client, issue, slice, options = {}) {
   } else {
     oid = `a${String(count).padStart(39, '0')}`;
   }
-  if (client.setRefMessage) client.setRefMessage(ref, message);
   const upd = beforeOid === ZERO_OID
     ? await client.createRef({ ref, sha: oid })
     : await client.renewRef({ ref, newOid: oid, beforeOid });
   if (!upd.ok) return { ok: false, reason: upd.error || 'attempts_write_failed' };
+  if (client.setRefMessage) client.setRefMessage(ref, message);
   return { ok: true, count };
 }
 

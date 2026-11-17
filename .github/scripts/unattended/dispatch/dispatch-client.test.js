@@ -40,6 +40,24 @@ test('getRef uses git/ref URL and rejects bad sha', async () => {
   assert.match(calls.find((a) => a[1] && a[1].includes('/git/ref/')).join('|'), /git\/ref\/mythos/);
 });
 
+test('getRef returns commit message like listRefs', async () => {
+  const sha = 'd'.repeat(40);
+  const gh = (args) => {
+    const flat = args.map((a) => String(a));
+    if (flat.some((a) => a.includes('/git/ref/'))) {
+      return { status: 0, stdout: JSON.stringify({ object: { sha } }) };
+    }
+    if (flat.some((a) => a.includes('/git/commits/'))) {
+      return { status: 0, stdout: '{"schema":"mythos-dispatch-attempts/v1","count":1,"lastAttemptAt":"2026-01-01T00:00:00Z"}' };
+    }
+    return { status: 404, stdout: '' };
+  };
+  const { read } = createDispatchClients({ readToken: 'r', gh });
+  const got = await read.getRef({ ref: 'refs/mythos/dispatch/lane-00' });
+  assert.equal(got.ok, true);
+  assert.match(got.message, /mythos-dispatch-attempts\/v1/);
+});
+
 test('updateRefs sends JSON body with afterOid refUpdates', async () => {
   const calls = [];
   const gh = (args, token, input) => {

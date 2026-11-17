@@ -10,7 +10,7 @@ const {
   DEFAULT_LEASE_MINUTES,
   clampLeaseMinutes,
 } = require('./constants');
-const { refUpdateDelete, refUpdateRenew } = require('./refs-graphql');
+const { refUpdateDelete } = require('./refs-graphql');
 const { globsOverlap } = require('./path-policy');
 
 const REF_EXISTS = 'ref_exists';
@@ -55,12 +55,6 @@ function activeLeasesAll(refs, now = new Date()) {
     active.push({ ...row, lease, slot: index });
   }
   return active;
-}
-
-function activeLeasesWithinCap(refs, cap, now = new Date()) {
-  const parsed = parseLaneCap(cap);
-  const limit = parsed.ok ? parsed.value : 0;
-  return activeLeasesAll(refs, now).filter((row) => row.slot < limit);
 }
 
 function assertFilesDisjoint(files, activeLeases) {
@@ -230,24 +224,6 @@ async function sweepDispatchRefs(client, { now = new Date(), reReadSwitch } = {}
   return { ok: errors.length === 0, deleted, errors };
 }
 
-/** Renew lane + identity refs in one updateRefs to a new lease commit OID. */
-async function renewLeaseHeartbeat(client, { laneRef, claimRef: claimRefName, newLeaseSha, beforeOid }, reReadSwitch) {
-  if (reReadSwitch) {
-    const sw = await reReadSwitch();
-    if (!sw.ok || !sw.enabled) return { ok: false, reason: 'switch_off' };
-  }
-  const holder = await assertHolderBeforePublish(client, [laneRef, claimRefName], beforeOid);
-  if (!holder.ok) return { ok: false, reason: holder.reason };
-  const renew = client.renewRefPair
-    ? await client.renewRefPair({ laneRef, claimRef: claimRefName, afterOid: newLeaseSha, beforeOid })
-    : await client.updateRefs([
-      refUpdateRenew(laneRef, newLeaseSha, beforeOid),
-      refUpdateRenew(claimRefName, newLeaseSha, beforeOid),
-    ]);
-  if (!renew.ok) return { ok: false, reason: renew.error || 'renew_failed' };
-  return { ok: true };
-}
-
 async function assertHolderBeforePublish(client, refs, leaseSha) {
   for (const ref of refs || []) {
     const got = await client.getRef({ ref });
@@ -256,25 +232,12 @@ async function assertHolderBeforePublish(client, refs, leaseSha) {
   return { ok: true };
 }
 
-async function concurrentSlotRace(client, slotIndex, leaseSha, workers) {
-  const ref = slotRef(slotIndex);
-  const claimRefName = `${claimRef(0, 0)}-race`;
-  const attempts = await Promise.all(
-    Array.from({ length: workers }, () => tryCreateRefPair(client, { laneRef: ref, claimRef: claimRefName, leaseSha })),
-  );
-  const wins = attempts.filter((row) => row.ok);
-  const refExists = attempts.filter((row) => row.refExists || row.reason === REF_EXISTS).length;
-  const fatal = attempts.filter((row) => row.fatal).length;
-  return { ref, winners: wins.length, attempts, refExists, fatal };
-}
-
 module.exports = {
   REF_EXISTS,
   isSweepableRef,
   buildLeasePayload,
   computeWouldClaimSlot,
   activeLeasesAll,
-  activeLeasesWithinCap,
   assertFilesDisjoint,
   tryCreateRefPair,
   claimLaneAndSlice,
@@ -283,7 +246,5 @@ module.exports = {
   releaseOursIfHeld,
   listDispatchRefs,
   sweepDispatchRefs,
-  renewLeaseHeartbeat,
   assertHolderBeforePublish,
-  concurrentSlotRace,
 };

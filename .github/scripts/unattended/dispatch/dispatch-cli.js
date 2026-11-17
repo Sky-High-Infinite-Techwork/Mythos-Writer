@@ -115,9 +115,13 @@ async function main() {
   return 1;
 }
 
-main()
-  .then((code) => process.exit(code))
-  .catch((err) => {
-    console.error(err);
-    process.exit(1);
-  });
+if (require.main === module) {
+  main()
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
+}
+
+module.exports = { main, writeCanaryOutcome };
