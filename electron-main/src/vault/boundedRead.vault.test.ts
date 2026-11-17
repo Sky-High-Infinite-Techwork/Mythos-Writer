@@ -10,7 +10,14 @@ import {
   readVaultFileBounded,
 } from './boundedRead.js';
 import { VaultFileTooLargeError } from './limits.js';
-import { defaultDeps, resetVolumeProbeCache, type VolumeKind } from './noFollowWrite.js';
+import * as noFollowWriteModule from './noFollowWrite.js';
+import {
+  defaultDeps,
+  resetVolumeProbeCache,
+  type VolumeKind,
+} from './noFollowWrite.js';
+
+const PLATFORM_MARK = Symbol.for('mythos.noFollowPlatform');
 
 describe('readVaultFileBounded', () => {
   let tmp: string;
@@ -56,11 +63,44 @@ describe('readVaultFileBounded', () => {
     });
   }
 
-  function withProbe(kind: VolumeKind) {
+  function withProbe(kind: VolumeKind): NoFollowDepsWithCleanup {
     const marked = zeroInoFs();
-    (marked as Record<symbol, string>)[Symbol.for('mythos.noFollowPlatform')] = 'win32';
-    return { ...defaultDeps, fs: marked, platform: 'win32' as const, probeVolume: () => kind };
+    (marked as Record<symbol, string>)[PLATFORM_MARK] = 'win32';
+    const deps = { ...defaultDeps, fs: marked, platform: 'win32' as const, probeVolume: () => kind };
+    return {
+      deps,
+      cleanup() {
+        Reflect.deleteProperty(marked, PLATFORM_MARK);
+      },
+    };
   }
+
+  type NoFollowDepsWithCleanup = { deps: typeof defaultDeps; cleanup: () => void };
+
+  function sha(text: string): string {
+    return crypto.createHash('sha256').update(Buffer.from(text, 'utf-8')).digest('hex');
+  }
+
+  it('preserves content and sha256 across several short readSync calls', () => {
+    const rel = 'stories/s1/comments.json';
+    fs.mkdirSync(path.join(root, 'stories', 's1'), { recursive: true });
+    const body = 'abcdefghijklmnopqrstuvwxyz';
+    fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), body);
+    const realRead = fs.readSync.bind(fs);
+    const shortFs = new Proxy(fs, {
+      get(target, prop, receiver) {
+        if (prop === 'readSync') {
+          return (fd: number, buf: NodeJS.ArrayBufferView, offset: number, length: number, position: number | null) =>
+            realRead(fd, buf as Buffer, offset, Math.min(3, length), position);
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+    const read = readVaultFileBounded(root, rel, undefined, { deps: { ...defaultDeps, fs: shortFs } });
+    expect(read.content).toBe(body);
+    expect(read.sha256).toBe(sha(body));
+  });
 
   it('refuses a symlink leaf with Path not allowed and does not return outside bytes', () => {
     const outside = path.join(tmp, 'outside');
@@ -78,6 +118,7 @@ describe('readVaultFileBounded', () => {
       }
     })();
     expect(err).toBeTruthy();
+    expect((err as Error).message).toMatch(/symlink escape detected/);
     expect(sanitizeIpcError('vault:read', err).error).toBe('Path not allowed.');
     expect(sanitizeIpcError('vault:read', err).error).not.toBe('File not found.');
   });
@@ -97,6 +138,7 @@ describe('readVaultFileBounded', () => {
         return e;
       }
     })();
+    expect((err as Error).message).toMatch(/symlink escape detected/);
     expect(sanitizeIpcError('vault:read', err).error).toBe('Path not allowed.');
   });
 
@@ -159,6 +201,7 @@ describe('readVaultFileBounded', () => {
     const rel = 'stories/s1/comments.json';
     fs.mkdirSync(path.join(root, 'stories', 's1'), { recursive: true });
     const initial = 'a'.repeat(1020);
+    const literal = `${initial}bbb`;
     fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), initial);
     installBoundedReadHooks({
       afterFstat() {
@@ -167,8 +210,8 @@ describe('readVaultFileBounded', () => {
     });
     const read = readVaultFileBounded(root, rel, 1024);
     expect(read.content.length).toBe(1023);
-    const expected = crypto.createHash('sha256').update(Buffer.from(read.content, 'utf-8')).digest('hex');
-    expect(read.sha256).toBe(expected);
+    const expectedSha = crypto.createHash('sha256').update(Buffer.from(literal, 'utf-8')).digest('hex');
+    expect(read.sha256).toBe(expectedSha);
   });
 
   it('reports sha256 of non-ASCII bytes', () => {
@@ -211,32 +254,62 @@ describe('readVaultFileBounded', () => {
     });
 
     it('accepts zero ino on FAT volumes', () => {
-      const read = readVaultFileBounded(root, rel, undefined, { deps: withProbe('fat') });
-      expect(read.content).toBe('{"ok":true}');
+      const probe = withProbe('fat');
+      try {
+        const read = readVaultFileBounded(root, rel, undefined, { deps: probe.deps });
+        expect(read.content).toBe('{"ok":true}');
+      } finally {
+        probe.cleanup();
+      }
     });
 
-    it('refuses zero ino on local volumes with Path not allowed', () => {
-      const err = (() => {
-        try {
-          readVaultFileBounded(root, rel, undefined, { deps: withProbe('local') });
-          return null;
-        } catch (e) {
-          return e;
-        }
-      })();
-      expect(sanitizeIpcError('vault:read', err).error).toBe('Path not allowed.');
+    it('refuses zero ino on local volumes via zero file index guard', () => {
+      const probe = withProbe('local');
+      try {
+        const err = (() => {
+          try {
+            readVaultFileBounded(root, rel, undefined, { deps: probe.deps });
+            return null;
+          } catch (e) {
+            return e;
+          }
+        })();
+        expect((err as Error).message).toMatch(/zero file index unsupported/);
+        expect((err as Error).message).not.toMatch(/symlink escape detected/);
+        expect(sanitizeIpcError('vault:read', err).error).toBe('Path not allowed.');
+      } finally {
+        probe.cleanup();
+      }
     });
 
-    it('refuses zero ino on unknown volumes with Path not allowed', () => {
-      const err = (() => {
-        try {
-          readVaultFileBounded(root, rel, undefined, { deps: withProbe('unknown') });
-          return null;
-        } catch (e) {
-          return e;
-        }
-      })();
-      expect(sanitizeIpcError('vault:read', err).error).toBe('Path not allowed.');
+    it('refuses zero ino on unknown volumes via zero file index guard', () => {
+      const probe = withProbe('unknown');
+      try {
+        const err = (() => {
+          try {
+            readVaultFileBounded(root, rel, undefined, { deps: probe.deps });
+            return null;
+          } catch (e) {
+            return e;
+          }
+        })();
+        expect((err as Error).message).toMatch(/zero file index unsupported/);
+        expect(sanitizeIpcError('vault:read', err).error).toBe('Path not allowed.');
+      } finally {
+        probe.cleanup();
+      }
+    });
+
+    it('mutant: skipping zeroIndexPolicy would allow local zero-ino read', () => {
+      const probe = withProbe('local');
+      const policySpy = vi.spyOn(noFollowWriteModule, 'zeroIndexPolicy').mockReturnValue('skip');
+      try {
+        const read = readVaultFileBounded(root, rel, undefined, { deps: probe.deps });
+        expect(read.content).toBe('{"ok":true}');
+      } finally {
+        policySpy.mockRestore();
+        probe.cleanup();
+      }
     });
   });
 });

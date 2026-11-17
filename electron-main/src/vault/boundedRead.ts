@@ -6,7 +6,7 @@ import path from 'path';
 
 import { realSafePath } from '../vault.js';
 import { VaultFileTooLargeError, MAX_VAULT_FILE_BYTES } from './limits.js';
-import { defaultDeps } from './noFollowWrite.js';
+import { defaultDeps, zeroIndexPolicy } from './noFollowWrite.js';
 import type { NoFollowDeps } from './noFollowWrite.js';
 import { NOFOLLOW_MISMATCH, openNoFollow } from './noFollowOpen.js';
 import { isResolvedPathInsideRoot } from './safeVaultJoin.js';
@@ -38,17 +38,12 @@ export function installBoundedReadHooks(hooks: BoundedReadHooks | null): void {
   testHooks = hooks;
 }
 
-type ZeroPolicy = 'skip' | 'network' | 'unsupported';
-
-function zeroIndexPolicy(dir: string, deps: NoFollowDeps): ZeroPolicy {
-  const kind = deps.probeVolume(dir);
-  if (kind === 'fat') return 'skip';
-  if (kind === 'network') return 'network';
-  return 'unsupported';
-}
-
 function pathNotAllowed(rel: string): Error {
   return new Error(`Path traversal denied: ${rel} (symlink escape detected)`);
+}
+
+function zeroIndexRefused(rel: string): Error {
+  return new Error(`Path traversal denied: ${rel} (zero file index unsupported)`);
 }
 
 function idsMatch(
@@ -64,9 +59,9 @@ function idsMatch(
     }
     return;
   }
-  const policy = zeroIndexPolicy(dir, deps);
+  const policy = zeroIndexPolicy(dir, deps, false);
   if (policy === 'unsupported') {
-    throw pathNotAllowed(rel);
+    throw zeroIndexRefused(rel);
   }
   if (policy === 'network' && fd.size !== listed.size) {
     throw pathNotAllowed(rel);
@@ -144,7 +139,7 @@ export function readVaultFileBounded(
       const toRead = Math.min(chunkSize, maxBytes + 1 - total);
       const n = fsImpl.readSync(fd, scratch, 0, toRead, null);
       if (n === 0) break;
-      chunks.push(scratch.subarray(0, n));
+      chunks.push(Buffer.from(scratch.subarray(0, n)));
       total += n;
       if (total > maxBytes) {
         throw new VaultFileTooLargeError(total, maxBytes);

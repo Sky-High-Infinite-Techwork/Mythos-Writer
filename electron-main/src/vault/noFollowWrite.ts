@@ -291,7 +291,7 @@ function writeAll(
   else if (sync === 'fsync') fsImpl.fsyncSync(fd);
 }
 
-function zeroIndexPolicy(dir: string, deps: NoFollowDeps, exempt: boolean): ZeroPolicy {
+export function zeroIndexPolicy(dir: string, deps: NoFollowDeps, exempt: boolean): ZeroPolicy {
   if (exempt) return 'skip';
   const kind = deps.probeVolume(dir);
   if (kind === 'fat') return 'skip';

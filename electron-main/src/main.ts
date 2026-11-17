@@ -23,7 +23,9 @@ import {
   IPC_CHANNELS,
   type IpcHandlers,
   type VaultReadPayload,
-  type VaultReadResponse,
+  type StoryVaultReadResponse,
+  type NotesVaultReadResponse,
+  type NotesVaultWritePayload,
   type VaultWritePayload,
   type VaultWriteResponse,
   type BrainstormBoardWritePayload,
@@ -274,16 +276,10 @@ import {
   rejectSceneCrafterCardSuggestion,
 } from './sceneCrafterSuggestions.js';
 import { generateSceneCrafterSuggestions } from './archiveSceneCrafterGenerator.js';
-import {
-  wrapIpcHandler,
-  sanitizeIpcError,
-  SafeIpcError,
-  ipcErrorUserMessage,
-  IPC_ERROR_CATEGORIES,
-} from './ipcErrors.js';
+import { wrapIpcHandler, sanitizeIpcError, SafeIpcError } from './ipcErrors.js';
 import { exportFailureText, isNoFollowExportFailure, mapVaultWriteError } from './vault/writeErrors.js';
 import { readVaultFileBounded } from './vault/boundedRead.js';
-import { writeVaultFileCas, writeVaultPlainForIpc } from './vault/casWrite.js';
+import { vaultWriteForIpc } from './vault/casWrite.js';
 import { shouldInitializeVaultStorage } from './startupVaultPolicy.js';
 import { isExistingUsableVaultRoot, validatePathForVault } from './validatePathUtil.js';
 import { isUnderRoot } from './pathSecurity.js';
@@ -2194,30 +2190,14 @@ function writeDialogExport(filePath: string, data: Buffer | string): void {
   }
 }
 
-const CAS_HASH_RE = /^[0-9a-f]{64}$/;
-
 function writeVaultForIpc(
   root: string,
   rel: string,
   content: string,
   expectedSha256?: string | null,
 ): import('./ipc.js').VaultWriteResponse {
-  try {
-    safeVaultIpcJoin(root, rel, true);
-    if (expectedSha256 !== undefined) {
-      if (expectedSha256 !== null && !CAS_HASH_RE.test(expectedSha256)) {
-        return { path: rel, bytes: 0, error: ipcErrorUserMessage(IPC_ERROR_CATEGORIES.INVALID_INPUT) };
-      }
-      const written = writeVaultFileCas(root, rel, content, expectedSha256);
-      return { path: written.path, bytes: written.bytes, sha256: written.sha256 };
-    }
-    const written = writeVaultPlainForIpc(root, rel, content);
-    return { path: written.path, bytes: written.bytes, sha256: written.sha256 };
-  } catch (err) {
-    const mapped = mapVaultWriteError(err, rel);
-    if (mapped) return { path: rel, bytes: 0, error: mapped.error, code: mapped.code };
-    throw err;
-  }
+  safeVaultIpcJoin(root, rel, true);
+  return vaultWriteForIpc(root, rel, content, expectedSha256);
 }
 
 // ─── IPC Handlers ───
@@ -2225,7 +2205,7 @@ export const handlers: IpcHandlers = {
   // MYT-774: renderer-facing vault channels enforce dotfile + extension policy
   // at the IPC boundary. The low-level helpers also re-check traversal, so a
   // bad path is rejected twice independently.
-  [IPC_CHANNELS.VAULT_READ]: (payload: VaultReadPayload): VaultReadResponse => {
+  [IPC_CHANNELS.VAULT_READ]: (payload: VaultReadPayload): StoryVaultReadResponse => {
     ensureVaultDir();
     safeVaultIpcJoin(getVaultRoot(), payload.path, false);
     const { content, path: vaultPath, sha256 } = readVaultFileBounded(getVaultRoot(), payload.path);
@@ -6884,24 +6864,27 @@ export const handlers: IpcHandlers = {
   // helpers and case-sensitive resolution as the Story Vault handlers so
   // Linux CI behaves the same as macOS. Every endpoint goes through
   // safeVaultIpcJoin (`.md` / `.json` only, no dotfiles, no traversal).
-  [IPC_CHANNELS.NOTES_VAULT_READ]: (payload: VaultReadPayload): VaultReadResponse => {
+  [IPC_CHANNELS.NOTES_VAULT_READ]: (payload: VaultReadPayload): NotesVaultReadResponse => {
     ensureNotesVaultDir();
     const root = getNotesVaultRoot();
     safeVaultIpcJoin(root, payload.path, false);
     // SKY-9463: use retry variant — a freshly created file can be transiently
     // invisible on native Windows (antivirus / NTFS metadata propagation).
-    const { content, path: vaultPath } = readVaultFileWithRetry(root, payload.path);
-    return {
-      content,
-      path: vaultPath,
-      sha256: crypto.createHash('sha256').update(content, 'utf8').digest('hex'),
-    };
+    return readVaultFileWithRetry(root, payload.path);
   },
-  [IPC_CHANNELS.NOTES_VAULT_WRITE]: (payload: VaultWritePayload): VaultWriteResponse => {
+  [IPC_CHANNELS.NOTES_VAULT_WRITE]: (payload: NotesVaultWritePayload): VaultWriteResponse => {
     ensureNotesVaultDir();
-    const expected =
-      Object.prototype.hasOwnProperty.call(payload, 'expectedSha256') ? payload.expectedSha256 : undefined;
-    return writeVaultForIpc(getNotesVaultRoot(), payload.path, payload.content, expected);
+    const root = getNotesVaultRoot();
+    const rel = payload.path;
+    try {
+      safeVaultIpcJoin(root, rel, true);
+      const written = writeVaultFileAtomic(root, rel, payload.content);
+      return { path: written.path, bytes: written.bytes };
+    } catch (err) {
+      const mapped = mapVaultWriteError(err, rel);
+      if (mapped) return { path: rel, bytes: 0, error: mapped.error, code: mapped.code };
+      throw err;
+    }
   },
   // SKY-11360: brainstorm/idea board is agent state → Agent Vault, never the
   // Notes Vault. The main process owns the fixed relpath; the renderer only

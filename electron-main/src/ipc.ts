@@ -878,7 +878,7 @@ export async function ipcCall<TChannel extends keyof IpcHandlers, TPayload, TRes
 // ─── Type definitions ───
 
 export interface IpcHandlers {
-  [IPC_CHANNELS.VAULT_READ]: (payload: VaultReadPayload) => VaultReadResponse;
+  [IPC_CHANNELS.VAULT_READ]: (payload: VaultReadPayload) => StoryVaultReadResponse;
   [IPC_CHANNELS.VAULT_WRITE]: (payload: VaultWritePayload) => VaultWriteResponse;
   [IPC_CHANNELS.VAULT_LIST]: (payload: VaultListPayload) => VaultListResponse;
   [IPC_CHANNELS.VAULT_DELETE]: (payload: VaultDeletePayload) => VaultDeleteResponse;
@@ -1025,8 +1025,8 @@ export interface IpcHandlers {
   [IPC_CHANNELS.VAULT_GET_SYSTEM_PATHS]: (payload: never) => VaultGetSystemPathsResponse;
   [IPC_CHANNELS.VAULT_DETECT_LEGACY]: (payload: never) => VaultDetectLegacyResponse;
   [IPC_CHANNELS.VAULT_SET_PATHS]: (payload: VaultSetPathsPayload) => VaultSetPathsResponse;
-  [IPC_CHANNELS.NOTES_VAULT_READ]: (payload: VaultReadPayload) => VaultReadResponse;
-  [IPC_CHANNELS.NOTES_VAULT_WRITE]: (payload: VaultWritePayload) => VaultWriteResponse;
+  [IPC_CHANNELS.NOTES_VAULT_READ]: (payload: VaultReadPayload) => NotesVaultReadResponse;
+  [IPC_CHANNELS.NOTES_VAULT_WRITE]: (payload: NotesVaultWritePayload) => VaultWriteResponse;
   [IPC_CHANNELS.BRAINSTORM_BOARD_READ]: (payload: never) => BrainstormBoardReadResponse;
   [IPC_CHANNELS.BRAINSTORM_BOARD_WRITE]: (
     payload: BrainstormBoardWritePayload,
@@ -1347,16 +1347,28 @@ export interface VaultReadPayload {
   path: string;
 }
 
-export interface VaultReadResponse {
+/** Story Vault `vault:read` — includes bounded-read SHA-256. */
+export interface StoryVaultReadResponse {
   content: string;
   path: string;
   sha256: string;
+}
+
+/** Notes Vault `notesVault:read` — unchanged from main. */
+export interface NotesVaultReadResponse {
+  content: string;
+  path: string;
 }
 
 export interface VaultWritePayload {
   path: string;
   content: string;
   expectedSha256?: string | null;
+}
+
+export interface NotesVaultWritePayload {
+  path: string;
+  content: string;
 }
 
 export interface VaultWriteResponse {
