@@ -68,8 +68,13 @@ import {
 } from './noFollowWrite.js';
 import { resetNoFollowHooksForTests, setNoFollowHooksForTests } from './noFollowWrite.testing.js';
 import { installNoFollowTestHooks } from './noFollowWrite.js';
+import { hardlinksWork, installVaultOsCapabilityProbes } from './vaultOsGuards.testing.js';
 
 const PLATFORM_MARK = Symbol.for('mythos.noFollowPlatform');
+
+beforeAll(() => {
+  installVaultOsCapabilityProbes();
+});
 
 describe('writeVaultFileCas', () => {
   let tmp: string;
@@ -195,7 +200,9 @@ describe('writeVaultFileCas', () => {
     expect(fs.readFileSync(path.join(root, 'stories', 's1', 'comments.json'), 'utf8')).toBe(racer);
   });
 
-  it('F3b CAS STALE when beforeRename replaces the inode but keeps size and mtimeNs', () => {
+  it.skipIf(process.platform === 'win32')(
+    'F3b CAS STALE when beforeRename replaces the inode but keeps size and mtimeNs (skipped on win32: dev/ino inode identity differs from POSIX)',
+    () => {
     const body = '{"inode":1}';
     fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), body);
     const seen = readVaultFileBounded(root, rel);
@@ -217,9 +224,10 @@ describe('writeVaultFileCas', () => {
       expect((err as VaultWriteRefusedError).code).toBe('STALE');
     }
     expect(fs.readFileSync(path.join(root, 'stories', 's1', 'comments.json'), 'utf8')).toBe(body);
-  });
+  },
+  );
 
-  it('F5 HARD_LINK when an outside hard link appears just before rename', () => {
+  it.skipIf(() => !hardlinksWork)('F5 HARD_LINK when an outside hard link appears just before rename', () => {
     fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), '{"link":1}');
     const seen = readVaultFileBounded(root, rel);
     const outsideDir = path.join(tmp, 'f5-outside');
@@ -299,7 +307,7 @@ describe('writeVaultFileCas', () => {
     expect(fs.readFileSync(path.join(root, 'stories', 's1', 'comments.json'), 'utf8')).toBe('{"created":true}');
   });
 
-  it('refuses HARD_LINK when comments.json is hard-linked outside the vault', () => {
+  it.skipIf(() => !hardlinksWork)('refuses HARD_LINK when comments.json is hard-linked outside the vault', () => {
     const outsideDir = path.join(tmp, 'outside-link');
     fs.mkdirSync(outsideDir);
     const outside = path.join(outsideDir, 'outside.json');
@@ -584,7 +592,7 @@ describe('vaultWriteForIpc', () => {
     expect(fs.readFileSync(path.join(root, 'stories', 's1', 'comments.json'), 'utf8')).toBe(before);
   });
 
-  it('refuses nlink>1 through IPC mapping', () => {
+  it.skipIf(() => !hardlinksWork)('refuses nlink>1 through IPC mapping', () => {
     const outsideDir = path.join(tmp, 'outside-ipc');
     fs.mkdirSync(outsideDir);
     const inside = path.join(root, 'stories', 's1', 'comments.json');

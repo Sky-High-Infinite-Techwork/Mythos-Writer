@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import crypto from 'crypto';
 import fs from 'fs';
 import net from 'net';
@@ -17,8 +17,18 @@ import {
   resetVolumeProbeCache,
   type VolumeKind,
 } from './noFollowWrite.js';
+import {
+  expectVaultReadRefused,
+  expectVaultReadRefusedDirectory,
+  installVaultOsCapabilityProbes,
+  symlinksWork,
+} from './vaultOsGuards.testing.js';
 
 const PLATFORM_MARK = Symbol.for('mythos.noFollowPlatform');
+
+beforeAll(() => {
+  installVaultOsCapabilityProbes();
+});
 
 describe('readVaultFileBounded', () => {
   let tmp: string;
@@ -130,7 +140,7 @@ describe('readVaultFileBounded', () => {
     expect(read.sha256).toBe(sha(body));
   });
 
-  it('refuses an in-vault symlinked .md leaf', () => {
+  it.skipIf(() => !symlinksWork)('refuses an in-vault symlinked .md leaf', () => {
     fs.mkdirSync(path.join(root, 'stories', 's1'), { recursive: true });
     fs.writeFileSync(path.join(root, 'stories', 's1', 'real.md'), 'REAL');
     fs.symlinkSync(path.join(root, 'stories', 's1', 'real.md'), path.join(root, 'stories', 's1', 'link.md'));
@@ -146,7 +156,7 @@ describe('readVaultFileBounded', () => {
     expect(sanitizeIpcError('vault:read', err).error).toBe('Path not allowed.');
   });
 
-  it('refuses a symlink leaf with Path not allowed and does not return outside bytes', () => {
+  it.skipIf(() => !symlinksWork)('refuses a symlink leaf with Path not allowed and does not return outside bytes', () => {
     const outside = path.join(tmp, 'outside');
     fs.mkdirSync(outside);
     const secret = 'OUTSIDE-SECRET';
@@ -167,7 +177,7 @@ describe('readVaultFileBounded', () => {
     expect(sanitizeIpcError('vault:read', err).error).not.toBe('File not found.');
   });
 
-  it('refuses a symlink leaf when the platform is forced win32', () => {
+  it.skipIf(() => !symlinksWork)('refuses a symlink leaf when the platform is forced win32', () => {
     const outside = path.join(tmp, 'outside-win');
     fs.mkdirSync(outside);
     fs.writeFileSync(path.join(outside, 'comments.json'), 'SECRET');
@@ -186,7 +196,7 @@ describe('readVaultFileBounded', () => {
     expect(sanitizeIpcError('vault:read', err).error).toBe('Path not allowed.');
   });
 
-  it('R3 dev/ino: refuses parent symlink swap between pre-open lstat and open', () => {
+  it.skipIf(() => !symlinksWork)('R3 dev/ino: refuses parent symlink swap between pre-open lstat and open', () => {
     const outside = path.join(tmp, 'outside-parent');
     fs.mkdirSync(outside);
     fs.writeFileSync(path.join(outside, 'comments.json'), 'LEAKED');
@@ -210,7 +220,7 @@ describe('readVaultFileBounded', () => {
     expect(fs.readFileSync(path.join(outside, 'comments.json'), 'utf8')).toBe('LEAKED');
   });
 
-  it('R3 dev/ino: refuses when parent is swapped then restored but the fd is stale', () => {
+  it.skipIf(() => !symlinksWork)('R3 dev/ino: refuses when parent is swapped then restored but the fd is stale', () => {
     const outside = path.join(tmp, 'outside-parent');
     fs.mkdirSync(outside);
     fs.writeFileSync(path.join(outside, 'comments.json'), 'LEAKED');
@@ -308,8 +318,7 @@ describe('readVaultFileBounded', () => {
         return e;
       }
     })();
-    expect(sanitizeIpcError('vault:read', err).error).not.toBe('File not found.');
-    expect(sanitizeIpcError('vault:read', err).error).toBe('Invalid input.');
+    expectVaultReadRefusedDirectory(err);
   });
 
   it('throws ENOENT for a missing file', () => {
@@ -328,9 +337,7 @@ describe('readVaultFileBounded', () => {
         return e;
       }
     })();
-    expect(err).toBeTruthy();
-    expect((err as NodeJS.ErrnoException).code).toBe('EISDIR');
-    expect(sanitizeIpcError('vault:read', err).error).toBe('Invalid input.');
+    expectVaultReadRefusedDirectory(err);
   });
 
   it('F7 refuses when fstat reports non-regular file (isFile guard)', () => {
@@ -368,7 +375,9 @@ describe('readVaultFileBounded', () => {
     expect((err as NodeJS.ErrnoException).code).toBe('EISDIR');
   });
 
-  it('F7 refuses a Unix domain socket leaf', async () => {
+  it.skipIf(process.platform === 'win32')(
+    'F7 refuses a Unix domain socket leaf (skipped on win32: AF_UNIX listen path semantics differ)',
+    async () => {
     fs.mkdirSync(path.join(root, 'stories', 's1'), { recursive: true });
     const sockPath = path.join(root, 'stories', 's1', 'socket.json');
     const server = net.createServer();
@@ -385,10 +394,7 @@ describe('readVaultFileBounded', () => {
           return e;
         }
       })();
-      expect(err).toBeTruthy();
-      const reply = sanitizeIpcError('vault:read', err);
-      expect(['Invalid input.', 'Path not allowed.', 'Internal error.']).toContain(reply.error);
-      expect(reply.error).not.toBe('File not found.');
+      expectVaultReadRefused(err);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       try {
@@ -397,7 +403,8 @@ describe('readVaultFileBounded', () => {
         /* ignore */
       }
     }
-  });
+  },
+  );
 
   it.skip('F7 FIFO skipped: bounded no-follow open blocks on FIFO until a writer connects (Four-Q residual)', () => {
     /* documented residual — not exercised to avoid hanging the test runner */
