@@ -1030,3 +1030,67 @@ test('sweep deletes lane ref with unparseable lease expiresAt', async () => {
   assert.equal(swept.deleted.includes(lane), true);
   assert.equal(client.exists(lane), false);
 });
+
+test('act hold when no bound plan pass', async () => {
+  process.env.MYTHOS_GRADE_PUBLISHER_ALLOWLIST = 'skyhigh-mythos-bot';
+  const client = createMockRefClient();
+  client.issueComments = async () => ({
+    ok: true,
+    comments: [{ id: '1', databaseId: 1, author: { login: 'SkyyPlayz' }, body: '## Files\na.ts', createdAt: '1' }],
+  });
+  client.getIssue = async () => ({ ok: true, issue: { state: 'open' } });
+  const logs = [];
+  const orig = console.log;
+  console.log = (...args) => { logs.push(args.join(' ')); };
+  try {
+    const { findBoundPlanPass } = require('./dispatch/plan-gate');
+    const code = await runDispatchPlan({
+      MODE: 'act',
+      client,
+      readDispatchSwitchesFn: async () => ({ ok: true, enabled: true }),
+      readRepoVariableFn: async (_r, _t, n) => {
+        if (n === 'MYTHOS_BUILD_ORDER_ISSUES') return { ok: true, value: '1' };
+        if (n === 'MYTHOS_DISPATCH_LANE_CAP') return { ok: true, value: '5' };
+        return { ok: true, value: null };
+      },
+      findBoundPlanPass,
+      MAIN_SHA: 'a'.repeat(40),
+    });
+    assert.equal(code, 0);
+    assert.ok(logs.some((line) => line.includes('no_pass_grade')));
+  } finally {
+    console.log = orig;
+  }
+});
+
+test('dry-run holds without grade binding when gate wired', async () => {
+  process.env.MYTHOS_GRADE_PUBLISHER_ALLOWLIST = 'skyhigh-mythos-bot';
+  const client = createMockRefClient();
+  client.issueComments = async () => ({
+    ok: true,
+    comments: [{ id: '1', databaseId: 1, author: { login: 'SkyyPlayz' }, body: '## Files\na.ts', createdAt: '1' }],
+  });
+  client.getIssue = async () => ({ ok: true, issue: { state: 'open' } });
+  const { findBoundPlanPass } = require('./dispatch/plan-gate');
+  const logs = [];
+  const orig = console.log;
+  console.log = (...args) => { logs.push(args.join(' ')); };
+  try {
+    const code = await runDispatchPlan({
+      MODE: 'dry-run',
+      client,
+      readDispatchSwitchesFn: async () => ({ ok: true, enabled: false }),
+      readRepoVariableFn: async (_r, _t, n) => {
+        if (n === 'MYTHOS_BUILD_ORDER_ISSUES') return { ok: true, value: '1' };
+        if (n === 'MYTHOS_DISPATCH_LANE_CAP') return { ok: true, value: '5' };
+        return { ok: true, value: null };
+      },
+      findBoundPlanPass,
+    });
+    assert.equal(code, 0);
+    assert.ok(logs.some((l) => l.includes('no_pass_grade')));
+    assert.equal(logs.some((l) => l.includes('would_claim')), false);
+  } finally {
+    console.log = orig;
+  }
+});

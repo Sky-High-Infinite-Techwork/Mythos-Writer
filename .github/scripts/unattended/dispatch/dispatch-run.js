@@ -158,15 +158,15 @@ async function runDispatchPlan(env) {
       continue;
     }
 
-    if (mode === 'act') {
-      if (typeof findBoundPlanPass !== 'function') {
-        console.log(JSON.stringify({
-          kind: 'dispatch_hold',
-          issue: issueNumber,
-          reason: 'plan_not_graded',
-        }));
-        continue;
-      }
+    if (mode === 'act' && typeof findBoundPlanPass !== 'function') {
+      console.log(JSON.stringify({
+        kind: 'dispatch_hold',
+        issue: issueNumber,
+        reason: 'plan_not_graded',
+      }));
+      continue;
+    }
+    if (typeof findBoundPlanPass === 'function') {
       const gradePass = findBoundPlanPass(comments.comments, official);
       if (!gradePass.ok) {
         console.log(JSON.stringify({

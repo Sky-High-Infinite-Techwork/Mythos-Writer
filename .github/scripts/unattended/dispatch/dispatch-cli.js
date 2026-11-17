@@ -10,6 +10,11 @@ const { sweepDispatchRefs } = require('./claim');
 const { readDispatchSwitches, actWritesEnabled } = require('./switch');
 const { activeClaimsFromRefs } = require('./dispatch-helpers');
 const { runCanaryVerify } = require('./canary-verify');
+const { findBoundPlanPass } = require('./plan-gate');
+
+if (typeof findBoundPlanPass !== 'function') {
+  throw new Error('plan-gate findBoundPlanPass must be a function');
+}
 
 function parseGithubRunIds() {
   const runId = Number.parseInt(process.env.GITHUB_RUN_ID || '', 10);
@@ -141,13 +146,6 @@ async function main(options = {}) {
   }
 
   if (command === 'plan') {
-    let findBoundPlanPass = null;
-    try {
-      // eslint-disable-next-line global-require
-      findBoundPlanPass = require('./plan-gate').findBoundPlanPass;
-    } catch {
-      findBoundPlanPass = null;
-    }
     const env = {
       MODE: process.env.MODE,
       REPO: repo,

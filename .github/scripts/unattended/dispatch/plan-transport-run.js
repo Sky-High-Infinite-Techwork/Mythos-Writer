@@ -7,7 +7,6 @@ function emitUnavailable(role) {
     schema: GRADE_SCHEMA,
     role,
     status: 'unavailable',
-    verdict: 'REVISE',
     findings: ['transport not armed'],
   };
   process.stdout.write(`${JSON.stringify(payload)}\n`);

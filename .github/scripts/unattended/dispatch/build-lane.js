@@ -1,10 +1,84 @@
 'use strict';
 
-const { diffWithinClaim } = require('./slice');
-const { protectedPath } = require('./constants');
+const { diffWithinClaim } = require('./path-policy');
 
 const BUILD_ARTIFACT_SCHEMA = 'mythos-build-artifact/v1';
 const FIX_ROUND_PREFIX = 'mythos/fix-round';
+
+const CLEAN_REL_PATH = /^[\w@./\-+*?]+$/;
+
+function normalizeGitStatus(code) {
+  const letter = String(code || '').charAt(0);
+  switch (letter) {
+    case 'A': return 'added';
+    case 'M': return 'modified';
+    case 'D': return 'deleted';
+    case 'R': return 'renamed';
+    case 'C': return 'copied';
+    default: return null;
+  }
+}
+
+function validateDiffRow(row) {
+  if (!row || typeof row !== 'object') return { ok: false, reason: 'row' };
+  const status = row.status;
+  if (!status || typeof status !== 'string') return { ok: false, reason: 'status' };
+  const filename = row.filename;
+  if (!filename || typeof filename !== 'string' || !filename.trim()) {
+    return { ok: false, reason: 'path' };
+  }
+  if (!CLEAN_REL_PATH.test(filename) || filename.includes('..') || filename.startsWith('/') || filename.includes('\\')) {
+    return { ok: false, reason: 'path' };
+  }
+  const normalized = normalizeGitStatus(status) || (['added', 'modified', 'deleted', 'renamed', 'copied'].includes(status) ? status : null);
+  if (!normalized) return { ok: false, reason: 'status' };
+  if (normalized === 'renamed') {
+    const prev = row.previous_filename;
+    if (!prev || typeof prev !== 'string' || !prev.trim()) {
+      return { ok: false, reason: 'previous_filename' };
+    }
+    if (!CLEAN_REL_PATH.test(prev) || prev.includes('..') || prev.startsWith('/') || prev.includes('\\')) {
+      return { ok: false, reason: 'path' };
+    }
+  }
+  return {
+    ok: true,
+    row: {
+      filename,
+      status: normalized,
+      previous_filename: normalized === 'renamed' ? row.previous_filename : (row.previous_filename || ''),
+    },
+  };
+}
+
+function parseGitNameStatusOutput(text) {
+  const rows = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const parts = trimmed.split('\t');
+    if (parts.length < 2) return { ok: false, reason: 'parse' };
+    const code = parts[0];
+    let candidate;
+    if (code.startsWith('R') && parts.length >= 3) {
+      candidate = { status: 'renamed', previous_filename: parts[1], filename: parts[2] };
+    } else {
+      const status = normalizeGitStatus(code);
+      if (!status) return { ok: false, reason: 'status' };
+      candidate = { status, filename: parts[parts.length - 1], previous_filename: '' };
+    }
+    const check = validateDiffRow(candidate);
+    if (!check.ok) return check;
+    rows.push(check.row);
+  }
+  return { ok: true, rows };
+}
+
+function validateTrustedDiffAgainstClaim(nameStatusOutput, claimFiles) {
+  const parsed = parseGitNameStatusOutput(nameStatusOutput);
+  if (!parsed.ok) return parsed;
+  return diffWithinClaim(parsed.rows, claimFiles);
+}
 
 function parseBuildArtifact(stdout) {
   if (!stdout) return { ok: false, reason: 'empty' };
@@ -15,20 +89,15 @@ function parseBuildArtifact(stdout) {
     return { ok: false, reason: 'json' };
   }
   if (!data || data.schema !== BUILD_ARTIFACT_SCHEMA) return { ok: false, reason: 'schema' };
+  if (data.status !== 'ok') return { ok: false, reason: 'status' };
   if (!Array.isArray(data.changedFiles)) return { ok: false, reason: 'files' };
-  return { ok: true, artifact: data };
-}
-
-function validateArtifactAgainstClaim(artifact, claimFiles) {
-  const guard = diffWithinClaim(
-    artifact.changedFiles.map((name) => ({ filename: name })),
-    claimFiles,
-  );
-  if (!guard.ok) return guard;
-  for (const name of artifact.changedFiles) {
-    if (protectedPath(name)) return { ok: false, reason: `protected path: ${name}` };
+  for (const name of data.changedFiles) {
+    if (typeof name !== 'string' || !name.trim()) return { ok: false, reason: 'path' };
+    if (!CLEAN_REL_PATH.test(name) || name.includes('..') || name.startsWith('/') || name.includes('\\')) {
+      return { ok: false, reason: 'path' };
+    }
   }
-  return { ok: true };
+  return { ok: true, artifact: data };
 }
 
 function failedChecksForFixRound(checks, required) {
@@ -46,7 +115,9 @@ module.exports = {
   BUILD_ARTIFACT_SCHEMA,
   FIX_ROUND_PREFIX,
   parseBuildArtifact,
-  validateArtifactAgainstClaim,
+  parseGitNameStatusOutput,
+  validateDiffRow,
+  validateTrustedDiffAgainstClaim,
   failedChecksForFixRound,
   fullVerifyRequired,
 };

@@ -884,16 +884,37 @@ function usesOf(doc) {
   return found;
 }
 
+function jobHasProviderAndWriteSecret(doc) {
+  const offenders = [];
+  for (const [jobId, job] of Object.entries(doc.jobs || {})) {
+    let hasProvider = false;
+    let hasWrite = false;
+    const blob = JSON.stringify(job);
+    if (/CLAUDE_CODE_OAUTH_TOKEN|OPENAI_API_KEY|anthropic_api_key|claude_code_oauth_token/.test(blob)) {
+      hasProvider = true;
+    }
+    if (/MYTHOS_WRITE_APP_PRIVATE_KEY|create-github-app-token|permission-contents: write/.test(blob)) {
+      hasWrite = true;
+    }
+    if (hasProvider && hasWrite) offenders.push(jobId);
+  }
+  return offenders;
+}
+
 test('mythos plan gate and build lane have no OpenRouter and split provider jobs', () => {
   for (const name of ['mythos-plan-gate.yml', 'mythos-build-lane.yml']) {
     const text = fs.readFileSync(path.join(WORKFLOWS, name), 'utf8');
+    const doc = loadWorkflow(name);
     assert.equal(text.includes('OPENROUTER'), false, name);
     assert.equal(text.includes('pull_request_target'), false, name);
-    assert.deepEqual(loadWorkflow(name).permissions, {}, name);
+    assert.deepEqual(doc.permissions, {}, name);
+    assert.deepEqual(jobHasProviderAndWriteSecret(doc), [], name);
   }
   const buildText = fs.readFileSync(path.join(WORKFLOWS, 'mythos-build-lane.yml'), 'utf8');
   assert.equal(buildText.includes('MYTHOS_WRITE_APP_PRIVATE_KEY'), false);
   assert.match(buildText, /anthropics\/claude-code-action@f3b070c88125d33dbae5653df5f143101d4ea9dc/);
+  assert.match(buildText, /claude_code_oauth_token:/);
+  assert.match(buildText, /github_token: \$\{\{ github\.token \}\}/);
 });
 
 test('mythos-dispatch schedule never claims; discover uses mythos-control', () => {
