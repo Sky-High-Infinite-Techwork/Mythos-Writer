@@ -1,12 +1,10 @@
 name: Mythos automation contracts
 
-# Secretless checks for the unattended workflows. This job may run pull request
-# and merge-queue code because it has no App key, provider key, or private token.
+# Secretless checks for the unattended workflows. Invoked from ci.yml (Tier 1)
+# so contracts are not run twice on pull_request. Callable only — no direct PR trigger.
 
 on:
-  pull_request:
-  merge_group:
-    types: [checks_requested]
+  workflow_call:
 
 permissions: {}
 

@@ -62,7 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      run-e2e: ${{ steps.filter-e2e.outputs.run-e2e }}
+      run-e2e: ${{ steps.resolve-e2e.outputs.run-e2e }}
       docs-only: ${{ steps.filter-docs.outputs.docs-only }}
     steps:
       - uses: actions/checkout@v7
@@ -71,6 +71,7 @@ jobs:
 
       - name: Detect changed paths — docs-only (path-based CI optimization)
         id: filter-docs
+        continue-on-error: true
         uses: dorny/paths-filter@v4
         with:
           filters: |
@@ -91,6 +92,7 @@ jobs:
       # docs-only's positive OR patterns need the default 'some' quantifier.
       - name: Detect changed paths — run-e2e (path-based CI optimization)
         id: filter-e2e
+        continue-on-error: true
         uses: dorny/paths-filter@v4
         with:
           predicate-quantifier: every
@@ -101,6 +103,24 @@ jobs:
               - '!README*'
               - '!.gitignore'
               - '!.github/ISSUE_TEMPLATE/**'
+
+      # merge_group / push / dispatch lack a normal PR diff base; never fail Tier 1 here.
+      - name: Resolve run-e2e output
+        id: resolve-e2e
+        run: |
+          if [ "${{ github.event_name }}" = "merge_group" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "${{ github.event_name }}" = "push" ]; then
+            echo "run-e2e=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "${{ steps.filter-e2e.outcome }}" != "success" ] || [ -z "${{ steps.filter-e2e.outputs.run-e2e }}" ]; then
+            echo "paths-filter run-e2e step did not produce a value — defaulting run-e2e=true (fail-safe for required queue runs)."
+            echo "run-e2e=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "run-e2e=${{ steps.filter-e2e.outputs.run-e2e }}" >> "$GITHUB_OUTPUT"
+
+  contracts:
+    uses: ./.github/workflows/mythos-automation-contracts.yml
 
   lint:
     needs: [setup]
@@ -269,9 +289,8 @@ jobs:
 
   # PLAN-058 L8 Ivy carve-out: 12k oracle-class survivor walks, equivalence-strength
   # shards, and the HARD-2 nested-Downloads region-map walks run here in parallel
-  # with `unit`. Two vitest shards, each with its own 40-minute cap and its own
-  # temp dir. The required `ci` aggregator needs both shards and fails unless
-  # each one succeeded (a failed, skipped, or missing shard fails `ci`).
+  # Tier 2 (after tier1-gate). Two vitest shards, each with its own 40-minute cap.
+  # The required `ci` aggregator needs both shards and fails unless each succeeded.
   # Unit excludes this nested-Downloads file and the oracle-class / equivalence shards.
   oracle-sweeps:
     name: oracle-sweeps (${{ matrix.shard }}/2)
@@ -327,10 +346,7 @@ jobs:
     # runner disconnects on the DOCX/EPUB step (step 8), which cancelled the whole
     # job and prevented all 4 e2e shards from running. Fuzz coverage is retained
     # via fuzz.yml (runs on every PR as a separate non-blocking check).
-    # SKY-8081: flattened dependency chain — now only needs [setup] instead of
-    # [lint, typecheck, unit], allowing this job to run in parallel with those
-    # checks and reducing wall-clock latency from ~4 hops to ~3 hops.
-    # Tiered CI: build-electron is Tier 2 — starts only after tier1-gate.
+    # Tier 2: starts only after tier1-gate (SKY-2425 fuzz moved to fuzz.yml).
     needs: [tier1-gate]
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -389,7 +405,7 @@ jobs:
     needs: [build-electron, paths-filter]
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: needs.paths-filter.outputs.run-e2e == 'true'
+    if: needs.paths-filter.outputs.run-e2e == 'true' || github.event_name == 'merge_group' || github.event_name == 'merge_group'
 
     steps:
       - uses: actions/checkout@v7
@@ -559,7 +575,7 @@ jobs:
     needs: [build-electron, paths-filter]
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: needs.paths-filter.outputs.run-e2e == 'true'
+    if: needs.paths-filter.outputs.run-e2e == 'true' || github.event_name == 'merge_group'
 
     steps:
       - uses: actions/checkout@v7
@@ -756,7 +772,7 @@ jobs:
     needs: [build-electron, paths-filter]
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: needs.paths-filter.outputs.run-e2e == 'true'
+    if: needs.paths-filter.outputs.run-e2e == 'true' || github.event_name == 'merge_group'
 
     steps:
       - uses: actions/checkout@v7
@@ -934,7 +950,7 @@ jobs:
     needs: [build-electron, paths-filter]
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: needs.paths-filter.outputs.run-e2e == 'true'
+    if: needs.paths-filter.outputs.run-e2e == 'true' || github.event_name == 'merge_group'
 
     steps:
       - uses: actions/checkout@v7
@@ -1128,14 +1144,14 @@ jobs:
   tier1-gate:
     name: tier1-gate
     # Tier 1 barrier: every cheap check must pass before Tier 2 jobs are scheduled.
-    needs: [setup, lint, typecheck, unit, diff-guard, paths-filter]
+    needs: [setup, lint, typecheck, unit, diff-guard, paths-filter, contracts]
     runs-on: ubuntu-latest
     if: always()
     timeout-minutes: 5
     steps:
       - name: Tier 1 checks passed
         run: |
-          tier1="${{ needs.setup.result }} ${{ needs.lint.result }} ${{ needs.typecheck.result }} ${{ needs.unit.result }} ${{ needs.diff-guard.result }} ${{ needs.paths-filter.result }}"
+          tier1="${{ needs.setup.result }} ${{ needs.lint.result }} ${{ needs.typecheck.result }} ${{ needs.unit.result }} ${{ needs.diff-guard.result }} ${{ needs.paths-filter.result }} ${{ needs.contracts.result }}"
           echo "Tier 1 results: $tier1"
           for r in $tier1; do
             if [ "$r" != "success" ]; then
@@ -1498,7 +1514,7 @@ jobs:
   notes-windows:
     needs: [tier1-gate]
     if: always()
-    runs-on: windows-latest
+    runs-on: ${{ needs.tier1-gate.result == 'success' && 'windows-latest' || 'ubuntu-latest' }}
     # SKY-10910: raised from 20 — this job grew 5 more native-Windows Electron
     # launches (vault delete/migration/quit-teardown x4 lifecycle specs) to
     # close the Windows CI vault-lifecycle gap.
