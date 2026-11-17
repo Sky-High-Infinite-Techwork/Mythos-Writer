@@ -7,6 +7,7 @@ const {
   parseGradeTransport,
   formatPlanGradePass,
   findBoundPlanPass,
+  gradePublisherAllowlistConflictsWithPlanAuthors,
   reduceGradeResults,
   parsePlanGradePassMarker,
   GRADE_SCHEMA,
@@ -16,14 +17,15 @@ const { decidePublish } = require('./plan-gate-publish');
 
 const PASS_SHA = 'a'.repeat(64);
 const plan = { databaseId: 42, commentId: '42', bodySha256: PASS_SHA };
+const GRADE_BOT = 'mythos-independent-grade-bot';
 
-process.env.MYTHOS_GRADE_PUBLISHER_ALLOWLIST = 'skyhigh-mythos-bot';
+process.env.MYTHOS_GRADE_PUBLISHER_ALLOWLIST = GRADE_BOT;
 
 function passComment(overrides = {}) {
   const body = formatPlanGradePass({ planCommentId: 42, planBodySha256: PASS_SHA });
   return {
     body,
-    author: { login: 'SkyHigh-Mythos-Bot' },
+    author: { login: 'Mythos-Independent-Grade-Bot' },
     ...overrides,
   };
 }
@@ -36,6 +38,8 @@ test('parseGradeTransport requires ok status and findings array', () => {
     role: 'grade',
     verdict: 'PASS',
     findings: [],
+    planCommentId: 42,
+    planBodySha256: PASS_SHA,
   };
   assert.equal(parseGradeTransport(JSON.stringify(passBody)).ok, true);
   assert.equal(parseGradeTransport(JSON.stringify({
@@ -44,7 +48,10 @@ test('parseGradeTransport requires ok status and findings array', () => {
     role: 'grade',
     verdict: 'REVISE',
     findings: ['x'],
+    planCommentId: 42,
+    planBodySha256: PASS_SHA,
   })).verdict, 'REVISE');
+  assert.equal(parseGradeTransport(JSON.stringify({ ...passBody, planCommentId: undefined })).ok, false);
   assert.equal(parseGradeTransport(JSON.stringify({ ...passBody, role: 'plan' })).ok, false);
 });
 
@@ -66,25 +73,45 @@ test('bound pass fails closed without allowlist', () => {
   process.env.MYTHOS_GRADE_PUBLISHER_ALLOWLIST = prior;
 });
 
+test('grade allowlist must not include official plan authors', () => {
+  const prior = process.env.MYTHOS_GRADE_PUBLISHER_ALLOWLIST;
+  process.env.MYTHOS_GRADE_PUBLISHER_ALLOWLIST = 'skyyplayz,skyhigh-mythos-bot';
+  assert.equal(gradePublisherAllowlistConflictsWithPlanAuthors(), true);
+  assert.equal(findBoundPlanPass([passComment()], plan).reason, 'grade_publisher_plan_author_overlap');
+  process.env.MYTHOS_GRADE_PUBLISHER_ALLOWLIST = prior;
+});
+
+test('plan author cannot self-post pass even when on grade allowlist', () => {
+  const prior = process.env.MYTHOS_GRADE_PUBLISHER_ALLOWLIST;
+  process.env.MYTHOS_GRADE_PUBLISHER_ALLOWLIST = 'skyyplayz,skyhigh-mythos-bot';
+  const overlap = findBoundPlanPass([passComment()], plan);
+  assert.equal(overlap.ok, false);
+  assert.equal(overlap.reason, 'grade_publisher_plan_author_overlap');
+  const body = formatPlanGradePass({ planCommentId: 42, planBodySha256: PASS_SHA });
+  process.env.MYTHOS_GRADE_PUBLISHER_ALLOWLIST = GRADE_BOT;
+  assert.equal(findBoundPlanPass([{ body, author: { login: 'SkyyPlayz' } }], plan).ok, false);
+  process.env.MYTHOS_GRADE_PUBLISHER_ALLOWLIST = prior;
+});
+
 test('plan author cannot self-post pass when not on grade allowlist', () => {
-  process.env.MYTHOS_GRADE_PUBLISHER_ALLOWLIST = 'skyhigh-mythos-bot';
+  process.env.MYTHOS_GRADE_PUBLISHER_ALLOWLIST = GRADE_BOT;
   const body = formatPlanGradePass({ planCommentId: 42, planBodySha256: PASS_SHA });
   assert.equal(findBoundPlanPass([{ body, author: { login: 'SkyyPlayz' } }], plan).ok, false);
 });
 
 test('binding negative wrong sha comment id author', () => {
   const body = formatPlanGradePass({ planCommentId: 42, planBodySha256: PASS_SHA });
-  assert.equal(findBoundPlanPass([{ body, author: { login: 'SkyHigh-Mythos-Bot' } }], {
+  assert.equal(findBoundPlanPass([{ body, author: { login: 'Mythos-Independent-Grade-Bot' } }], {
     ...plan,
     bodySha256: 'b'.repeat(64),
   }).ok, false);
   assert.equal(findBoundPlanPass([{
     body: formatPlanGradePass({ planCommentId: 99, planBodySha256: PASS_SHA }),
-    author: { login: 'SkyHigh-Mythos-Bot' },
+    author: { login: 'Mythos-Independent-Grade-Bot' },
   }], plan).ok, false);
   assert.equal(findBoundPlanPass([{
     body,
-    author: { login: 'SkyHigh-Mythos-Bot' },
+    author: { login: 'Mythos-Independent-Grade-Bot' },
   }], plan).ok, true);
   assert.equal(findBoundPlanPass([{
     body,
@@ -114,6 +141,8 @@ test('decidePublish binds plan revision', () => {
     role: 'grade',
     verdict: 'PASS',
     findings: [],
+    planCommentId: 42,
+    planBodySha256: PASS_SHA,
   });
   const ok = decidePublish({
     gradeStdout: stdout,

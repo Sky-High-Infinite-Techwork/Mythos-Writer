@@ -28,6 +28,9 @@ function decidePublish({ gradeStdout, plan, planCommentId, planBodySha256, maxRo
   if (!grade.ok || grade.role !== GRADE_ROLE) {
     return { ok: false, reason: 'grade_unavailable' };
   }
+  if (!planRevisionMatches(plan, grade.planCommentId, grade.planBodySha256)) {
+    return { ok: false, reason: 'plan_revision_mismatch' };
+  }
   if (Number(planCommentId) !== Number(plan.databaseId || plan.commentId) || plan.bodySha256 !== sha) {
     return { ok: false, reason: 'plan_revision_mismatch' };
   }

@@ -1,6 +1,6 @@
 'use strict';
 
-const { sha256Hex } = require('./constants');
+const { sha256Hex, OFFICIAL_PLAN_AUTHORS } = require('./constants');
 const { canonicalAuthorLogin } = require('./official-plan');
 
 const GRADE_SCHEMA = 'mythos-plan-grade/v1';
@@ -20,6 +20,15 @@ function parseGradePublisherAllowlist(raw) {
 
 function gradePublisherAllowlist() {
   return parseGradePublisherAllowlist(process.env.MYTHOS_GRADE_PUBLISHER_ALLOWLIST);
+}
+
+function gradePublisherAllowlistConflictsWithPlanAuthors() {
+  const allowlist = gradePublisherAllowlist();
+  if (!allowlist) return false;
+  for (const author of OFFICIAL_PLAN_AUTHORS) {
+    if (allowlist.has(author)) return true;
+  }
+  return false;
 }
 
 function isTrustedGradePublisher(author) {
@@ -44,7 +53,18 @@ function parseGradeTransport(stdout) {
   if (data.role !== GRADE_ROLE) return { ok: false, reason: 'role' };
   if (!Array.isArray(data.findings)) return { ok: false, reason: 'findings' };
   if (data.verdict !== GRADE_PASS && data.verdict !== GRADE_REVISE) return { ok: false, reason: 'verdict' };
-  return { ok: true, role: data.role, verdict: data.verdict, findings: data.findings };
+  const planCommentId = data.planCommentId;
+  const planBodySha256 = data.planBodySha256;
+  if (!Number.isInteger(planCommentId) || planCommentId < 1) return { ok: false, reason: 'plan_comment_id' };
+  if (!/^[0-9a-f]{64}$/i.test(String(planBodySha256 || ''))) return { ok: false, reason: 'plan_body_sha' };
+  return {
+    ok: true,
+    role: data.role,
+    verdict: data.verdict,
+    findings: data.findings,
+    planCommentId,
+    planBodySha256: String(planBodySha256).toLowerCase(),
+  };
 }
 
 function formatPlanGradePass({ planCommentId, planBodySha256 }) {
@@ -66,6 +86,9 @@ function parsePlanGradePassMarker(body) {
 
 function findBoundPlanPass(comments, plan) {
   if (!plan) return { ok: false, reason: 'no_plan' };
+  if (gradePublisherAllowlistConflictsWithPlanAuthors()) {
+    return { ok: false, reason: 'grade_publisher_plan_author_overlap' };
+  }
   const allowlist = gradePublisherAllowlist();
   if (!allowlist) return { ok: false, reason: 'grade_publisher_unconfigured' };
   const passes = (comments || [])
@@ -73,7 +96,12 @@ function findBoundPlanPass(comments, plan) {
       marker: parsePlanGradePassMarker(c.body),
       author: c.author,
     }))
-    .filter((row) => row.marker && isTrustedGradePublisher(row.author));
+    .filter((row) => {
+      if (!row.marker || !isTrustedGradePublisher(row.author)) return false;
+      const login = canonicalAuthorLogin(row.author);
+      if (OFFICIAL_PLAN_AUTHORS.has(login)) return false;
+      return true;
+    });
   const planId = Number(plan.databaseId || plan.commentId);
   const match = passes.find(
     (row) => row.marker.planCommentId === planId
@@ -112,6 +140,7 @@ module.exports = {
   PASS_MARKER_PREFIX,
   parseGradePublisherAllowlist,
   gradePublisherAllowlist,
+  gradePublisherAllowlistConflictsWithPlanAuthors,
   isTrustedGradePublisher,
   parseGradeTransport,
   formatPlanGradePass,

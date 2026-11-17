@@ -4,8 +4,24 @@ const { diffWithinClaim } = require('./path-policy');
 
 const BUILD_ARTIFACT_SCHEMA = 'mythos-build-artifact/v1';
 const FIX_ROUND_PREFIX = 'mythos/fix-round';
+const BUILD_REF_PREFIX = 'refs/mythos/build/';
 
-const CLEAN_REL_PATH = /^[\w@./\-+*?]+$/;
+const CLEAN_REL_PATH = /^[\w@./\-]+$/;
+
+function buildLaneRef(provider) {
+  const lane = String(provider || 'claude').trim().toLowerCase();
+  if (lane !== 'claude' && lane !== 'codex') {
+    throw new Error(`unsupported build lane: ${provider}`);
+  }
+  return `${BUILD_REF_PREFIX}${lane}`;
+}
+
+function pathSegmentsValid(relPath) {
+  for (const seg of String(relPath || '').split('/')) {
+    if (!seg || seg === '.' || seg === '..') return false;
+  }
+  return true;
+}
 
 function normalizeGitStatus(code) {
   const letter = String(code || '').charAt(0);
@@ -27,7 +43,15 @@ function validateDiffRow(row) {
   if (!filename || typeof filename !== 'string' || !filename.trim()) {
     return { ok: false, reason: 'path' };
   }
-  if (!CLEAN_REL_PATH.test(filename) || filename.includes('..') || filename.startsWith('/') || filename.includes('\\')) {
+  if (
+    !CLEAN_REL_PATH.test(filename)
+    || filename.includes('..')
+    || filename.startsWith('/')
+    || filename.includes('\\')
+    || !pathSegmentsValid(filename)
+    || filename.includes('*')
+    || filename.includes('?')
+  ) {
     return { ok: false, reason: 'path' };
   }
   const normalized = normalizeGitStatus(status) || (['added', 'modified', 'deleted', 'renamed', 'copied'].includes(status) ? status : null);
@@ -37,7 +61,15 @@ function validateDiffRow(row) {
     if (!prev || typeof prev !== 'string' || !prev.trim()) {
       return { ok: false, reason: 'previous_filename' };
     }
-    if (!CLEAN_REL_PATH.test(prev) || prev.includes('..') || prev.startsWith('/') || prev.includes('\\')) {
+    if (
+      !CLEAN_REL_PATH.test(prev)
+      || prev.includes('..')
+      || prev.startsWith('/')
+      || prev.includes('\\')
+      || !pathSegmentsValid(prev)
+      || prev.includes('*')
+      || prev.includes('?')
+    ) {
       return { ok: false, reason: 'path' };
     }
   }
@@ -93,7 +125,15 @@ function parseBuildArtifact(stdout) {
   if (!Array.isArray(data.changedFiles)) return { ok: false, reason: 'files' };
   for (const name of data.changedFiles) {
     if (typeof name !== 'string' || !name.trim()) return { ok: false, reason: 'path' };
-    if (!CLEAN_REL_PATH.test(name) || name.includes('..') || name.startsWith('/') || name.includes('\\')) {
+    if (
+      !CLEAN_REL_PATH.test(name)
+      || name.includes('..')
+      || name.startsWith('/')
+      || name.includes('\\')
+      || !pathSegmentsValid(name)
+      || name.includes('*')
+      || name.includes('?')
+    ) {
       return { ok: false, reason: 'path' };
     }
   }
@@ -113,7 +153,10 @@ function fullVerifyRequired(failedFixChecks) {
 
 module.exports = {
   BUILD_ARTIFACT_SCHEMA,
+  BUILD_REF_PREFIX,
   FIX_ROUND_PREFIX,
+  buildLaneRef,
+  pathSegmentsValid,
   parseBuildArtifact,
   parseGitNameStatusOutput,
   validateDiffRow,

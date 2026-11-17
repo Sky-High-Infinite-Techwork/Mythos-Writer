@@ -910,11 +910,35 @@ test('mythos plan gate and build lane have no OpenRouter and split provider jobs
     assert.deepEqual(doc.permissions, {}, name);
     assert.deepEqual(jobHasProviderAndWriteSecret(doc), [], name);
   }
+  const buildDoc = loadWorkflow('mythos-build-lane.yml');
   const buildText = fs.readFileSync(path.join(WORKFLOWS, 'mythos-build-lane.yml'), 'utf8');
-  assert.equal(buildText.includes('MYTHOS_WRITE_APP_PRIVATE_KEY'), false);
+  for (const jobId of ['build', 'build-codex']) {
+    assert.equal(JSON.stringify(buildDoc.jobs[jobId] || {}).includes('MYTHOS_WRITE_APP_PRIVATE_KEY'), false, jobId);
+  }
+  assert.match(buildText, /MYTHOS_WRITE_APP_PRIVATE_KEY/);
   assert.match(buildText, /anthropics\/claude-code-action@f3b070c88125d33dbae5653df5f143101d4ea9dc/);
   assert.match(buildText, /claude_code_oauth_token:/);
   assert.match(buildText, /github_token: \$\{\{ github\.token \}\}/);
+});
+
+test('mythos-build-lane trusted push and publish contracts', () => {
+  const name = 'mythos-build-lane.yml';
+  const text = fs.readFileSync(path.join(WORKFLOWS, name), 'utf8');
+  const doc = loadWorkflow(name);
+  for (const [jobId, job] of Object.entries(doc.jobs)) {
+    const blob = JSON.stringify(job);
+    assert.equal(/anthropic_api_key/i.test(blob), false, jobId);
+    assert.notEqual((job.permissions || {})['id-token'], 'write', jobId);
+  }
+  assert.match(text, /actions\/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4\.6\.0/);
+  assert.match(text, /actions\/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4\.3\.0/);
+  assert.match(String(doc.jobs.publish.if), /!cancelled\(\)/);
+  assert.match(String(doc.jobs.publish.if), /needs\.push-build\.result == 'success'/);
+  assert.equal(text.includes('if: always()'), false);
+  assert.equal(doc.jobs['push-build'].environment, 'mythos-writer');
+  assert.match(text, /build-lane-push-run\.js/);
+  assert.match(text, /refs\/mythos\/build\//);
+  assert.match(text, /MYTHOS_DISPATCH_MAIN_SHA/);
 });
 
 test('mythos-dispatch schedule never claims; discover uses mythos-control', () => {
