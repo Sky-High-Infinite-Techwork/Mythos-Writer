@@ -1,0 +1,836 @@
+### Local verification (round 5)
+
+```
+TAP version 13
+# Subtest: parseLaneCap rejects zero and non-numeric
+ok 1 - parseLaneCap rejects zero and non-numeric
+  ---
+  duration_ms: 0.852614
+  type: 'test'
+  ...
+# Subtest: clampLeaseMinutes bounds 30..360
+ok 2 - clampLeaseMinutes bounds 30..360
+  ---
+  duration_ms: 0.104854
+  type: 'test'
+  ...
+# Subtest: untrusted author ignored for official plan
+ok 3 - untrusted author ignored for official plan
+  ---
+  duration_ms: 0.190805
+  type: 'test'
+  ...
+# Subtest: bot canonicalization
+ok 4 - bot canonicalization
+  ---
+  duration_ms: 0.074177
+  type: 'test'
+  ...
+# Subtest: empty \#\# Files holds
+ok 5 - empty \#\# Files holds
+  ---
+  duration_ms: 0.319983
+  type: 'test'
+  ...
+# Subtest: \#\# Files inside fences ignored
+ok 6 - \#\# Files inside fences ignored
+  ---
+  duration_ms: 0.759459
+  type: 'test'
+  ...
+# Subtest: glob prefix overlap rule
+ok 7 - glob prefix overlap rule
+  ---
+  duration_ms: 0.145661
+  type: 'test'
+  ...
+# Subtest: reject dotdot paths
+ok 8 - reject dotdot paths
+  ---
+  duration_ms: 0.089858
+  type: 'test'
+  ...
+# Subtest: previous_filename must be in claim
+ok 9 - previous_filename must be in claim
+  ---
+  duration_ms: 0.267745
+  type: 'test'
+  ...
+# Subtest: 20-way concurrent race
+ok 10 - 20-way concurrent race
+  ---
+  duration_ms: 3.116433
+  type: 'test'
+  ...
+dispatch: lane cap read failed
+{"kind":"would_claim","mode":"dry-run","issue":1,"slice":0,"files":["a.ts"],"laneCap":5,"slot":0,"holdReason":null,"planCommentId":1,"planBodySha256":"dc590864fbffe9db297bfa2217f20a8c90330e431ae2ddffcbdaf67a3107906f"}
+dispatch: list refs failed
+{"kind":"would_claim","mode":"dry-run","issue":1,"slice":0,"files":["a.ts"],"laneCap":5,"slot":0,"holdReason":null,"planCommentId":1,"planBodySha256":"dc590864fbffe9db297bfa2217f20a8c90330e431ae2ddffcbdaf67a3107906f"}
+dispatch: switch read failed
+{"kind":"would_claim","mode":"dry-run","issue":1,"slice":0,"files":["a.ts"],"laneCap":5,"slot":0,"holdReason":null,"planCommentId":1,"planBodySha256":"dc590864fbffe9db297bfa2217f20a8c90330e431ae2ddffcbdaf67a3107906f"}
+{"kind":"canary_verify_ok","deleted":"refs/mythos/dispatch/canary/scratch-shared"}
+{"kind":"canary_verify_fail","deleted":"refs/mythos/dispatch/canary/scratch-shared","ok":false,"reason":"index_duplicate","wins":1,"loses":0,"fatals":0,"total":6}
+# Subtest: yielding mock race
+ok 11 - yielding mock race
+  ---
+  duration_ms: 167.447566
+  type: 'test'
+  ...
+# Subtest: lane cap five
+ok 12 - lane cap five
+  ---
+  duration_ms: 1.514521
+  type: 'test'
+  ...
+# Subtest: identity ref is issue-slice only
+ok 13 - identity ref is issue-slice only
+  ---
+  duration_ms: 0.069907
+  type: 'test'
+  ...
+# Subtest: sweep stale and unparseable
+ok 14 - sweep stale and unparseable
+  ---
+  duration_ms: 0.472114
+  type: 'test'
+  ...
+# Subtest: cap above N does not block lower slots
+ok 15 - cap above N does not block lower slots
+  ---
+  duration_ms: 0.142126
+  type: 'test'
+  ...
+# Subtest: dry-run switches off
+ok 16 - dry-run switches off
+  ---
+  duration_ms: 2.531633
+  type: 'test'
+  ...
+# Subtest: cap read failure is exit 1
+ok 17 - cap read failure is exit 1
+  ---
+  duration_ms: 0.637862
+  type: 'test'
+  ...
+# Subtest: untrusted editor hold
+ok 18 - untrusted editor hold
+  ---
+  duration_ms: 0.085088
+  type: 'test'
+  ...
+# Subtest: max attempts backoff hold
+ok 19 - max attempts backoff hold
+  ---
+  duration_ms: 0.227414
+  type: 'test'
+  ...
+# Subtest: renewLeaseHeartbeat updates lane and claim together
+ok 20 - renewLeaseHeartbeat updates lane and claim together
+  ---
+  duration_ms: 0.223082
+  type: 'test'
+  ...
+# Subtest: assertHolderBeforePublish detects lost lease
+ok 21 - assertHolderBeforePublish detects lost lease
+  ---
+  duration_ms: 0.074614
+  type: 'test'
+  ...
+# Subtest: claim identity ref taken yields slice_already_claimed
+ok 22 - claim identity ref taken yields slice_already_claimed
+  ---
+  duration_ms: 0.201769
+  type: 'test'
+  ...
+# Subtest: sweep leaves live lease and attempts refs
+ok 23 - sweep leaves live lease and attempts refs
+  ---
+  duration_ms: 0.172544
+  type: 'test'
+  ...
+# Subtest: cap lowering counts high slot toward overlap
+ok 24 - cap lowering counts high slot toward overlap
+  ---
+  duration_ms: 0.166068
+  type: 'test'
+  ...
+# Subtest: dry-run performs zero ref writes
+ok 25 - dry-run performs zero ref writes
+  ---
+  duration_ms: 1.068305
+  type: 'test'
+  ...
+# Subtest: glob-vs-glob overlap frontend patterns
+ok 26 - glob-vs-glob overlap frontend patterns
+  ---
+  duration_ms: 0.065083
+  type: 'test'
+  ...
+# Subtest: glob star-star is protected in plan
+ok 27 - glob star-star is protected in plan
+  ---
+  duration_ms: 0.029367
+  type: 'test'
+  ...
+# Subtest: list refs failure fails dispatch dry-run
+ok 28 - list refs failure fails dispatch dry-run
+  ---
+  duration_ms: 0.145383
+  type: 'test'
+  ...
+# Subtest: plan comment untrusted editor hold
+ok 29 - plan comment untrusted editor hold
+  ---
+  duration_ms: 0.040904
+  type: 'test'
+  ...
+# Subtest: CAS release race surfaces failure
+ok 30 - CAS release race surfaces failure
+  ---
+  duration_ms: 0.495737
+  type: 'test'
+  ...
+# Subtest: lane full when live leases meet cap regardless of slot index
+ok 31 - lane full when live leases meet cap regardless of slot index
+  ---
+  duration_ms: 0.216948
+  type: 'test'
+  ...
+# Subtest: trusted string editor passes
+ok 32 - trusted string editor passes
+  ---
+  duration_ms: 0.051712
+  type: 'test'
+  ...
+# Subtest: ref renew update sets force
+ok 33 - ref renew update sets force
+  ---
+  duration_ms: 0.095874
+  type: 'test'
+  ...
+# Subtest: protected glob prefixes
+ok 34 - protected glob prefixes
+  ---
+  duration_ms: 0.203776
+  type: 'test'
+  ...
+# Subtest: plan path rejects bracket globs
+ok 35 - plan path rejects bracket globs
+  ---
+  duration_ms: 0.091116
+  type: 'test'
+  ...
+# Subtest: renew pair CAS mismatch rolls back both
+ok 36 - renew pair CAS mismatch rolls back both
+  ---
+  duration_ms: 0.104437
+  type: 'test'
+  ...
+# Subtest: assertHolder missing ref
+ok 37 - assertHolder missing ref
+  ---
+  duration_ms: 0.044115
+  type: 'test'
+  ...
+# Subtest: sweep keeps done canary and live claim
+ok 38 - sweep keeps done canary and live claim
+  ---
+  duration_ms: 0.1826
+  type: 'test'
+  ...
+# Subtest: dry-run with switches on performs zero writes
+ok 39 - dry-run with switches on performs zero writes
+  ---
+  duration_ms: 0.264071
+  type: 'test'
+  ...
+# Subtest: switch read failure exits 1 on dry-run
+ok 40 - switch read failure exits 1 on dry-run
+  ---
+  duration_ms: 0.11287
+  type: 'test'
+  ...
+# Subtest: path policy reject table
+ok 41 - path policy reject table
+  ---
+  duration_ms: 0.096089
+  type: 'test'
+  ...
+# Subtest: negative glob vs glob overlap
+ok 42 - negative glob vs glob overlap
+  ---
+  duration_ms: 0.033713
+  type: 'test'
+  ...
+# Subtest: mock rejects oid key in updateRefs
+ok 43 - mock rejects oid key in updateRefs
+  ---
+  duration_ms: 0.066472
+  type: 'test'
+  ...
+# Subtest: claimLaneAndSlice lane_full when three live high slots
+ok 44 - claimLaneAndSlice lane_full when three live high slots
+  ---
+  duration_ms: 0.264645
+  type: 'test'
+  ...
+# Subtest: untrusted editor plain string evil holds
+ok 45 - untrusted editor plain string evil holds
+  ---
+  duration_ms: 0.04538
+  type: 'test'
+  ...
+# Subtest: renewLeaseHeartbeat CAS mismatch fails closed
+ok 46 - renewLeaseHeartbeat CAS mismatch fails closed
+  ---
+  duration_ms: 0.09584
+  type: 'test'
+  ...
+# Subtest: refUpdateRenew rejects zero beforeOid
+ok 47 - refUpdateRenew rejects zero beforeOid
+  ---
+  duration_ms: 0.168708
+  type: 'test'
+  ...
+# Subtest: dry-run never calls createLeaseCommit
+ok 48 - dry-run never calls createLeaseCommit
+  ---
+  duration_ms: 0.299552
+  type: 'test'
+  ...
+# Subtest: canary verify six legs passes and deletes scratch ref
+ok 49 - canary verify six legs passes and deletes scratch ref
+  ---
+  duration_ms: 1.756158
+  type: 'test'
+  ...
+# Subtest: canary verify bad indexes still deletes scratch ref
+ok 50 - canary verify bad indexes still deletes scratch ref
+  ---
+  duration_ms: 0.824588
+  type: 'test'
+  ...
+# Subtest: act hold when no bound plan pass
+ok 51 - act hold when no bound plan pass
+  ---
+  duration_ms: 0.712628
+  type: 'test'
+  ...
+# Subtest: dry-run holds without grade binding when gate wired
+ok 52 - dry-run holds without grade binding when gate wired
+  ---
+  duration_ms: 0.310292
+  type: 'test'
+  ...
+1..52
+# tests 52
+# suites 0
+# pass 52
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 197.32853
+TAP version 13
+# Subtest: parseGradeTransport requires ok status and findings array
+ok 1 - parseGradeTransport requires ok status and findings array
+  ---
+  duration_ms: 0.690932
+  type: 'test'
+  ...
+# Subtest: parsePlanGradePassMarker is exact line match
+ok 2 - parsePlanGradePassMarker is exact line match
+  ---
+  duration_ms: 0.249901
+  type: 'test'
+  ...
+# Subtest: bound pass requires trusted publisher
+ok 3 - bound pass requires trusted publisher
+  ---
+  duration_ms: 0.262277
+  type: 'test'
+  ...
+# Subtest: bound pass fails closed without allowlist
+ok 4 - bound pass fails closed without allowlist
+  ---
+  duration_ms: 0.183871
+  type: 'test'
+  ...
+# Subtest: plan author cannot self-post pass when not on grade allowlist
+ok 5 - plan author cannot self-post pass when not on grade allowlist
+  ---
+  duration_ms: 0.124288
+  type: 'test'
+  ...
+# Subtest: binding negative wrong sha comment id author
+ok 6 - binding negative wrong sha comment id author
+  ---
+  duration_ms: 0.225585
+  type: 'test'
+  ...
+# Subtest: reduceGradeResults revise until cap and invalid cap
+ok 7 - reduceGradeResults revise until cap and invalid cap
+  ---
+  duration_ms: 0.127074
+  type: 'test'
+  ...
+# Subtest: transport stub never parses as PASS
+ok 8 - transport stub never parses as PASS
+  ---
+  duration_ms: 0.079835
+  type: 'test'
+  ...
+# Subtest: decidePublish binds plan revision
+ok 9 - decidePublish binds plan revision
+  ---
+  duration_ms: 0.425096
+  type: 'test'
+  ...
+# Subtest: formatPlanGradePass literal marker string
+ok 10 - formatPlanGradePass literal marker string
+  ---
+  duration_ms: 0.261677
+  type: 'test'
+  ...
+1..10
+# tests 10
+# suites 0
+# pass 10
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 10.793405
+TAP version 13
+# Subtest: parseBuildArtifact rejects bad status and paths
+ok 1 - parseBuildArtifact rejects bad status and paths
+  ---
+  duration_ms: 0.605617
+  type: 'test'
+  ...
+# Subtest: trusted diff rejects path outside claim
+ok 2 - trusted diff rejects path outside claim
+  ---
+  duration_ms: 1.936035
+  type: 'test'
+  ...
+# Subtest: artifact cannot hide protected path in real diff
+ok 3 - artifact cannot hide protected path in real diff
+  ---
+  duration_ms: 1.022942
+  type: 'test'
+  ...
+# Subtest: in-slice trusted diff positive and rename guard
+ok 4 - in-slice trusted diff positive and rename guard
+  ---
+  duration_ms: 0.20037
+  type: 'test'
+  ...
+# Subtest: fix round tracks only failed checks
+ok 5 - fix round tracks only failed checks
+  ---
+  duration_ms: 0.563022
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 11.175758
+#7 enqueue QUEUED position 1
+#7 undraft
+#7 enqueue QUEUED position 1
+#7 undraft
+#7 changed before the write; skipped
+#7 hold: base is not main
+#7 hold: protected path
+#7 hold: protected path
+queue #7 success: exact tree of the clean merge of the queue parent and the reviewed head
+UNATTENDED_ENABLED is not true; stopping before the next write
+#7 changed before the write; skipped
+queue #7 authorization changed; no success posted
+queue #7 success: exact tree of the clean merge of the queue parent and the reviewed head
+#4 read failed: HTTP 403: Resource not accessible by integration; held
+#9 read failed: HTTP 403: Resource not accessible by integration; held
+evidence read denied (403/404) for every pull request
+#4 read failed: HTTP 404: Not Found; held
+#9 enqueue QUEUED position 1
+#4 read failed: comments unreadable; held
+#9 enqueue QUEUED position 1
+#7 ruleset is not the main queue policy; skipped
+UNATTENDED_ENABLED is not true; stopping before the next write
+UNATTENDED_ENABLED is not true; stopping before the next write
+head #7 block
+head #7 already has a gate result; not replaced
+queue #7 ruleset is not the main queue policy; no post
+TAP version 13
+# Subtest: switch values other than true are off, and a 404 is a clean off
+ok 1 - switch values other than true are off, and a 404 is a clean off
+  ---
+  duration_ms: 1.27713
+  type: 'test'
+  ...
+# Subtest: admit exits 0 with no enabled output when the switch is unset or not true
+ok 2 - admit exits 0 with no enabled output when the switch is unset or not true
+  ---
+  duration_ms: 655.468389
+  type: 'test'
+  ...
+# Subtest: admit rejects a ref, repository, event, mode, or pull request outside the contract
+ok 3 - admit rejects a ref, repository, event, mode, or pull request outside the contract
+  ---
+  duration_ms: 1143.866736
+  type: 'test'
+  ...
+# Subtest: author PROOF comments are assertions and do not authorize
+ok 4 - author PROOF comments are assertions and do not authorize
+  ---
+  duration_ms: 0.900709
+  type: 'test'
+  ...
+# Subtest: a rename out of a protected path is held
+ok 5 - a rename out of a protected path is held
+  ---
+  duration_ms: 2.480715
+  type: 'test'
+  ...
+# Subtest: classify holds forks, batch bases, protected paths, missing proof, and a missing tip gate
+ok 6 - classify holds forks, batch bases, protected paths, missing proof, and a missing tip gate
+  ---
+  duration_ms: 0.304479
+  type: 'test'
+  ...
+# Subtest: high-risk paths need a strict low-risk pass, and .github stays owner-held
+ok 7 - high-risk paths need a strict low-risk pass, and .github stays owner-held
+  ---
+  duration_ms: 0.530497
+  type: 'test'
+  ...
+# Subtest: a high-risk draft undrafts before the strict gate exists
+ok 8 - a high-risk draft undrafts before the strict gate exists
+  ---
+  duration_ms: 0.114648
+  type: 'test'
+  ...
+# Subtest: dependabot stays held
+ok 9 - dependabot stays held
+  ---
+  duration_ms: 0.204756
+  type: 'test'
+  ...
+# Subtest: the new path list still matches every old main protected pattern
+ok 10 - the new path list still matches every old main protected pattern
+  ---
+  duration_ms: 0.689446
+  type: 'test'
+  ...
+# Subtest: factsFrom reads a strict gate summary for a high-risk path
+ok 11 - factsFrom reads a strict gate summary for a high-risk path
+  ---
+  duration_ms: 0.508333
+  type: 'test'
+  ...
+# Subtest: a disabled or unreadable switch performs no undraft and no enqueue
+ok 12 - a disabled or unreadable switch performs no undraft and no enqueue
+  ---
+  duration_ms: 0.340877
+  type: 'test'
+  ...
+# Subtest: dry-run and a switch that flips off before the write do not enqueue
+ok 13 - dry-run and a switch that flips off before the write do not enqueue
+  ---
+  duration_ms: 0.686638
+  type: 'test'
+  ...
+# Subtest: act undrafts a proven draft without a tip gate and enqueues one ready main pull request
+ok 14 - act undrafts a proven draft without a tip gate and enqueues one ready main pull request
+  ---
+  duration_ms: 0.717547
+  type: 'test'
+  ...
+# Subtest: the switch read is the last call before the undraft mutation
+ok 15 - the switch read is the last call before the undraft mutation
+  ---
+  duration_ms: 24.850226
+  type: 'test'
+  ...
+# Subtest: a moved tip, a batch base, and a protected path do not enqueue
+ok 16 - a moved tip, a batch base, and a protected path do not enqueue
+  ---
+  duration_ms: 0.511047
+  type: 'test'
+  ...
+# Subtest: act without a write token or with the wrong app id fails before a write
+ok 17 - act without a write token or with the wrong app id fails before a write
+  ---
+  duration_ms: 41.294072
+  type: 'test'
+  ...
+# Subtest: enqueue uses expectedHeadOid and does not ask to jump the queue
+ok 18 - enqueue uses expectedHeadOid and does not ask to jump the queue
+  ---
+  duration_ms: 0.101853
+  type: 'test'
+  ...
+# Subtest: a gh child receives only its own token
+ok 19 - a gh child receives only its own token
+  ---
+  duration_ms: 1.484915
+  type: 'test'
+  ...
+# Subtest: model transports are unavailable and cannot reduce to a pass
+ok 20 - model transports are unavailable and cannot reduce to a pass
+  ---
+  duration_ms: 0.911478
+  type: 'test'
+  ...
+# Subtest: MYTHOS_GATE_PROVIDERS selects who must pass and fails closed otherwise
+ok 21 - MYTHOS_GATE_PROVIDERS selects who must pass and fails closed otherwise
+  ---
+  duration_ms: 0.348449
+  type: 'test'
+  ...
+# Subtest: queue policy posts success only for an exact main tree and withholds a moved ref
+ok 22 - queue policy posts success only for an exact main tree and withholds a moved ref
+  ---
+  duration_ms: 0.323625
+  type: 'test'
+  ...
+# Subtest: publish does nothing when the switch is off and asks for a token before any post
+ok 23 - publish does nothing when the switch is off and asks for a token before any post
+  ---
+  duration_ms: 0.43811
+  type: 'test'
+  ...
+# Subtest: publish posts one success when the queue tree matches and the switch stays on
+ok 24 - publish posts one success when the queue tree matches and the switch stays on
+  ---
+  duration_ms: 0.527224
+  type: 'test'
+  ...
+# Subtest: merge-tree equality accepts the clean tree and rejects a different queue commit
+ok 25 - merge-tree equality accepts the clean tree and rejects a different queue commit
+  ---
+  duration_ms: 102.38618
+  type: 'test'
+  ...
+# Subtest: mythos plan gate and build lane have no OpenRouter and split provider jobs
+ok 26 - mythos plan gate and build lane have no OpenRouter and split provider jobs
+  ---
+  duration_ms: 4.102914
+  type: 'test'
+  ...
+# Subtest: mythos-dispatch schedule never claims; discover uses mythos-control
+ok 27 - mythos-dispatch schedule never claims; discover uses mythos-control
+  ---
+  duration_ms: 2.09867
+  type: 'test'
+  ...
+# Subtest: privileged workflows are inert controllers with pinned actions and split credentials
+ok 28 - privileged workflows are inert controllers with pinned actions and split credentials
+  ---
+  duration_ms: 6.883995
+  type: 'test'
+  ...
+# Subtest: the switch is read after validation, so a flip during those reads blocks the write
+ok 29 - the switch is read after validation, so a flip during those reads blocks the write
+  ---
+  duration_ms: 0.288032
+  type: 'test'
+  ...
+# Subtest: a hold label that appears after the list read blocks the write
+ok 30 - a hold label that appears after the list read blocks the write
+  ---
+  duration_ms: 0.208508
+  type: 'test'
+  ...
+# Subtest: paginated JSON pages flatten, and a rename keeps both filenames
+ok 31 - paginated JSON pages flatten, and a rename keeps both filenames
+  ---
+  duration_ms: 0.21465
+  type: 'test'
+  ...
+# Subtest: files() reads every page and both sides of a rename
+ok 32 - files() reads every page and both sides of a rename
+  ---
+  duration_ms: 1.419079
+  type: 'test'
+  ...
+# Subtest: a passed queue parent is not reused after the base tip changes
+ok 33 - a passed queue parent is not reused after the base tip changes
+  ---
+  duration_ms: 0.174647
+  type: 'test'
+  ...
+# Subtest: a head gate that disappears before the post is not published as success
+ok 34 - a head gate that disappears before the post is not published as success
+  ---
+  duration_ms: 0.24265
+  type: 'test'
+  ...
+# Subtest: publish limits itself to the requested pull request
+ok 35 - publish limits itself to the requested pull request
+  ---
+  duration_ms: 0.316225
+  type: 'test'
+  ...
+# Subtest: fetch into a fresh bare repository keeps the queue commit parent
+ok 36 - fetch into a fresh bare repository keeps the queue commit parent
+  ---
+  duration_ms: 86.173201
+  type: 'test'
+  ...
+# Subtest: token grant must be the one repository and unexpired
+ok 37 - token grant must be the one repository and unexpired
+  ---
+  duration_ms: 0.394828
+  type: 'test'
+  ...
+# Subtest: job permissions cover the API families their scripts call
+ok 38 - job permissions cover the API families their scripts call
+  ---
+  duration_ms: 2.046981
+  type: 'test'
+  ...
+# Subtest: evidence denied for every pull request fails the job
+ok 39 - evidence denied for every pull request fails the job
+  ---
+  duration_ms: 0.240603
+  type: 'test'
+  ...
+# Subtest: one evidence denial is held and another pull request can still be enqueued
+ok 40 - one evidence denial is held and another pull request can still be enqueued
+  ---
+  duration_ms: 0.254805
+  type: 'test'
+  ...
+# Subtest: a 403 or 404 from the Actions runs list is an evidence permission denial
+ok 41 - a 403 or 404 from the Actions runs list is an evidence permission denial
+  ---
+  duration_ms: 12.931978
+  type: 'test'
+  ...
+# Subtest: a head workflow lookup 403 denies evidence and a missing file is not proof
+ok 42 - a head workflow lookup 403 denies evidence and a missing file is not proof
+  ---
+  duration_ms: 5.188566
+  type: 'test'
+  ...
+# Subtest: discover selects one open main pull request
+ok 43 - discover selects one open main pull request
+  ---
+  duration_ms: 0.503836
+  type: 'test'
+  ...
+# Subtest: transports hold high risk, reject auth and malformed output, and hide the other secret
+ok 44 - transports hold high risk, reject auth and malformed output, and hide the other secret
+  ---
+  duration_ms: 0.805145
+  type: 'test'
+  ...
+# Subtest: an incomplete diff is held and the review uses the discovered SHAs
+ok 45 - an incomplete diff is held and the review uses the discovered SHAs
+  ---
+  duration_ms: 0.464048
+  type: 'test'
+  ...
+# Subtest: a capped or mismatched compare is held
+ok 46 - a capped or mismatched compare is held
+  ---
+  duration_ms: 0.341757
+  type: 'test'
+  ...
+# Subtest: a consistent 250-commit compare is held and 249 still passes
+ok 47 - a consistent 250-commit compare is held and 249 still passes
+  ---
+  duration_ms: 0.222578
+  type: 'test'
+  ...
+# Subtest: ahead_by at the cap holds when the commit list and total_commits agree
+ok 48 - ahead_by at the cap holds when the commit list and total_commits agree
+  ---
+  duration_ms: 0.074767
+  type: 'test'
+  ...
+# Subtest: a commit list longer than total_commits is held
+ok 49 - a commit list longer than total_commits is held
+  ---
+  duration_ms: 0.084217
+  type: 'test'
+  ...
+# Subtest: one unreadable pull request is held and the next one can still be enqueued
+ok 50 - one unreadable pull request is held and the next one can still be enqueued
+  ---
+  duration_ms: 0.239944
+  type: 'test'
+  ...
+# Subtest: the author allow-list and head repository are explicit holds
+ok 51 - the author allow-list and head repository are explicit holds
+  ---
+  duration_ms: 23.36042
+  type: 'test'
+  ...
+# Subtest: a ruleset that changes before the write is not used
+ok 52 - a ruleset that changes before the write is not used
+  ---
+  duration_ms: 0.266313
+  type: 'test'
+  ...
+# Subtest: a switch that flips during the ruleset re-read blocks undraft and enqueue
+ok 53 - a switch that flips during the ruleset re-read blocks undraft and enqueue
+  ---
+  duration_ms: 0.238611
+  type: 'test'
+  ...
+# Subtest: a switch that flips during the ruleset re-read blocks queue and head check posts
+ok 54 - a switch that flips during the ruleset re-read blocks queue and head check posts
+  ---
+  duration_ms: 0.342082
+  type: 'test'
+  ...
+# Subtest: a model block on a head is not replaced by a later pass or a manual rerun
+ok 55 - a model block on a head is not replaced by a later pass or a manual rerun
+  ---
+  duration_ms: 0.363111
+  type: 'test'
+  ...
+# Subtest: a check post re-reads the ruleset and skips a weaker policy
+ok 56 - a check post re-reads the ruleset and skips a weaker policy
+  ---
+  duration_ms: 0.245057
+  type: 'test'
+  ...
+# Subtest: a child process can return more than one megabyte
+ok 57 - a child process can return more than one megabyte
+  ---
+  duration_ms: 5.316315
+  type: 'test'
+  ...
+1..57
+# tests 57
+# suites 0
+# pass 57
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2154.891771
+
+> @mythos-writer/frontend@0.5.7 lint
+> eslint src --ext .ts,.tsx --max-warnings 0 && node ../scripts/check-dead-wiring.mjs
+
+--- check-dead-wiring (SKY-10918 reachability standard, rule 3a) ---
+Scanned 448 production source file(s) under frontend/src.
+Total: 1 never-passed optional callback prop(s), 0 permanently-disabled control(s).
+
+No NEW never-passed optional callback props (beyond the tracked baseline).
+(1 more are pre-existing, tracked in the baseline — see SKY-10923 (ManuscriptView/StoryNavigator) or SKY-10926 (everything else).)
+
+No NEW permanently-disabled controls (beyond the tracked baseline).
+
+Suppress a genuine future hook with a "dead-wiring-ignore" comment on the prop declaration. Fixed a baselined entry? Re-run with --update-baseline so a regression on it fails CI again.
+```
