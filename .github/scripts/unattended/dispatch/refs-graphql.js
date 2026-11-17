@@ -38,7 +38,7 @@ function refUpdateRenew(ref, afterOid, beforeOid) {
   assertDispatchRef(ref);
   assertSha40(afterOid, 'afterOid');
   assertSha40(beforeOid, 'beforeOid');
-  return { name: ref, afterOid, beforeOid };
+  return { name: ref, afterOid, beforeOid, force: true };
 }
 
 function parseGraphqlErrors(stdout) {

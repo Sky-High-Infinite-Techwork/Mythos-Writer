@@ -1,6 +1,7 @@
 'use strict';
 
 const { gh: defaultGh } = require('../spawn');
+const { httpStatusFromGh } = require('./gh-http');
 const { REPO, MATCHING_REF_PREFIX } = require('./constants');
 const {
   UPDATE_REFS_MUTATION,
@@ -77,12 +78,22 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
       const suffix = ref.startsWith('refs/') ? ref.slice('refs/'.length) : ref;
       const result = gh(['api', `${base}/git/ref/${encodeURIComponent(suffix)}`], readToken);
       if (result.status !== 0) {
-        return { ok: false, status: result.status, error: result.stderr || 'get_ref_failed' };
+        return {
+          ok: false,
+          status: httpStatusFromGh(result.stderr, result.status),
+          ghStatus: result.status,
+          error: result.stderr || 'get_ref_failed',
+        };
       }
       const parsed = parseGhJson(result.stdout);
       const sha = parsed && parsed.object && parsed.object.sha;
       if (!sha || !OID_HEX.test(sha)) {
-        return { ok: false, status: result.status, error: 'invalid_sha' };
+        return {
+          ok: false,
+          status: httpStatusFromGh(result.stderr, result.status),
+          ghStatus: result.status,
+          error: 'invalid_sha',
+        };
       }
       return { ok: true, ref, sha };
     },
@@ -158,13 +169,15 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
       });
       const result = gh(['api', 'graphql', '--input', '-'], writeToken, body);
       const errors = parseGraphqlErrors(result.stdout);
+      const httpStatus = httpStatusFromGh(result.stderr, result.status);
       if (result.status === 0 && (!errors || errors.length === 0)) {
-        return { ok: true, status: 201 };
+        return { ok: true, status: httpStatus === 200 ? 201 : httpStatus, ghStatus: result.status };
       }
       if (isRefExistsError(errors)) {
         return {
           ok: false,
           status: 422,
+          ghStatus: result.status,
           error: UPDATE_REFS_REF_EXISTS,
           refExists: true,
           errors,
@@ -173,7 +186,8 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
       return {
         ok: false,
         fatal: true,
-        status: result.status,
+        status: httpStatus,
+        ghStatus: result.status,
         error: result.stderr || result.stdout,
         errors,
       };

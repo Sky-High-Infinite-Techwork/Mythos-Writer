@@ -20,17 +20,33 @@ function isTrustedPlanAuthor(author) {
   return OFFICIAL_PLAN_AUTHORS.has(login);
 }
 
+function fenceMarker(line) {
+  const m = line.match(/^(\s{0,3})(`{3,}|~{3,})/);
+  if (!m) return null;
+  return { indent: m[1].length, marker: m[2][0], length: m[2].length };
+}
+
 function stripFencedRegions(body) {
   const lines = String(body || '').split(/\r?\n/);
   const out = [];
-  let inFence = false;
+  let open = null;
   for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
-      inFence = !inFence;
+    const fence = fenceMarker(line);
+    if (fence) {
+      if (fence.indent >= 4) {
+        if (!open) out.push(line);
+        continue;
+      }
+      if (!open) {
+        open = fence;
+        continue;
+      }
+      if (fence.marker === open.marker && fence.length >= open.length) {
+        open = null;
+      }
       continue;
     }
-    if (!inFence) out.push(line);
+    if (!open) out.push(line);
   }
   return out.join('\n');
 }
@@ -38,8 +54,8 @@ function stripFencedRegions(body) {
 function parseFilesSection(body) {
   const text = stripFencedRegions(body);
   const lines = text.split(/\r?\n/);
-  const headingIndex = lines.findIndex((line) => line.trim() === OFFICIAL_FILES_HEADING);
-  // Indented "## Files" is not the official heading (must be trim-equal).
+  const headingIndex = lines.findIndex((line) => /^\s{0,3}## Files\s*$/.test(line));
+  // More than three leading spaces before "## Files" is not the official heading.
   if (headingIndex < 0) return { kind: 'no_heading' };
   const rawEntries = [];
   for (let i = headingIndex + 1; i < lines.length; i += 1) {
@@ -99,7 +115,7 @@ function planCommentEditedByUntrusted(official) {
   const edited = official.lastEditedAt || official.updatedAt || created;
   if (edited && created && edited !== created) {
     const editor = official.editor || official.author;
-    const login = canonicalAuthorLogin(editor);
+    const login = typeof editor === 'string' ? editor.trim().toLowerCase() : canonicalAuthorLogin(editor);
     if (!OFFICIAL_PLAN_AUTHORS.has(login)) return { hold: true, editor: login };
   }
   return { hold: false };

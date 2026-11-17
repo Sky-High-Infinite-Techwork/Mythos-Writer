@@ -55,6 +55,8 @@ function scratchCanaryRef(matrixIndex) {
 
 const CANARY_SCRATCH_SHARED_REF = `${DISPATCH_REF_PREFIX}/canary/scratch-shared`;
 
+const PROTECTED_ROOT_PREFIXES = ['.github/', '.git', '.github', '.git/'];
+
 function protectedLiteralPrefix(literal) {
   const pre = String(literal || '');
   if (!pre) return true;
@@ -62,6 +64,20 @@ function protectedLiteralPrefix(literal) {
   if (protectedPath(`${pre}/x.ts`)) return true;
   if (pre.startsWith('.github') || pre.includes('/.github/')) return true;
   if (/^\.git/.test(pre) && !pre.startsWith('.github')) return true;
+  for (const root of PROTECTED_ROOT_PREFIXES) {
+    if (root.startsWith(pre) || pre === root || pre === root.replace(/\/$/, '')) return true;
+  }
+  const roots = ['.github', '.git'];
+  for (const root of roots) {
+    if (pre.includes('?')) {
+      const escaped = pre.replace(/[.*+^${}()|[\]\\]/g, '\\$&').replace(/\?/g, '.');
+      try {
+        if (new RegExp(`^${escaped}`).test(root)) return true;
+      } catch {
+        // ignore bad pattern
+      }
+    }
+  }
   return false;
 }
 

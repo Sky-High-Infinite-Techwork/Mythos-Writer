@@ -15,6 +15,7 @@ const {
   claimLaneAndSlice,
   computeWouldClaimSlot,
   assertHolderBeforePublish,
+  releaseClaimPair,
 } = require('./claim');
 const { parseBuildOrderIssues, issueBlockedByClaim } = require('./build-order');
 const { leaseMessage: formatLeaseMessage } = require('./constants');
@@ -102,8 +103,6 @@ async function runDispatchPlan(env) {
   const activeClaims = activeFrom ? activeFrom(listed.refs) : [];
 
   const findBoundPlanPass = env.findBoundPlanPass || null;
-
-  let picked = null;
 
   for (const issueNumber of ordered) {
     if (issueBlockedByClaim(issueNumber, activeClaims)) continue;
@@ -210,95 +209,101 @@ async function runDispatchPlan(env) {
       return 1;
     }
 
-    picked = { issueNumber, slice, leasePayload, official };
-    break;
-  }
-
-  if (!picked) {
-    console.log(JSON.stringify({ kind: 'dispatch_idle', reason: 'no_eligible_issue' }));
-    return 0;
-  }
-
-  const { issueNumber, slice, leasePayload, official } = picked;
-
-  if (mode === 'dry-run') {
     const slotProbe = computeWouldClaimSlot(listed.refs, capParsed.value, leasePayload);
-    const wouldSlot = slotProbe.ok ? slotProbe.slot : null;
-    const holdReason = slotProbe.ok ? null : slotProbe.reason;
-    process.stdout.write(`${JSON.stringify({
-      kind: 'would_claim',
-      mode,
-      issue: issueNumber,
-      slice: slice.index,
-      files: slice.files,
-      laneCap: capParsed.value,
-      slot: wouldSlot,
-      holdReason,
-      planCommentId: leasePayload.planCommentId,
-      planBodySha256: leasePayload.planBodySha256,
-    })}\n`);
-    return 0;
-  }
+    if (!slotProbe.ok && slotProbe.reason === 'files_overlap') {
+      console.log(JSON.stringify({ kind: 'dispatch_skip', issue: issueNumber, reason: slotProbe.reason }));
+      continue;
+    }
 
-  const reReadSwitch = () => reReadSwitchFn(repo, controlToken, readSwitches);
-  const switchesNow = await reReadSwitch();
-  if (!switchesNow.ok || !switchesNow.enabled) {
-    console.log('dispatch: act aborted (switch off before lease commit)');
-    return 0;
-  }
+    if (mode === 'dry-run') {
+      const wouldSlot = slotProbe.ok ? slotProbe.slot : null;
+      const holdReason = slotProbe.ok ? null : slotProbe.reason;
+      process.stdout.write(`${JSON.stringify({
+        kind: 'would_claim',
+        mode,
+        issue: issueNumber,
+        slice: slice.index,
+        files: slice.files,
+        laneCap: capParsed.value,
+        slot: wouldSlot,
+        holdReason,
+        planCommentId: leasePayload.planCommentId,
+        planBodySha256: leasePayload.planBodySha256,
+      })}\n`);
+      return 0;
+    }
 
-  let leaseSha = env.LEASE_COMMIT_SHA;
-  if (!leaseSha && env.MAIN_SHA && client.createLeaseCommit) {
-    const message = formatLeaseMessage(leasePayload);
-    const created = await client.createLeaseCommit(message, env.MAIN_SHA);
-    if (!created.ok) {
-      console.error('dispatch: lease commit failed');
+    const reReadSwitch = () => reReadSwitchFn(repo, controlToken, readSwitches);
+    const switchesNow = await reReadSwitch();
+    if (!switchesNow.ok || !switchesNow.enabled) {
+      console.log('dispatch: act aborted (switch off before lease commit)');
+      return 0;
+    }
+
+    let leaseSha = env.LEASE_COMMIT_SHA;
+    if (!leaseSha && env.MAIN_SHA && client.createLeaseCommit) {
+      const message = formatLeaseMessage(leasePayload);
+      const created = await client.createLeaseCommit(message, env.MAIN_SHA);
+      if (!created.ok) {
+        console.error('dispatch: lease commit failed');
+        return 1;
+      }
+      leaseSha = created.sha;
+    }
+    if (!leaseSha) {
+      console.error('dispatch: missing lease commit sha');
       return 1;
     }
-    leaseSha = created.sha;
-  }
-  if (!leaseSha) {
-    console.error('dispatch: missing lease commit sha');
-    return 1;
-  }
 
-  const mintLeaseSha = async (message) => {
-    if (!client.createLeaseCommit || !env.MAIN_SHA) return null;
-    const created = await client.createLeaseCommit(message, env.MAIN_SHA);
-    return created.ok ? created.sha : null;
-  };
+    const mintLeaseSha = async (message) => {
+      if (!client.createLeaseCommit || !env.MAIN_SHA) return null;
+      const created = await client.createLeaseCommit(message, env.MAIN_SHA);
+      return created.ok ? created.sha : null;
+    };
 
-  const claim = await claimLaneAndSlice(client, {
-    cap: capParsed.value,
-    leaseSha,
-    payload: leasePayload,
-    recoverSameSha: true,
-    reReadSwitch,
-  });
-  if (!claim.ok) {
-    if (claim.fatal) return 1;
-    console.log(JSON.stringify({ kind: 'dispatch_skip', issue: issueNumber, reason: claim.reason }));
+    const claim = await claimLaneAndSlice(client, {
+      cap: capParsed.value,
+      leaseSha,
+      payload: leasePayload,
+      recoverSameSha: true,
+      reReadSwitch,
+    });
+    if (!claim.ok) {
+      if (claim.fatal) return 1;
+      if (claim.reason === 'files_overlap' || claim.reason === 'slice_already_claimed') {
+        console.log(JSON.stringify({ kind: 'dispatch_skip', issue: issueNumber, reason: claim.reason }));
+        continue;
+      }
+      console.log(JSON.stringify({ kind: 'dispatch_skip', issue: issueNumber, reason: claim.reason }));
+      return 0;
+    }
+
+    const holder = await assertHolderBeforePublish(client, [claim.ref, claim.claimRef], leaseSha);
+    if (!holder.ok) {
+      console.log(JSON.stringify({ kind: 'dispatch_skip', issue: issueNumber, reason: holder.reason }));
+      return 0;
+    }
+
+    const record = await recordDispatchAttempt(client, issueNumber, slice.index, { reReadSwitch, mintLeaseSha });
+    if (!record.ok) {
+      console.error(`dispatch: attempt record failed: ${record.reason}`);
+      await releaseClaimPair(client, { laneRef: claim.ref, claimRef: claim.claimRef, leaseSha }, reReadSwitch);
+      return 1;
+    }
+
+    console.log(JSON.stringify({
+      kind: 'dispatch_claimed',
+      issue: issueNumber,
+      slice: slice.index,
+      slot: claim.slot,
+      laneRef: claim.ref,
+      claimRef: claim.claimRef,
+      planCommentId: official.commentId,
+    }));
     return 0;
   }
 
-  const holder = await assertHolderBeforePublish(client, [claim.ref, claim.claimRef], leaseSha);
-  if (!holder.ok) {
-    console.log(JSON.stringify({ kind: 'dispatch_skip', issue: issueNumber, reason: holder.reason }));
-    return 0;
-  }
-
-  const record = await recordDispatchAttempt(client, issueNumber, slice.index, { reReadSwitch, mintLeaseSha });
-  if (!record.ok) console.error(`dispatch: attempt record failed: ${record.reason}`);
-
-  console.log(JSON.stringify({
-    kind: 'dispatch_claimed',
-    issue: issueNumber,
-    slice: slice.index,
-    slot: claim.slot,
-    laneRef: claim.ref,
-    claimRef: claim.claimRef,
-    planCommentId: official.commentId,
-  }));
+  console.log(JSON.stringify({ kind: 'dispatch_idle', reason: 'no_eligible_issue' }));
   return 0;
 }
 

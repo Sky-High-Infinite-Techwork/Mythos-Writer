@@ -18,7 +18,8 @@ function validatePlanPathEntry(raw) {
   if (entry.startsWith('/') || entry.startsWith('./')) return { ok: false, reason: 'absolute' };
   if (entry.includes('\\')) return { ok: false, reason: 'backslash' };
   if (entry === '*' || entry === '**') return { ok: false, reason: 'bare_glob' };
-  if (!/^[\w@./\-*?[\]+]+$/i.test(entry)) return { ok: false, reason: 'not_path_like' };
+  if (/[\[\]]/.test(entry)) return { ok: false, reason: 'bracket_char' };
+  if (!/^[\w@./\-*?]+$/i.test(entry)) return { ok: false, reason: 'not_path_like' };
   return { ok: true, entry };
 }
 

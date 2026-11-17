@@ -77,7 +77,7 @@ refs/mythos/dispatch/lane-19
 
 1. Read `MYTHOS_DISPATCH_LANE_CAP` (`N`, fail-closed if not an integer 1–20).
 2. For the first free slot `i` in `0 .. N-1` with no live lease, call GraphQL **`updateRefs`** with **two** `refUpdates` in one request: `lane-{ii}` and `claim/{issue}-{slice}`, each `beforeOid` = zero OID, `afterOid` = lease commit SHA.
-3. GraphQL message **`Reference already exists`** ⇒ try next slot. Any other error ⇒ fail closed (exit non-zero). After ambiguous errors, `GET` the ref; treat as success only for idempotent **same-run** retry (`recoverSameSha`).
+3. Before the mutation, `GET` both refs (`lane-{ii}` and `claim/{issue}-{slice}`). GraphQL message **`Reference already exists`** ⇒ try next slot. Any other error ⇒ fail closed (exit non-zero). After ambiguous errors, `GET` the ref; treat as success only for idempotent **same-run** retry (`recoverSameSha`). **Release** of our claim pair always CAS-deletes with `beforeOid` set to the holder’s known `leaseSha` for **each** ref, not a fresh `GET`.
 4. Enforce **file disjointness** against live leases (normalized `files[]` in lease JSON).
 
 **Lease commit:** commit on `main`’s tree with message JSON (`schema: mythos-dispatch-lease/v1`):
@@ -98,7 +98,7 @@ refs/mythos/dispatch/lane-19
 
 Default TTL: **180** minutes (`MYTHOS_DISPATCH_LEASE_MINUTES`, clamped **30–360**). Must exceed longest lane job timeout plus margin.
 
-**Release / sweep / renew:** GraphQL `updateRefs` with `beforeOid` = current SHA and `afterOid` = zero OID (delete). Release CAS always uses the holder’s known `leaseSha`, never a fresh `GET`. Re-read `UNATTENDED_ENABLED` and `MYTHOS_DISPATCH_ENABLED` before **every** delete in sweep (lane-`NN` and `claim/*` only — never `attempts/`, `done/`, or `canary/`). **`renewLeaseHeartbeat`** CAS-updates **both** lane and claim refs in one `updateRefs` to a new lease commit with a fresh `expiresAt`; holders call **`assertHolderBeforePublish`**.
+**Release / sweep / renew:** GraphQL `updateRefs` with `afterOid` = zero OID (delete) or a new lease commit SHA (renew). **`beforeOid` semantics:** **release** — the holder’s known `leaseSha` (never a pre-delete `GET`); **sweep** — the SHA observed when listing refs before delete; **renew** — current ref SHA with `force: true` because the new lease commit is a sibling of the old on `main`. Re-read `UNATTENDED_ENABLED` and `MYTHOS_DISPATCH_ENABLED` before **every** delete in sweep (lane-`NN` and `claim/*` only — never `attempts/`, `done/`, or `canary/`). **`renewLeaseHeartbeat`** CAS-updates **both** lane and claim refs in one `updateRefs` to a new lease commit with a fresh `expiresAt`; holders call **`assertHolderBeforePublish`**.
 
 **Identity:** `refs/mythos/dispatch/claim/{issue}-{slice}` (no body SHA in the ref name).
 
@@ -116,7 +116,7 @@ The **mock** proves CAS-shaped `updateRefs` usage (including `afterOid` / `befor
 
 ## Global lane cap across jobs
 
-Cap is enforced by **only allocating the first N slot ref names** (`lane-00` .. `lane-{N-1}`). Jobs do not count refs in a racy read-then-write loop for admission. Listing refs is for observability and sweeper only.
+Cap is enforced by **only allocating the first N slot ref names** (`lane-00` .. `lane-{N-1}`) and treating **any live lease on a lane ref at any index** (including slots at or above `N` from a prior higher cap) as counting toward the concurrent-lease limit. Jobs do not count refs in a racy read-then-write loop for slot picking beyond that rule. Listing refs is for observability and sweeper only.
 
 Per-PR **review** jobs (PR 2) use a matrix or `parallel` without a global `concurrency: 1` on review — only **mutate** steps share `mythos-unattended-mutate` with Phase 1.
 
@@ -169,7 +169,7 @@ When `MODE=dry-run`:
 | Prompt injection from issue text | Trusted authors only for plans; model system prompts treat issue body as data; no `workflow_dispatch` from issue events | Unit: untrusted author comment ignored; workflow has no `issue_comment` trigger |
 | Write token exposure to model | Separate jobs/environments; spawn env strip in `spawn.js` | Workflow scan: no provider job contains write App key; `unattended.test.js` pattern |
 | Runaway loops / cost | Max plan grade rounds; lease TTL; sweep stale claims; switches off by default | Unit: lease expiry triggers sweep delete; grade round cap in PR 2 |
-| Double claims | Atomic ref create per slot + per-slice claim ref | 20-way concurrent mock test |
+| Double claims | Atomic ref create per slot + per-slice claim ref | Live canary (6-way scratch ref); mock exercises CAS shape only |
 | Stuck leases | Sweeper deletes expired slot refs; fail-closed if switch off mid-run | Unit: stale `expiresAt` → sweep |
 | Protected path escape | `protectedPath` + diff guard in trusted job | Reuse `filesLookProtected` tests; path guard unit tests in PR 2 |
 | Cap overrun | Only first N slot names attempted | Mock: 6 workers, cap 5 → one lane-full |
@@ -203,7 +203,7 @@ Concurrency: `mythos-unattended-dispatch` for sweep+claim orchestration job; do 
 
 1. Plan gate before build with bound revision — specified for PR 2; PR 1 does not start builds.
 2. Slices disjoint for parallel — specified and tested in unit tests.
-3. Atomic claims — slot refs + claim refs, 20-way test.
+3. Atomic claims — slot refs + claim refs; live canary + mock CAS tests.
 4. Global lane cap 1–20 — slot index bound.
 5. Credential split — documented; PR 1 has no provider/write in same job.
 6. Fix rounds — documented for PR 2.

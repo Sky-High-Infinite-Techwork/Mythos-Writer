@@ -124,9 +124,10 @@ function computeWouldClaimSlot(refs, cap, payload, now = new Date()) {
   const parsed = parseLaneCap(cap);
   if (!parsed.ok) return { ok: false, reason: 'invalid_lane_cap' };
   const allLive = activeLeasesAll(refs, now);
+  if (allLive.length >= parsed.value) return { ok: false, reason: 'lane_full' };
   const disjoint = assertFilesDisjoint(payload.files, allLive);
   if (!disjoint.ok) return { ok: false, reason: disjoint.reason };
-  const usedSlots = new Set(activeLeasesWithinCap(refs, parsed.value, now).map((row) => row.slot));
+  const usedSlots = new Set(allLive.map((row) => row.slot));
   for (let index = 0; index < parsed.value; index += 1) {
     if (!usedSlots.has(index)) {
       return { ok: true, slot: index, laneCap: parsed.value };
@@ -142,9 +143,10 @@ async function claimLaneAndSlice(client, { cap, leaseSha, payload, recoverSameSh
   const listed = await client.listRefs({ prefix: 'refs/mythos/dispatch/' });
   if (!listed.ok) return { ok: false, fatal: true, reason: 'list_failed' };
   const allLive = activeLeasesAll(listed.refs);
+  if (allLive.length >= limit) return { ok: false, reason: 'lane_full' };
   const disjoint = assertFilesDisjoint(payload.files, allLive);
   if (!disjoint.ok) return { ok: false, reason: disjoint.reason };
-  const usedSlots = new Set(activeLeasesWithinCap(listed.refs, limit).map((row) => row.slot));
+  const usedSlots = new Set(allLive.map((row) => row.slot));
   for (let index = 0; index < limit; index += 1) {
     if (usedSlots.has(index)) continue;
     const laneRef = slotRef(index);
