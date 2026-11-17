@@ -28,6 +28,6 @@ jobs:
       - name: Test unattended workflow contracts
         run: node .github/scripts/unattended.test.js
       - name: Test Phase 2 dispatch modules
-        run: node .github/scripts/unattended/dispatch.test.js
+        run: node .github/scripts/unattended/dispatch.test.js && node .github/scripts/unattended/dispatch/dispatch-client.test.js
       - name: Test workflow rules
         run: node .github/scripts/workflow-rules.test.js

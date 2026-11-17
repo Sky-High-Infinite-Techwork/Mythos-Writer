@@ -5,11 +5,13 @@ const {
   OFFICIAL_FILES_HEADING,
   sha256Hex,
 } = require('./constants');
+const { normalizePlanPaths } = require('./path-policy');
 
 function canonicalAuthorLogin(author) {
   const login = author && typeof author.login === 'string' ? author.login.trim().toLowerCase() : '';
   if (!login) return '';
-  if (author && author.__typename === 'Bot' && !login.endsWith('[bot]')) return `${login}[bot]`;
+  const isBot = author && (author.__typename === 'Bot' || author.type === 'Bot');
+  if (isBot && !login.endsWith('[bot]')) return `${login}[bot]`;
   return login;
 }
 
@@ -18,25 +20,44 @@ function isTrustedPlanAuthor(author) {
   return OFFICIAL_PLAN_AUTHORS.has(login);
 }
 
-function parseFilesSection(body) {
+function stripFencedRegions(body) {
   const lines = String(body || '').split(/\r?\n/);
+  const out = [];
+  let inFence = false;
+  for (const line of lines) {
+    if (line.trim().startsWith('```')) {
+      inFence = !inFence;
+      continue;
+    }
+    if (!inFence) out.push(line);
+  }
+  return out.join('\n');
+}
+
+function parseFilesSection(body) {
+  const text = stripFencedRegions(body);
+  const lines = text.split(/\r?\n/);
   const headingIndex = lines.findIndex((line) => line.trim() === OFFICIAL_FILES_HEADING);
-  if (headingIndex < 0) return null;
-  const files = [];
+  if (headingIndex < 0) return { kind: 'no_heading' };
+  const rawEntries = [];
   for (let i = headingIndex + 1; i < lines.length; i += 1) {
     const line = lines[i].trim();
     if (!line) continue;
     if (line.startsWith('#')) break;
+    if (!/^[-*]\s+/.test(line) && !/^[`\w@./\-*?[\]+]+$/.test(line.replace(/^`+|`+$/g, ''))) {
+      return { kind: 'invalid_entry', line };
+    }
     if (line.startsWith('- ') || line.startsWith('* ')) {
-      files.push(line.replace(/^[-*]\s+/, '').trim());
+      rawEntries.push(line.replace(/^[-*]\s+/, '').trim());
       continue;
     }
-    files.push(line);
+    rawEntries.push(line);
   }
-  const normalized = files
-    .map((entry) => entry.replace(/^`+|`+$/g, '').trim())
-    .filter((entry) => entry.length > 0);
-  return normalized.length > 0 ? normalized : null;
+  const cleaned = rawEntries.map((entry) => entry.replace(/^`+|`+$/g, '').trim());
+  if (cleaned.length === 0) return { kind: 'empty' };
+  const normalized = normalizePlanPaths(cleaned);
+  if (!normalized.ok) return { kind: 'invalid_path', reason: normalized.reason, entry: normalized.entry };
+  return { kind: 'ok', files: normalized.files };
 }
 
 function findOfficialPlan(comments) {
@@ -45,8 +66,14 @@ function findOfficialPlan(comments) {
     .slice()
     .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
   for (const comment of sorted) {
-    const files = parseFilesSection(comment.body);
-    if (!files) continue;
+    const section = parseFilesSection(comment.body);
+    if (section.kind === 'no_heading') continue;
+    if (section.kind === 'empty') {
+      return { hold: true, reason: 'empty_files', commentId: comment.id, author: canonicalAuthorLogin(comment.author) };
+    }
+    if (section.kind === 'invalid_entry' || section.kind === 'invalid_path') {
+      return { hold: true, reason: section.kind, detail: section.reason || section.line, commentId: comment.id };
+    }
     const bodySha256 = sha256Hex(comment.body);
     return {
       commentId: comment.id,
@@ -54,16 +81,27 @@ function findOfficialPlan(comments) {
       author: canonicalAuthorLogin(comment.author),
       body: comment.body,
       bodySha256,
-      files,
+      files: section.files,
       createdAt: comment.createdAt,
     };
   }
   return null;
 }
 
+function issueEditedByUntrusted(events) {
+  for (const ev of events || []) {
+    if (ev.event !== 'edited') continue;
+    const login = canonicalAuthorLogin(ev.actor || { login: ev.actor && ev.actor.login });
+    if (!OFFICIAL_PLAN_AUTHORS.has(login)) return { hold: true, editor: login };
+  }
+  return { hold: false };
+}
+
 module.exports = {
   canonicalAuthorLogin,
   isTrustedPlanAuthor,
+  stripFencedRegions,
   parseFilesSection,
   findOfficialPlan,
+  issueEditedByUntrusted,
 };

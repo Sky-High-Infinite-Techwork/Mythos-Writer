@@ -30,4 +30,12 @@ function readDispatchSwitches(repo, controlToken) {
   return { ok: true, enabled, unattended: u, dispatch };
 }
 
-module.exports = { readRepoVariable, readDispatchSwitches };
+function actWritesEnabled(switches) {
+  return switches.ok && switches.enabled === true;
+}
+
+module.exports = {
+  readRepoVariable,
+  readDispatchSwitches,
+  actWritesEnabled,
+};

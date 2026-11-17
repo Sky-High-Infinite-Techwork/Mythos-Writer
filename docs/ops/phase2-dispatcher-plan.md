@@ -25,7 +25,7 @@ Both must be the literal string `true` before any write (ref create/delete, issu
 
 Re-read switches with `MYTHOS_CONTROL_READ_TOKEN` immediately before each mutating step (same pattern as Phase 1 `readSwitch`).
 
-Manual `workflow_dispatch` defaults to **dry-run**; scheduled runs use **act** only when both switches are true.
+Manual `workflow_dispatch` defaults to **dry-run** (works with switches **off**). Scheduled runs run **sweep only** when both switches are true. **Claim** is manual `workflow_dispatch` + `act` only (never on schedule).
 
 ## Build-order work queue
 
@@ -73,39 +73,34 @@ refs/mythos/dispatch/lane-00
 refs/mythos/dispatch/lane-19
 ```
 
-**Claim (act mode):**
+**Claim (manual act only):**
 
-1. Read `MYTHOS_DISPATCH_LANE_CAP` (`N`, clamped 1–20).
-2. For `i` in `0 .. N-1`, attempt `POST /repos/{repo}/git/refs` with  
-   `ref=refs/mythos/dispatch/lane-{ii}` and `sha=<lease_commit_sha>`.
-3. GitHub returns **422** if the ref already exists → try next slot.
-4. If all slots fail, exit without dispatch (lane full).
+1. Read `MYTHOS_DISPATCH_LANE_CAP` (`N`, fail-closed if not an integer 1–20).
+2. For the first free slot `i` in `0 .. N-1` with no live lease, call GraphQL **`updateRefs`** with **two** `refUpdates` in one request: `lane-{ii}` and `claim/{issue}-{slice}`, each `beforeOid` = zero OID, `oid` = lease commit SHA.
+3. GraphQL message **`Reference already exists`** ⇒ try next slot. Any other error ⇒ fail closed (exit non-zero). After ambiguous errors, `GET` the ref; treat as success only for idempotent **same-run** retry (`recoverSameSha`).
+4. Enforce **file disjointness** against live leases (normalized `files[]` in lease JSON).
 
-Creating the ref is **atomic**; at most one job owns a slot.
-
-**Lease commit:** lightweight commit object (orphan or empty tree) whose message is JSON:
+**Lease commit:** commit on `main`’s tree with message JSON (`schema: mythos-dispatch-lease/v1`):
 
 ```json
 {
-  "v": 1,
   "issue": 1234,
   "slice": 0,
   "planCommentId": 999,
   "planBodySha256": "<hex>",
   "runId": 5678,
+  "files": ["frontend/foo.ts"],
   "runAttempt": 1,
   "claimedAt": "ISO-8601",
   "expiresAt": "ISO-8601"
 }
 ```
 
-Default TTL: 120 minutes (`MYTHOS_DISPATCH_LEASE_MINUTES`, optional var, default 120).
+Default TTL: **180** minutes (`MYTHOS_DISPATCH_LEASE_MINUTES`, clamped **30–360**). Must exceed longest lane job timeout plus margin.
 
-**Release:** `DELETE` the slot ref when the slice finishes or fails closed. **Sweeper:** scheduled job pass deletes refs whose `expiresAt` is in the past (using commit message parse).
+**Release / sweep / renew:** GraphQL `updateRefs` with `beforeOid` = current SHA and `oid` = zero OID (delete). Re-read `UNATTENDED_ENABLED` and `MYTHOS_DISPATCH_ENABLED` before **every** delete in sweep. **`renewLeaseHeartbeat`** (PR 2 lanes) CAS-updates `oid` before publish; holders call **`assertHolderBeforePublish`**.
 
-**Per-slice identity:** additionally create  
-`refs/mythos/dispatch/claim/{issue}-{slice}-{planBodySha256 prefix}`  
-so the same slice cannot be double-booked even after a lane is released. This ref uses the same atomic create semantics and is deleted when the lane is released.
+**Identity:** `refs/mythos/dispatch/claim/{issue}-{slice}` (no body SHA in the ref name).
 
 ### Proof (unit test)
 
@@ -137,8 +132,8 @@ Rules:
 
 ## Plan gate (PR 2)
 
-1. Claude **Opus** (via `mythos-claude`) drafts plan comment body with `## Files`.
-2. **Claude Fable** (different model) grades independently; output schema `mythos-plan-grade/v1` with `PASS` | `REVISE` and findings.
+1. Claude (native model via `mythos-claude` — no OpenRouter) drafts plan comment body with `## Files`.
+2. A **different** Claude model grades independently; output schema `mythos-plan-grade/v1` with `PASS` | `REVISE` and findings.
 3. Revise loop until `PASS` or max rounds (`MYTHOS_PLAN_GRADE_MAX_ROUNDS`, default 3).
 4. Store PASS as issue comment with `PLAN GRADE PASS @ comment=<id> sha=<hex>` from gate bot or trusted template; dispatcher reads it before slice claim.
 
@@ -180,9 +175,8 @@ When `MODE=dry-run`:
 
 `mythos-dispatch.yml`:
 
-- Triggers: `schedule` (offset from flow-step), `workflow_dispatch` (dry-run default).
-- Jobs: `admit` → `discover` → `plan` (dry-run log) → optional `sweep` (act, delete expired refs with write App read-write on contents — **ref delete only**, via fine-grained contents permission or write App if available).
-- PR 1 sweep may use write App `contents: write` only for ref deletion under `refs/mythos/dispatch/` (owner carve-out).
+- Triggers: `schedule` (sweep only when armed), `workflow_dispatch` (dry-run default; optional canary matrix).
+- Jobs: `admit` → `discover` (`mythos-control`, dry-run plan) → `sweep` (CAS delete) → `claim` (manual act only) → optional `canary` (parallel scratch-ref create, 6 workers, one winner).
 
 Concurrency: `mythos-unattended-dispatch` for sweep+claim orchestration job; do not serialize future per-PR reviews.
 

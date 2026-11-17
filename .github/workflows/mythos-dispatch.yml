@@ -1,22 +1,30 @@
 name: Mythos dispatch
 
 # Phase 2 dispatcher core: build-order scan, official-plan parse, atomic lane claims.
-# Build lanes and plan grading arrive in a follow-on PR. See docs/ops/phase2-dispatcher-plan.md.
+# Scheduled runs sweep stale refs only. Manual act may claim; canary is optional.
+# See docs/ops/phase2-dispatcher-plan.md.
 
 on:
   schedule:
-    # Every ten minutes, offset from flow-step and final-gate.
     - cron: '4,14,24,34,44,54 * * * *'
   workflow_dispatch:
     inputs:
       mode:
-        description: 'dry-run logs would_claim only. act may create lease refs.'
+        description: 'dry-run logs would_claim (works with switches off). act sweep/claim requires switches on.'
         required: true
         default: dry-run
         type: choice
         options:
           - dry-run
           - act
+      canary_scratch:
+        description: 'When true, run parallel scratch-ref canary (manual only, requires switches on for act).'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 permissions: {}
 
@@ -26,10 +34,12 @@ jobs:
     timeout-minutes: 5
     permissions: {}
     outputs:
-      enabled: ${{ steps.gate.outputs.enabled }}
-      mode: ${{ steps.gate.outputs.mode }}
+      plan: ${{ steps.gate.outputs.plan }}
+      sweep: ${{ steps.gate.outputs.sweep }}
+      claim: ${{ steps.gate.outputs.claim }}
+      canary: ${{ steps.gate.outputs.canary }}
     steps:
-      - name: Admit dispatch when unattended and dispatch switches are true
+      - name: Admit dispatch jobs on main
         id: gate
         shell: bash
         env:
@@ -39,6 +49,7 @@ jobs:
           UNATTENDED: ${{ vars.UNATTENDED_ENABLED }}
           DISPATCH: ${{ vars.MYTHOS_DISPATCH_ENABLED }}
           MODE: ${{ github.event.inputs.mode }}
+          CANARY: ${{ github.event.inputs.canary_scratch }}
         run: |
           set -euo pipefail
           # ADMIT-BEGIN
@@ -54,32 +65,46 @@ jobs:
             schedule|workflow_dispatch) ;;
             *) echo "reject: event" >&2; exit 1 ;;
           esac
-          if [ "$EVENT" = "schedule" ]; then
-            MODE=act
+          WRITE_ON=false
+          if [ "$UNATTENDED" = "true" ] && [ "$DISPATCH" = "true" ]; then
+            WRITE_ON=true
           fi
-          if [ "$UNATTENDED" != "true" ] || [ "$DISPATCH" != "true" ]; then
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "mode=inert" >> "$GITHUB_OUTPUT"
-            echo "MYTHOS dispatch inert; exiting without writes"
-            exit 0
+          PLAN=false
+          SWEEP=false
+          CLAIM=false
+          CANARY_RUN=false
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            case "$MODE" in
+              dry-run) PLAN=true ;;
+              act)
+                if [ "$WRITE_ON" = "true" ]; then
+                  SWEEP=true
+                  CLAIM=true
+                fi
+                ;;
+              *) echo "reject: mode" >&2; exit 1 ;;
+            esac
+            if [ "$CANARY" = "true" ] && [ "$WRITE_ON" = "true" ]; then
+              CANARY_RUN=true
+            fi
           fi
-          case "$MODE" in
-            dry-run|act) ;;
-            *) echo "reject: mode" >&2; exit 1 ;;
-          esac
-          echo "enabled=true" >> "$GITHUB_OUTPUT"
-          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT" = "schedule" ] && [ "$WRITE_ON" = "true" ]; then
+            SWEEP=true
+          fi
+          echo "plan=$PLAN" >> "$GITHUB_OUTPUT"
+          echo "sweep=$SWEEP" >> "$GITHUB_OUTPUT"
+          echo "claim=$CLAIM" >> "$GITHUB_OUTPUT"
+          echo "canary=$CANARY_RUN" >> "$GITHUB_OUTPUT"
           # ADMIT-END
 
   discover:
     needs: admit
-    if: needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && needs.admit.outputs.mode == 'dry-run' && github.ref == 'refs/heads/main'
+    if: needs.admit.result == 'success' && needs.admit.outputs.plan == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: mythos-writer
+    environment: mythos-control
     permissions:
       contents: read
-      issues: read
     steps:
       - name: Confirm the trusted ref before checkout
         env:
@@ -96,9 +121,9 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
           submodules: false
-      - name: Plan or claim the next build-order slice
+      - name: Dry-run plan (switches may be off)
         env:
-          MODE: ${{ needs.admit.outputs.mode }}
+          MODE: dry-run
           REPO: Sky-High-Infinite-Techwork/Mythos-Writer
           CONTROL_TOKEN: ${{ secrets.MYTHOS_CONTROL_READ_TOKEN }}
           READ_TOKEN: ${{ github.token }}
@@ -106,7 +131,7 @@ jobs:
 
   sweep:
     needs: admit
-    if: needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && needs.admit.outputs.mode == 'act' && github.ref == 'refs/heads/main'
+    if: needs.admit.result == 'success' && needs.admit.outputs.sweep == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: mythos-writer
@@ -152,12 +177,13 @@ jobs:
         env:
           REPO: Sky-High-Infinite-Techwork/Mythos-Writer
           CONTROL_TOKEN: ${{ secrets.MYTHOS_CONTROL_READ_TOKEN }}
+          READ_TOKEN: ${{ github.token }}
           WRITE_TOKEN: ${{ steps.write.outputs.token }}
         run: node .github/scripts/unattended/dispatch/dispatch-cli.js sweep
 
   claim:
     needs: [admit, sweep]
-    if: needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && needs.admit.outputs.mode == 'act' && github.ref == 'refs/heads/main'
+    if: needs.admit.result == 'success' && needs.admit.outputs.claim == 'true' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: mythos-writer
@@ -166,7 +192,6 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
-      issues: read
     steps:
       - name: Confirm the trusted ref before reading secrets
         env:
@@ -200,7 +225,7 @@ jobs:
           set -euo pipefail
           test "$MINTED" = "182422539"
           test "$MINTED" = "$EXPECTED"
-      - name: Claim a lane for the next slice
+      - name: Claim a lane for the next slice (manual act only)
         env:
           MODE: act
           REPO: Sky-High-Infinite-Techwork/Mythos-Writer
@@ -209,3 +234,40 @@ jobs:
           READ_TOKEN: ${{ github.token }}
           WRITE_TOKEN: ${{ steps.write.outputs.token }}
         run: node .github/scripts/unattended/dispatch/dispatch-cli.js plan
+
+  canary:
+    needs: admit
+    if: needs.admit.result == 'success' && needs.admit.outputs.canary == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        index: [0, 1, 2, 3, 4, 5]
+    environment: mythos-writer
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+      - name: Mint a contents token for scratch ref canary
+        id: write
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.MYTHOS_WRITE_APP_ID }}
+          private-key: ${{ secrets.MYTHOS_WRITE_APP_PRIVATE_KEY }}
+          owner: Sky-High-Infinite-Techwork
+          repositories: Mythos-Writer
+          permission-contents: write
+      - name: Parallel scratch ref create
+        env:
+          CANARY_INDEX: ${{ matrix.index }}
+          MAIN_SHA: ${{ github.sha }}
+          REPO: Sky-High-Infinite-Techwork/Mythos-Writer
+          READ_TOKEN: ${{ github.token }}
+          WRITE_TOKEN: ${{ steps.write.outputs.token }}
+        run: node .github/scripts/unattended/dispatch/dispatch-cli.js canary-ref

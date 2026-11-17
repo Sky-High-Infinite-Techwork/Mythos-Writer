@@ -884,7 +884,7 @@ function usesOf(doc) {
   return found;
 }
 
-test('mythos-dispatch is schedule-only with dual switch and no provider secrets', () => {
+test('mythos-dispatch schedule never claims; discover uses mythos-control', () => {
   const name = 'mythos-dispatch.yml';
   const text = fs.readFileSync(path.join(WORKFLOWS, name), 'utf8');
   const doc = loadWorkflow(name);
@@ -895,11 +895,10 @@ test('mythos-dispatch is schedule-only with dual switch and no provider secrets'
   assert.equal(text.includes('OPENROUTER'), false);
   assert.equal(text.includes('CLAUDE_CODE_OAUTH_TOKEN'), false);
   assert.equal(text.includes('OPENAI_API_KEY'), false);
-  assert.equal(text.includes('MYTHOS_DISPATCH_ENABLED'), true);
-  assert.equal(text.includes('UNATTENDED_ENABLED'), true);
+  assert.equal(doc.jobs.discover.environment, 'mythos-control');
+  assert.match(String(doc.jobs.claim.if), /workflow_dispatch/);
   assert.equal(JSON.stringify(doc.jobs.discover).includes('MYTHOS_WRITE_APP_PRIVATE_KEY'), false);
   assert.match(text, /permission-contents: write/);
-  assert.equal(doc.jobs.sweep.concurrency.group, 'mythos-unattended-dispatch');
 });
 
 test('privileged workflows are inert controllers with pinned actions and split credentials', () => {

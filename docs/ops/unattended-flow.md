@@ -18,7 +18,15 @@ Manual runs default to `dry-run`. `act` is the mode that can write. A scheduled 
 
 Phase 1b does not push, rebase, dispatch new work, or call OpenRouter. A pull request whose base is not `main` stays held. A pull request that touches `.github/**` stays held for the owner, including a nested path and a rename out of that tree. Other paths on the batch-automerge protected list are high-risk: the flow enqueues them only after `mythos/final-gate` from App 5736520 says `Risk: low` and `Review: strict` for the exact head. Any block or any risk other than low stays held. The transport derives that class from the compare file list and uses the strict prompt for high-risk diffs. It holds only `.github/**` before the model runs. There is no Ivy or Grok step. The write App does not post PROOF comments.
 
-Phase 2 dispatch (`mythos-dispatch.yml`) is specified in [phase2-dispatcher-plan.md](./phase2-dispatcher-plan.md). It requires `MYTHOS_DISPATCH_ENABLED` as well as `UNATTENDED_ENABLED`.
+Phase 2 dispatch (`mythos-dispatch.yml`) is specified in [phase2-dispatcher-plan.md](./phase2-dispatcher-plan.md). It requires `MYTHOS_DISPATCH_ENABLED` as well as `UNATTENDED_ENABLED` for **writes** (sweep, claim, canary). Dry-run plan discovery uses `mythos-control` and works with switches off.
+
+Dispatch lease maintenance uses the write App (`5777914`) with **Contents: write** only to `updateRefs` under `refs/mythos/dispatch/**`. That permission does not bypass branch rulesets; it cannot merge or change `main` without the normal gate.
+
+### Stop dispatch
+
+1. Set `MYTHOS_DISPATCH_ENABLED` to `false` (keep `UNATTENDED_ENABLED` as needed for Phase 1).
+2. Disable workflow **Mythos dispatch** and cancel in-flight runs.
+3. Delete stale lease refs: `refs/mythos/dispatch/*` (owner maintenance via App token or API).
 
 `ci` (including `notes-windows`) and `screenshot-check` already run on `merge_group`.
 
