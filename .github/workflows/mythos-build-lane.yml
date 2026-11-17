@@ -121,11 +121,19 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-          fetch-depth: 1
+          fetch-depth: 0
           submodules: false
-      - name: Validate artifact against claim before any push
+      - name: Validate trusted git diff against claim (not artifact self-report)
         env:
           MODE: ${{ needs.admit.outputs.mode }}
+          MAIN_SHA: ${{ vars.MYTHOS_DISPATCH_MAIN_SHA }}
+          BUILD_HEAD_SHA: ${{ github.sha }}
+          CLAIM_FILES: ${{ vars.MYTHOS_BUILD_LANE_CLAIM_FILES || '' }}
+          BUILD_ARTIFACT_STDOUT: ${{ vars.MYTHOS_BUILD_LANE_ARTIFACT_STUB || '{"schema":"mythos-build-artifact/v1","status":"ok","changedFiles":[]}' }}
         run: |
           set -euo pipefail
-          echo "Trusted publish validates slice paths via build-lane.js before write App push (canary)."
+          if [ -z "$CLAIM_FILES" ]; then
+            echo "CLAIM_FILES unset; trusted diff guard skipped (canary wiring)."
+            exit 0
+          fi
+          node .github/scripts/unattended/dispatch/build-lane-verify-run.js
