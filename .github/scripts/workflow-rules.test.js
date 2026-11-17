@@ -129,7 +129,7 @@ test('tier1-gate needs every Tier 1 job plus setup', () => {
   }
   const run = gate.steps.map((step) => step.run || '').join('\n');
   for (const job of ['setup', ...TIER1_JOBS]) {
-    assert.match(run, new RegExp(`needs\\.${job.replace(/-/g, '\\-')}\\.result`));
+    assert.ok(run.includes(`needs.${job}.result`), `tier1-gate reads needs.${job}.result`);
   }
 });
 
