@@ -60,7 +60,7 @@ function globOrPathProtected(entry) {
   if (!entry || typeof entry !== 'string') return false;
   if (!entry.includes('*') && !entry.includes('?')) return protectedPath(entry);
   const prefix = literalPrefixBeforeWildcard(entry);
-  if (!prefix) return false;
+  if (!prefix) return true;
   return protectedLiteralPrefix(prefix);
 }
 

@@ -20,13 +20,13 @@ Phase 1b does not push, rebase, dispatch new work, or call OpenRouter. A pull re
 
 Phase 2 dispatch (`mythos-dispatch.yml`) is specified in [phase2-dispatcher-plan.md](./phase2-dispatcher-plan.md). It requires `MYTHOS_DISPATCH_ENABLED` as well as `UNATTENDED_ENABLED` for **writes** (sweep, claim, canary). Dry-run plan discovery uses `mythos-control` and works with switches off.
 
-Dispatch lease maintenance uses the write App (`5777914`) with **Contents: write** only to `updateRefs` under `refs/mythos/dispatch/**`. That permission does not bypass branch rulesets; it cannot merge or change `main` without the normal gate.
+Dispatch lease maintenance uses the write App (`5777914`) with **Contents: write** (repo-wide on the App installation). Code only mutates refs under `refs/mythos/dispatch/**` via `assertDispatchRef`; that permission does not bypass branch rulesets and cannot merge or change `main` without the normal gate.
 
 ### Stop dispatch
 
 1. Set `MYTHOS_DISPATCH_ENABLED` to `false` (keep `UNATTENDED_ENABLED` as needed for Phase 1).
 2. Disable workflow **Mythos dispatch** and cancel in-flight runs.
-3. Delete stale lease refs: `refs/mythos/dispatch/*` (owner maintenance via App token or API).
+3. Sweep deletes stale **`lane-*`** and **`claim/*`** refs only. Owner may delete `attempts/`, `done/`, and `canary/` separately if needed.
 
 `ci` (including `notes-windows`) and `screenshot-check` already run on `merge_group`.
 

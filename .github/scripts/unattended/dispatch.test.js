@@ -27,7 +27,12 @@ const {
   sweepDispatchRefs,
   buildLeasePayload,
   computeWouldClaimSlot,
+  renewLeaseHeartbeat,
+  assertHolderBeforePublish,
 } = require('./dispatch/claim');
+const { claimRef: claimRefFn } = require('./dispatch/constants');
+const { globOrPathProtected, globsOverlap } = require('./dispatch/path-policy');
+const { planCommentEditedByUntrusted } = require('./dispatch/official-plan');
 const { createMockRefClient, createYieldingRaceClient } = require('./dispatch/mock-client');
 const { runDispatchPlan } = require('./dispatch/dispatch-run');
 const { activeClaimsFromRefs } = require('./dispatch/dispatch-helpers');
@@ -93,8 +98,10 @@ test('previous_filename must be in claim', () => {
 
 test('20-way concurrent race', async () => {
   const client = createMockRefClient();
-  const { winners } = await concurrentSlotRace(client, 0, 'a'.repeat(40), 20);
-  assert.equal(winners, 1);
+  const race = await concurrentSlotRace(client, 0, 'a'.repeat(40), 20);
+  assert.equal(race.winners, 1);
+  assert.equal(race.refExists, 19);
+  assert.equal(race.fatal, 0);
 });
 
 test('yielding mock race', async () => {
@@ -209,16 +216,134 @@ test('untrusted editor hold', () => {
 test('max attempts backoff hold', async () => {
   const client = createMockRefClient();
   const { attemptsRef, doneRef } = require('./dispatch/constants');
-  const { attemptsMessage } = require('./dispatch/slice-progress');
+  const { attemptsMessage, assessSliceProgress } = require('./dispatch/slice-progress');
   const ref = attemptsRef(1, 0);
-  const msg = attemptsMessage({ count: 5, lastAttemptAt: new Date().toISOString() });
-  client.setRefMessage(ref, msg);
-  await client.createRef({ ref, sha: 'b'.repeat(40) });
-  const { assessSliceProgress } = require('./dispatch/slice-progress');
+  const sha = 'b'.repeat(40);
+  await client.createRef({ ref, sha });
+  client.setRefMessage(ref, attemptsMessage({ count: 5, lastAttemptAt: new Date().toISOString() }));
   const state = await assessSliceProgress(client, 1, 0);
   assert.equal(state.hold, true);
   assert.equal(state.reason, 'max_attempts');
   assert.equal(doneRef(1, 0).includes('done/'), true);
+});
+
+test('renewLeaseHeartbeat updates lane and claim together', async () => {
+  const client = createMockRefClient();
+  const leaseSha = 'a'.repeat(40);
+  const newSha = 'b'.repeat(40);
+  const lane = 'refs/mythos/dispatch/lane-00';
+  const claim = claimRefFn(1, 0);
+  await client.createRefPair({ laneRef: lane, claimRef: claim, afterOid: leaseSha });
+  const renewed = await renewLeaseHeartbeat(client, { laneRef: lane, claimRef: claim, newLeaseSha: newSha, beforeOid: leaseSha }, null);
+  assert.equal(renewed.ok, true);
+  assert.equal(client.refs.get(lane), newSha);
+  assert.equal(client.refs.get(claim), newSha);
+});
+
+test('assertHolderBeforePublish detects lost lease', async () => {
+  const client = createMockRefClient();
+  const leaseSha = 'c'.repeat(40);
+  const lane = 'refs/mythos/dispatch/lane-01';
+  await client.createRef({ ref: lane, sha: leaseSha });
+  client.refs.set(lane, 'd'.repeat(40));
+  const h = await assertHolderBeforePublish(client, [lane], leaseSha);
+  assert.equal(h.ok, false);
+});
+
+test('claim identity ref taken yields slice_already_claimed', async () => {
+  const client = createMockRefClient();
+  const otherSha = 'e'.repeat(40);
+  const name = claimRefFn(9, 0);
+  await client.createRef({ ref: name, sha: otherSha });
+  const payload = buildLeasePayload({ issue: 9, slice: 0, planCommentId: 1, planBodySha256: 'x', files: ['z.ts'] });
+  const result = await claimLaneAndSlice(client, { cap: 5, leaseSha: 'f'.repeat(40), payload });
+  assert.equal(result.reason, 'slice_already_claimed');
+  assert.equal(client.refs.has('refs/mythos/dispatch/lane-00'), false);
+});
+
+test('sweep leaves live lease and attempts refs', async () => {
+  const client = createMockRefClient();
+  const { attemptsRef } = require('./dispatch/constants');
+  const lane = 'refs/mythos/dispatch/lane-00';
+  const attempts = attemptsRef(1, 0);
+  const future = new Date(Date.now() + 3600000).toISOString();
+  await client.createRef({ ref: lane, sha: '1'.repeat(40) });
+  client.setRefMessage(lane, leaseMessage({
+    issue: 1, slice: 0, files: ['a.ts'], planCommentId: 1, planBodySha256: 'x', runId: 1, runAttempt: 1,
+    claimedAt: new Date().toISOString(), expiresAt: future,
+  }));
+  await client.createRef({ ref: attempts, sha: '2'.repeat(40) });
+  const swept = await sweepDispatchRefs(client, {});
+  assert.equal(swept.deleted.includes(lane), false);
+  assert.equal(swept.deleted.includes(attempts), false);
+});
+
+test('cap lowering counts high slot toward overlap', async () => {
+  const client = createMockRefClient();
+  const lane = 'refs/mythos/dispatch/lane-09';
+  const future = new Date(Date.now() + 3600000).toISOString();
+  await client.createRef({ ref: lane, sha: '3'.repeat(40) });
+  client.setRefMessage(lane, leaseMessage({
+    issue: 1, slice: 0, files: ['shared.ts'], planCommentId: 1, planBodySha256: 'x', runId: 1, runAttempt: 1,
+    claimedAt: new Date().toISOString(), expiresAt: future,
+  }));
+  const listed = await client.listRefs({ prefix: 'refs/mythos/dispatch/' });
+  const probe = computeWouldClaimSlot(listed.refs, 3, {
+    issue: 2, slice: 0, files: ['shared.ts'],
+  });
+  assert.equal(probe.ok, false);
+  assert.equal(probe.reason, 'files_overlap');
+});
+
+test('dry-run performs zero ref writes', async () => {
+  const client = createMockRefClient();
+  client.issueComments = async () => ({
+    ok: true,
+    comments: [{ id: '1', databaseId: 1, author: { login: 'SkyyPlayz' }, body: '## Files\na.ts', createdAt: '1' }],
+  });
+  client.getIssue = async () => ({ ok: true, issue: { state: 'open' } });
+  const code = await runDispatchPlan({
+    MODE: 'dry-run',
+    client,
+    readDispatchSwitchesFn: async () => ({ ok: true, enabled: false }),
+    readRepoVariableFn: async (_r, _t, n) => {
+      if (n === 'MYTHOS_BUILD_ORDER_ISSUES') return { ok: true, value: '1' };
+      if (n === 'MYTHOS_DISPATCH_LANE_CAP') return { ok: true, value: '5' };
+      return { ok: true, value: null };
+    },
+    activeClaimsFromRefs: (refs) => activeClaimsFromRefs(refs),
+  });
+  assert.equal(code, 0);
+  assert.equal(client.updateLog.length, 0);
+});
+
+test('glob-vs-glob overlap frontend patterns', () => {
+  assert.equal(globsOverlap(['frontend/*.ts'], ['frontend/a*']), true);
+});
+
+test('glob star-star is protected in plan', () => {
+  assert.equal(globOrPathProtected('**/*'), true);
+});
+
+test('list refs failure fails dispatch dry-run', async () => {
+  const client = createMockRefClient();
+  client.listRefs = async () => ({ ok: false, refs: [] });
+  const code = await runDispatchPlan({
+    MODE: 'dry-run',
+    client,
+    readDispatchSwitchesFn: async () => ({ ok: true, enabled: false }),
+    readRepoVariableFn: async () => ({ ok: true, value: '1' }),
+  });
+  assert.equal(code, 1);
+});
+
+test('plan comment untrusted editor hold', () => {
+  const hold = planCommentEditedByUntrusted({
+    createdAt: '2026-01-01T00:00:00Z',
+    lastEditedAt: '2026-01-02T00:00:00Z',
+    editor: { login: 'evil' },
+  });
+  assert.equal(hold.hold, true);
 });
 
 test('CAS release race surfaces failure', async () => {

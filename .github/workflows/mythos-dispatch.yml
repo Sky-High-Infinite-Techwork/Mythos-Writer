@@ -84,7 +84,7 @@ jobs:
                 ;;
               *) echo "reject: mode" >&2; exit 1 ;;
             esac
-            if [ "$CANARY" = "true" ] && [ "$WRITE_ON" = "true" ]; then
+            if [ "$CANARY" = "true" ] && [ "$MODE" = "act" ] && [ "$WRITE_ON" = "true" ]; then
               CANARY_RUN=true
             fi
           fi
@@ -248,7 +248,16 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Confirm the trusted ref before reading secrets
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$REPO" = "Sky-High-Infinite-Techwork/Mythos-Writer"
+          test "$REF" = "refs/heads/main"
+      - name: Check out the trusted default-branch commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -263,11 +272,71 @@ jobs:
           owner: Sky-High-Infinite-Techwork
           repositories: Mythos-Writer
           permission-contents: write
+      - name: Check the write token installation
+        env:
+          MINTED: ${{ steps.write.outputs.installation-id }}
+          EXPECTED: ${{ vars.MYTHOS_WRITE_APP_INSTALLATION_ID }}
+        run: |
+          set -euo pipefail
+          test "$MINTED" = "182422539"
+          test "$MINTED" = "$EXPECTED"
       - name: Parallel scratch ref create
         env:
+          MODE: act
           CANARY_INDEX: ${{ matrix.index }}
           MAIN_SHA: ${{ github.sha }}
           REPO: Sky-High-Infinite-Techwork/Mythos-Writer
+          CONTROL_TOKEN: ${{ secrets.MYTHOS_CONTROL_READ_TOKEN }}
           READ_TOKEN: ${{ github.token }}
           WRITE_TOKEN: ${{ steps.write.outputs.token }}
         run: node .github/scripts/unattended/dispatch/dispatch-cli.js canary-ref
+
+  canary-verify:
+    needs: [admit, canary]
+    if: needs.admit.result == 'success' && needs.admit.outputs.canary == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: mythos-writer
+    permissions:
+      contents: read
+    steps:
+      - name: Confirm the trusted ref before reading secrets
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$REPO" = "Sky-High-Infinite-Techwork/Mythos-Writer"
+          test "$REF" = "refs/heads/main"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+      - name: Mint a contents token for canary cleanup
+        id: write
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.MYTHOS_WRITE_APP_ID }}
+          private-key: ${{ secrets.MYTHOS_WRITE_APP_PRIVATE_KEY }}
+          owner: Sky-High-Infinite-Techwork
+          repositories: Mythos-Writer
+          permission-contents: write
+      - name: Check the write token installation
+        env:
+          MINTED: ${{ steps.write.outputs.installation-id }}
+          EXPECTED: ${{ vars.MYTHOS_WRITE_APP_INSTALLATION_ID }}
+        run: |
+          set -euo pipefail
+          test "$MINTED" = "182422539"
+          test "$MINTED" = "$EXPECTED"
+      - name: Assert single scratch ref and CAS delete
+        env:
+          MODE: act
+          MAIN_SHA: ${{ github.sha }}
+          REPO: Sky-High-Infinite-Techwork/Mythos-Writer
+          CONTROL_TOKEN: ${{ secrets.MYTHOS_CONTROL_READ_TOKEN }}
+          READ_TOKEN: ${{ github.token }}
+          WRITE_TOKEN: ${{ steps.write.outputs.token }}
+        run: node .github/scripts/unattended/dispatch/dispatch-cli.js canary-verify

@@ -896,7 +896,10 @@ test('mythos-dispatch schedule never claims; discover uses mythos-control', () =
   assert.equal(text.includes('CLAUDE_CODE_OAUTH_TOKEN'), false);
   assert.equal(text.includes('OPENAI_API_KEY'), false);
   assert.equal(doc.jobs.discover.environment, 'mythos-control');
-  assert.match(String(doc.jobs.claim.if), /workflow_dispatch/);
+  assert.equal(
+    String(doc.jobs.claim.if),
+    "needs.admit.result == 'success' && needs.admit.outputs.claim == 'true' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'",
+  );
   assert.equal(JSON.stringify(doc.jobs.discover).includes('MYTHOS_WRITE_APP_PRIVATE_KEY'), false);
   assert.match(text, /permission-contents: write/);
 });

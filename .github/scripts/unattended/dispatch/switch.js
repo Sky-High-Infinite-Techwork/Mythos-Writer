@@ -4,17 +4,17 @@ const { interpretSwitch } = require('../switch');
 const { gh } = require('../spawn');
 
 function readRepoVariable(repo, token, name) {
-  if (!token) return { ok: false, value: null };
+  if (!token) return { ok: false, value: null, reason: 'no_token' };
   const result = gh(
     ['api', `repos/${repo}/actions/variables/${name}`, '--jq', '.value'],
     token,
   );
   if (result && result.status === 0) {
-    return { ok: true, value: String(result.stdout || '').replace(/\r?\n$/, '') };
+    return { ok: true, value: String(result.stdout || '').replace(/\r?\n$/, ''), unset: false };
   }
   const err = (result && result.stderr) || '';
-  if (/\b404\b/.test(err) || /Not Found/.test(err)) return { ok: true, value: null };
-  return { ok: false, value: null };
+  if (/\b404\b/.test(err) || /Not Found/.test(err)) return { ok: true, value: null, unset: true };
+  return { ok: false, value: null, reason: 'access_denied' };
 }
 
 function readDispatchSwitches(repo, controlToken) {

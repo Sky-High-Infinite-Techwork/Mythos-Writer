@@ -2,6 +2,10 @@
 
 const ZERO_OID = '0000000000000000000000000000000000000000';
 const DISPATCH_REF_ROOT = 'refs/mythos/dispatch/';
+const OID_HEX = /^[0-9a-f]{40}$/i;
+
+/** GitHub GraphQL updateRefs lost-race message (canary records this exact string). */
+const UPDATE_REFS_REF_EXISTS = 'Reference already exists';
 
 const UPDATE_REFS_MUTATION = 'mutation($repositoryId:ID!,$refUpdates:[RefUpdate!]!){updateRefs(input:{repositoryId:$repositoryId,refUpdates:$refUpdates}){clientMutationId}}';
 
@@ -12,44 +16,53 @@ function assertDispatchRef(ref) {
   return ref;
 }
 
-function refUpdateCreate(ref, oid) {
+function assertSha40(oid, label) {
+  if (!OID_HEX.test(String(oid || ''))) {
+    throw new Error(`${label} must be a 40-character hex OID`);
+  }
+}
+
+function refUpdateCreate(ref, afterOid) {
   assertDispatchRef(ref);
-  return { name: ref, oid, beforeOid: ZERO_OID };
+  assertSha40(afterOid, 'afterOid');
+  return { name: ref, afterOid, beforeOid: ZERO_OID };
 }
 
 function refUpdateDelete(ref, beforeOid) {
   assertDispatchRef(ref);
-  return { name: ref, oid: ZERO_OID, beforeOid };
+  assertSha40(beforeOid, 'beforeOid');
+  return { name: ref, afterOid: ZERO_OID, beforeOid };
 }
 
-function refUpdateRenew(ref, newOid, beforeOid) {
+function refUpdateRenew(ref, afterOid, beforeOid) {
   assertDispatchRef(ref);
-  return { name: ref, oid: newOid, beforeOid };
+  assertSha40(afterOid, 'afterOid');
+  assertSha40(beforeOid, 'beforeOid');
+  return { name: ref, afterOid, beforeOid };
 }
 
-function parseGraphqlErrors(stdout, stderr) {
-  const text = `${stdout || ''}\n${stderr || ''}`;
+function parseGraphqlErrors(stdout) {
   try {
     const data = JSON.parse(stdout || '{}');
-    if (data.errors) return data.errors;
+    if (Array.isArray(data.errors) && data.errors.length) return data.errors;
   } catch {
-    /* fall through */
-  }
-  if (/Reference already exists/i.test(text)) {
-    return [{ message: 'Reference already exists' }];
+    /* not JSON */
   }
   return null;
 }
 
 function isRefExistsError(errors) {
-  return Array.isArray(errors) && errors.some((e) => e && e.message === 'Reference already exists');
+  return Array.isArray(errors) && errors.some((e) => e && e.message === UPDATE_REFS_REF_EXISTS);
 }
 
 module.exports = {
   ZERO_OID,
   DISPATCH_REF_ROOT,
+  OID_HEX,
+  UPDATE_REFS_REF_EXISTS,
   UPDATE_REFS_MUTATION,
   assertDispatchRef,
+  assertSha40,
   refUpdateCreate,
   refUpdateDelete,
   refUpdateRenew,

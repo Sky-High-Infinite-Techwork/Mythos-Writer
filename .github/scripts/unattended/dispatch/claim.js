@@ -10,10 +10,16 @@ const {
   DEFAULT_LEASE_MINUTES,
   clampLeaseMinutes,
 } = require('./constants');
-const { refUpdateDelete } = require('./refs-graphql');
+const { refUpdateDelete, refUpdateRenew } = require('./refs-graphql');
 const { globsOverlap } = require('./path-policy');
 
 const REF_EXISTS = 'ref_exists';
+const LANE_REF_RE = /^refs\/mythos\/dispatch\/lane-\d{2}$/;
+const CLAIM_REF_RE = /^refs\/mythos\/dispatch\/claim\/\d+-\d+$/;
+
+function isSweepableRef(ref) {
+  return LANE_REF_RE.test(ref) || CLAIM_REF_RE.test(ref);
+}
 
 function buildLeasePayload(input, leaseMinutes = DEFAULT_LEASE_MINUTES) {
   const minutes = clampLeaseMinutes(leaseMinutes);
@@ -32,19 +38,29 @@ function buildLeasePayload(input, leaseMinutes = DEFAULT_LEASE_MINUTES) {
   };
 }
 
-function activeLeasesWithinCap(refs, cap, now = new Date()) {
+function parseLaneIndex(ref) {
+  if (!ref || !ref.includes('/lane-')) return null;
+  const match = String(ref).match(/lane-(\d{2})$/);
+  if (!match) return null;
+  return parseInt(match[1], 10);
+}
+
+function activeLeasesAll(refs, now = new Date()) {
   const active = [];
   for (const row of refs || []) {
-    if (!row.ref || !row.ref.includes('/lane-')) continue;
-    const match = row.ref.match(/lane-(\d{2})$/);
-    if (!match) continue;
-    const index = parseInt(match[1], 10);
-    if (index >= cap) continue;
+    const index = parseLaneIndex(row.ref);
+    if (index == null) continue;
     const lease = parseLeaseMessage(row.message);
     if (!lease || isExpired(lease, now)) continue;
     active.push({ ...row, lease, slot: index });
   }
   return active;
+}
+
+function activeLeasesWithinCap(refs, cap, now = new Date()) {
+  const parsed = parseLaneCap(cap);
+  const limit = parsed.ok ? parsed.value : 0;
+  return activeLeasesAll(refs, now).filter((row) => row.slot < limit);
 }
 
 function assertFilesDisjoint(files, activeLeases) {
@@ -62,28 +78,55 @@ async function refOwnedBySha(client, ref, leaseSha) {
   return got.sha === leaseSha;
 }
 
-async function tryCreateRefPair(client, { laneRef, claimRef, leaseSha, recoverSameSha = false }) {
-  const result = await client.createRefPair({ laneRef, claimRef, oid: leaseSha });
-  if (result.ok) return { ok: true, laneRef, claimRef };
+async function releaseOursIfHeld(client, ref, leaseSha, reReadSwitch) {
+  const got = await client.getRef({ ref });
+  if (got.ok && got.sha === leaseSha) {
+    return releaseRefCas(client, ref, leaseSha, reReadSwitch);
+  }
+  return { ok: true, skipped: true };
+}
+
+async function tryCreateRefPair(client, { laneRef, claimRef: claimRefName, leaseSha, recoverSameSha = false, reReadSwitch }) {
+  if (reReadSwitch) {
+    const sw = await reReadSwitch();
+    if (!sw.ok || !sw.enabled) return { ok: false, fatal: true, reason: 'switch_off' };
+  }
+  const result = await client.createRefPair({ laneRef, claimRef: claimRefName, afterOid: leaseSha });
+  if (result.ok) return { ok: true, laneRef, claimRef: claimRefName };
   if (result.refExists) {
+    const claimGot = await client.getRef({ ref: claimRefName });
+    if (claimGot.ok && claimGot.sha !== leaseSha) {
+      return { ok: false, reason: 'slice_already_claimed' };
+    }
     if (recoverSameSha) {
       const laneOurs = await refOwnedBySha(client, laneRef, leaseSha);
-      const claimOurs = await refOwnedBySha(client, claimRef, leaseSha);
-      if (laneOurs && claimOurs) return { ok: true, laneRef, claimRef, recovered: true };
+      const claimOurs = await refOwnedBySha(client, claimRefName, leaseSha);
+      if (laneOurs && claimOurs) {
+        return { ok: true, laneRef, claimRef: claimRefName, recovered: true };
+      }
     }
-    return { ok: false, reason: REF_EXISTS };
+    await releaseOursIfHeld(client, laneRef, leaseSha, reReadSwitch);
+    await releaseOursIfHeld(client, claimRefName, leaseSha, reReadSwitch);
+    return { ok: false, reason: REF_EXISTS, refExists: true };
   }
   if (result.fatal) return { ok: false, fatal: true, reason: result.error || 'update_refs_failed' };
-  return { ok: false, reason: result.error || 'create_failed' };
+  const laneOurs = await refOwnedBySha(client, laneRef, leaseSha);
+  const claimOurs = await refOwnedBySha(client, claimRefName, leaseSha);
+  if (recoverSameSha && laneOurs && claimOurs) {
+    return { ok: true, laneRef, claimRef: claimRefName, recovered: true };
+  }
+  if (laneOurs) await releaseOursIfHeld(client, laneRef, leaseSha, reReadSwitch);
+  if (claimOurs) await releaseOursIfHeld(client, claimRefName, leaseSha, reReadSwitch);
+  return { ok: false, reason: result.error || 'create_failed', ambiguous: true };
 }
 
 function computeWouldClaimSlot(refs, cap, payload, now = new Date()) {
   const parsed = parseLaneCap(cap);
   if (!parsed.ok) return { ok: false, reason: 'invalid_lane_cap' };
-  const active = activeLeasesWithinCap(refs, parsed.value, now);
-  const disjoint = assertFilesDisjoint(payload.files, active);
+  const allLive = activeLeasesAll(refs, now);
+  const disjoint = assertFilesDisjoint(payload.files, allLive);
   if (!disjoint.ok) return { ok: false, reason: disjoint.reason };
-  const usedSlots = new Set(active.map((row) => row.slot));
+  const usedSlots = new Set(activeLeasesWithinCap(refs, parsed.value, now).map((row) => row.slot));
   for (let index = 0; index < parsed.value; index += 1) {
     if (!usedSlots.has(index)) {
       return { ok: true, slot: index, laneCap: parsed.value };
@@ -92,23 +135,23 @@ function computeWouldClaimSlot(refs, cap, payload, now = new Date()) {
   return { ok: false, reason: 'lane_full' };
 }
 
-async function claimLaneAndSlice(client, { cap, leaseSha, payload, recoverSameSha = false }) {
+async function claimLaneAndSlice(client, { cap, leaseSha, payload, recoverSameSha = false, reReadSwitch }) {
   const parsed = parseLaneCap(cap);
   if (!parsed.ok) return { ok: false, fatal: true, reason: 'invalid_lane_cap' };
   const limit = parsed.value;
   const listed = await client.listRefs({ prefix: 'refs/mythos/dispatch/' });
   if (!listed.ok) return { ok: false, fatal: true, reason: 'list_failed' };
-  const active = activeLeasesWithinCap(listed.refs, limit);
-  const disjoint = assertFilesDisjoint(payload.files, active);
+  const allLive = activeLeasesAll(listed.refs);
+  const disjoint = assertFilesDisjoint(payload.files, allLive);
   if (!disjoint.ok) return { ok: false, reason: disjoint.reason };
-  const usedSlots = new Set(active.map((row) => row.slot));
+  const usedSlots = new Set(activeLeasesWithinCap(listed.refs, limit).map((row) => row.slot));
   for (let index = 0; index < limit; index += 1) {
     if (usedSlots.has(index)) continue;
     const laneRef = slotRef(index);
     const claimRefName = claimRef(payload.issue, payload.slice);
     // eslint-disable-next-line no-await-in-loop
     const attempt = await tryCreateRefPair(client, {
-      laneRef, claimRef: claimRefName, leaseSha, recoverSameSha,
+      laneRef, claimRef: claimRefName, leaseSha, recoverSameSha, reReadSwitch,
     });
     if (attempt.ok) {
       return {
@@ -121,6 +164,9 @@ async function claimLaneAndSlice(client, { cap, leaseSha, payload, recoverSameSh
       };
     }
     if (attempt.fatal) return { ok: false, fatal: true, reason: attempt.reason };
+    if (attempt.reason === 'slice_already_claimed') {
+      return { ok: false, reason: 'slice_already_claimed' };
+    }
     if (attempt.reason !== REF_EXISTS) return { ok: false, reason: attempt.reason };
   }
   return { ok: false, reason: 'lane_full' };
@@ -143,13 +189,11 @@ function assertDispatchRefFromClaim(ref) {
   }
 }
 
-async function releaseClaimPair(client, { laneRef, claimRef, leaseSha }, reReadSwitch) {
+async function releaseClaimPair(client, { laneRef, claimRef: claimRefName, leaseSha }, reReadSwitch) {
   const results = [];
-  for (const ref of [claimRef, laneRef]) {
-    const got = await client.getRef({ ref });
-    const before = got.ok ? got.sha : leaseSha;
+  for (const ref of [claimRefName, laneRef]) {
     // eslint-disable-next-line no-await-in-loop
-    results.push(await releaseRefCas(client, ref, before, reReadSwitch));
+    results.push(await releaseRefCas(client, ref, leaseSha, reReadSwitch));
   }
   return results;
 }
@@ -166,6 +210,7 @@ async function sweepDispatchRefs(client, { now = new Date(), reReadSwitch } = {}
   const deleted = [];
   const errors = [];
   for (const row of listed.refs) {
+    if (!isSweepableRef(row.ref)) continue;
     if (reReadSwitch) {
       // eslint-disable-next-line no-await-in-loop
       const sw = await reReadSwitch();
@@ -183,15 +228,20 @@ async function sweepDispatchRefs(client, { now = new Date(), reReadSwitch } = {}
   return { ok: errors.length === 0, deleted, errors };
 }
 
-/** Renew lease (CAS). Holder must pass current leaseSha as beforeOid. For PR2 build lanes. */
-async function renewLeaseHeartbeat(client, { ref, newLeaseSha, beforeOid }, reReadSwitch) {
+/** Renew lane + identity refs in one updateRefs to a new lease commit OID. */
+async function renewLeaseHeartbeat(client, { laneRef, claimRef: claimRefName, newLeaseSha, beforeOid }, reReadSwitch) {
   if (reReadSwitch) {
     const sw = await reReadSwitch();
     if (!sw.ok || !sw.enabled) return { ok: false, reason: 'switch_off' };
   }
-  const got = await client.getRef({ ref });
-  if (!got.ok || got.sha !== beforeOid) return { ok: false, reason: 'lease_lost' };
-  const renew = await client.renewRef({ ref, newOid: newLeaseSha, beforeOid });
+  const holder = await assertHolderBeforePublish(client, [laneRef, claimRefName], beforeOid);
+  if (!holder.ok) return { ok: false, reason: holder.reason };
+  const renew = client.renewRefPair
+    ? await client.renewRefPair({ laneRef, claimRef: claimRefName, afterOid: newLeaseSha, beforeOid })
+    : await client.updateRefs([
+      refUpdateRenew(laneRef, newLeaseSha, beforeOid),
+      refUpdateRenew(claimRefName, newLeaseSha, beforeOid),
+    ]);
   if (!renew.ok) return { ok: false, reason: renew.error || 'renew_failed' };
   return { ok: true };
 }
@@ -211,19 +261,24 @@ async function concurrentSlotRace(client, slotIndex, leaseSha, workers) {
     Array.from({ length: workers }, () => tryCreateRefPair(client, { laneRef: ref, claimRef: claimRefName, leaseSha })),
   );
   const wins = attempts.filter((row) => row.ok);
-  return { ref, winners: wins.length, attempts };
+  const refExists = attempts.filter((row) => row.refExists || row.reason === REF_EXISTS).length;
+  const fatal = attempts.filter((row) => row.fatal).length;
+  return { ref, winners: wins.length, attempts, refExists, fatal };
 }
 
 module.exports = {
   REF_EXISTS,
+  isSweepableRef,
   buildLeasePayload,
   computeWouldClaimSlot,
+  activeLeasesAll,
   activeLeasesWithinCap,
   assertFilesDisjoint,
   tryCreateRefPair,
   claimLaneAndSlice,
   releaseRefCas,
   releaseClaimPair,
+  releaseOursIfHeld,
   listDispatchRefs,
   sweepDispatchRefs,
   renewLeaseHeartbeat,

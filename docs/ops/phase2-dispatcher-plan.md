@@ -21,7 +21,7 @@ Both must be the literal string `true` before any write (ref create/delete, issu
 | --- | --- | --- |
 | `UNATTENDED_ENABLED` | `false` | Phase 1 master switch (existing) |
 | `MYTHOS_DISPATCH_ENABLED` | `false` | Phase 2 dispatcher arm |
-| `MYTHOS_DISPATCH_LANE_CAP` | `5` | Max concurrent dispatch claims (`1`–`20`) |
+| `MYTHOS_DISPATCH_LANE_CAP` | `5` | Max concurrent dispatch claims (`1`–`20`; slots `lane-00` … `lane-19`) |
 
 Re-read switches with `MYTHOS_CONTROL_READ_TOKEN` immediately before each mutating step (same pattern as Phase 1 `readSwitch`).
 
@@ -36,7 +36,7 @@ Manual `workflow_dispatch` defaults to **dry-run** (works with switches **off**)
 - Issue open, in-repo (not a fork discussion).
 - Issue body and comments are treated as **untrusted** (prompt-injection surface); only structured fields and trusted-author plan comments drive automation.
 - An issue is **ready for planning** when it has no in-flight dispatch claim ref whose lease has not expired (see claims).
-- An issue is **ready for slice dispatch** only after a **plan grade PASS** is recorded (PR 2); PR 1 stops after logging the would-be claim.
+- An issue is **ready for slice dispatch** only after a **plan grade PASS** is recorded (PR 2); PR 1 stops after logging the would-be claim. Ineligible head-of-line issues (closed, linked PR, no plan, slice done, max attempts) are skipped to the next build-order entry.
 
 ## Official plan convention
 
@@ -76,7 +76,7 @@ refs/mythos/dispatch/lane-19
 **Claim (manual act only):**
 
 1. Read `MYTHOS_DISPATCH_LANE_CAP` (`N`, fail-closed if not an integer 1–20).
-2. For the first free slot `i` in `0 .. N-1` with no live lease, call GraphQL **`updateRefs`** with **two** `refUpdates` in one request: `lane-{ii}` and `claim/{issue}-{slice}`, each `beforeOid` = zero OID, `oid` = lease commit SHA.
+2. For the first free slot `i` in `0 .. N-1` with no live lease, call GraphQL **`updateRefs`** with **two** `refUpdates` in one request: `lane-{ii}` and `claim/{issue}-{slice}`, each `beforeOid` = zero OID, `afterOid` = lease commit SHA.
 3. GraphQL message **`Reference already exists`** ⇒ try next slot. Any other error ⇒ fail closed (exit non-zero). After ambiguous errors, `GET` the ref; treat as success only for idempotent **same-run** retry (`recoverSameSha`).
 4. Enforce **file disjointness** against live leases (normalized `files[]` in lease JSON).
 
@@ -98,17 +98,21 @@ refs/mythos/dispatch/lane-19
 
 Default TTL: **180** minutes (`MYTHOS_DISPATCH_LEASE_MINUTES`, clamped **30–360**). Must exceed longest lane job timeout plus margin.
 
-**Release / sweep / renew:** GraphQL `updateRefs` with `beforeOid` = current SHA and `oid` = zero OID (delete). Re-read `UNATTENDED_ENABLED` and `MYTHOS_DISPATCH_ENABLED` before **every** delete in sweep. **`renewLeaseHeartbeat`** (PR 2 lanes) CAS-updates `oid` before publish; holders call **`assertHolderBeforePublish`**.
+**Release / sweep / renew:** GraphQL `updateRefs` with `beforeOid` = current SHA and `afterOid` = zero OID (delete). Release CAS always uses the holder’s known `leaseSha`, never a fresh `GET`. Re-read `UNATTENDED_ENABLED` and `MYTHOS_DISPATCH_ENABLED` before **every** delete in sweep (lane-`NN` and `claim/*` only — never `attempts/`, `done/`, or `canary/`). **`renewLeaseHeartbeat`** CAS-updates **both** lane and claim refs in one `updateRefs` to a new lease commit with a fresh `expiresAt`; holders call **`assertHolderBeforePublish`**.
 
 **Identity:** `refs/mythos/dispatch/claim/{issue}-{slice}` (no body SHA in the ref name).
 
-### Proof (unit test)
+**Attempts / done:** `refs/mythos/dispatch/attempts/{issue}-{slice}` counts dispatch attempts with exponential backoff (`MAX_DISPATCH_ATTEMPTS` = 5). `refs/mythos/dispatch/done/{issue}-{slice}` means the slice finished; dispatcher skips to the next build-order issue. An attempt is recorded only after a successful claim.
 
-Simulate 20 workers attempting the same slot with a mock GitHub client:
+**Path policy:** Empty literal glob prefix (e.g. `**/*`) is protected. Overlap checks are bidirectional for `.git*` vs `.github/**`.
 
-- First `createRef` succeeds; subsequent 19 return `ref already exists`.
-- Parallel `Promise.all` of 20 attempts on **one** slot → exactly **one** success.
-- Parallel attempts on **five** slots with cap **5** → at most five successes; sixth worker gets lane full.
+### Proof (unit test + live canary)
+
+The **mock** proves CAS-shaped `updateRefs` usage (including `afterOid` / `beforeOid`) and 20-way single-winner behavior in memory. It does **not** prove GitHub’s live GraphQL atomicity.
+
+**Unit:** Parallel `Promise.all` of 20 attempts on **one** slot → exactly **one** success, **19** `Reference already exists`, **0** fatal errors.
+
+**Live canary (`mythos-dispatch.yml`, `MODE=act`, switches on):** six parallel jobs race on `refs/mythos/dispatch/canary/scratch-shared`; exactly one `canary_win`, the rest record `Reference already exists`; `canary-verify` CAS-deletes the scratch ref.
 
 ## Global lane cap across jobs
 
@@ -132,8 +136,8 @@ Rules:
 
 ## Plan gate (PR 2)
 
-1. Claude (native model via `mythos-claude` — no OpenRouter) drafts plan comment body with `## Files`.
-2. A **different** Claude model grades independently; output schema `mythos-plan-grade/v1` with `PASS` | `REVISE` and findings.
+1. Claude (native Anthropic model IDs via `mythos-claude` — e.g. `claude-opus-4-20250514` / `claude-sonnet-4-20250514`; no OpenRouter) drafts plan comment body with `## Files`.
+2. A **different** Claude model grades independently (e.g. `claude-3-5-haiku-20241022`); output schema `mythos-plan-grade/v1` with `PASS` | `REVISE` and findings.
 3. Revise loop until `PASS` or max rounds (`MYTHOS_PLAN_GRADE_MAX_ROUNDS`, default 3).
 4. Store PASS as issue comment with `PLAN GRADE PASS @ comment=<id> sha=<hex>` from gate bot or trusted template; dispatcher reads it before slice claim.
 
@@ -141,7 +145,7 @@ No build job starts without PASS bound to `(planCommentId, planBodySha256)`.
 
 ## Build lanes (PR 2)
 
-- Lead: **Claude Code** official action pinned by full commit SHA, `anthropic/claude-opus-*` as configured.
+- Lead: **Claude Code** official action pinned by full commit SHA; use native Anthropic model IDs in env (not OpenRouter slugs).
 - Alternate: **Codex** in `mythos-codex`.
 - Provider and write credentials stay in **separate jobs**; build job outputs artifact (patch/plan/log), trusted job applies.
 - **Fix rounds:** rerun only failed required check subsets; before merge queue, full required set on tip (align with `MERGE_GATE.md`).
@@ -176,7 +180,7 @@ When `MODE=dry-run`:
 `mythos-dispatch.yml`:
 
 - Triggers: `schedule` (sweep only when armed), `workflow_dispatch` (dry-run default; optional canary matrix).
-- Jobs: `admit` → `discover` (`mythos-control`, dry-run plan) → `sweep` (CAS delete) → `claim` (manual act only) → optional `canary` (parallel scratch-ref create, 6 workers, one winner).
+- Jobs: `admit` → `discover` (`mythos-control`, dry-run plan) → `sweep` (CAS delete lane/claim only) → `claim` (manual `workflow_dispatch` + `act` only) → optional `canary` + `canary-verify` (6 parallel scratch-ref creators on `scratch-shared`, one winner, CAS cleanup).
 
 Concurrency: `mythos-unattended-dispatch` for sweep+claim orchestration job; do not serialize future per-PR reviews.
 
@@ -200,7 +204,7 @@ Concurrency: `mythos-unattended-dispatch` for sweep+claim orchestration job; do 
 1. Plan gate before build with bound revision — specified for PR 2; PR 1 does not start builds.
 2. Slices disjoint for parallel — specified and tested in unit tests.
 3. Atomic claims — slot refs + claim refs, 20-way test.
-4. Global lane cap 5–20 — slot index bound.
+4. Global lane cap 1–20 — slot index bound.
 5. Credential split — documented; PR 1 has no provider/write in same job.
 6. Fix rounds — documented for PR 2.
 7. Dual switch + dry-run — implemented PR 1.

@@ -53,12 +53,15 @@ function scratchCanaryRef(matrixIndex) {
   return `${DISPATCH_REF_PREFIX}/canary/scratch-${matrixIndex}`;
 }
 
+const CANARY_SCRATCH_SHARED_REF = `${DISPATCH_REF_PREFIX}/canary/scratch-shared`;
+
 function protectedLiteralPrefix(literal) {
   const pre = String(literal || '');
-  if (!pre) return false;
+  if (!pre) return true;
   if (protectedPath(pre) || ownerPath(pre)) return true;
   if (protectedPath(`${pre}/x.ts`)) return true;
   if (pre.startsWith('.github') || pre.includes('/.github/')) return true;
+  if (/^\.git/.test(pre) && !pre.startsWith('.github')) return true;
   return false;
 }
 
@@ -111,6 +114,7 @@ module.exports = {
   attemptsRef,
   doneRef,
   scratchCanaryRef,
+  CANARY_SCRATCH_SHARED_REF,
   protectedLiteralPrefix,
   sha256Hex,
   leaseMessage,

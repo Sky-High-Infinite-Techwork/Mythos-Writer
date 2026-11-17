@@ -8,21 +8,19 @@ const {
   clampLeaseMinutes,
 } = require('./constants');
 const { readDispatchSwitches, readRepoVariable, actWritesEnabled } = require('./switch');
-const { findOfficialPlan, issueEditedByUntrusted, isTrustedPlanAuthor } = require('./official-plan');
+const { findOfficialPlan, planCommentEditedByUntrusted } = require('./official-plan');
 const { defaultSlices, anyProtectedInPlanFiles } = require('./slice');
 const {
   buildLeasePayload,
   claimLaneAndSlice,
   computeWouldClaimSlot,
-  releaseClaimPair,
   assertHolderBeforePublish,
 } = require('./claim');
-const { parseBuildOrderIssues, pickNextBuildOrderIssue } = require('./build-order');
+const { parseBuildOrderIssues, issueBlockedByClaim } = require('./build-order');
 const { leaseMessage: formatLeaseMessage } = require('./constants');
 const {
   assessSliceProgress,
   recordDispatchAttempt,
-  releaseResultsOk,
 } = require('./slice-progress');
 
 function createDispatchClient(env) {
@@ -30,8 +28,19 @@ function createDispatchClient(env) {
 }
 
 async function reReadSwitchFn(repo, controlToken, readSwitches) {
-  return readSwitches(repo, controlToken);
+  const s = await readSwitches(repo, controlToken);
+  return { ok: s.ok, enabled: actWritesEnabled(s) };
 }
+
+const SKIP_TO_NEXT = new Set([
+  'issue_not_open',
+  'issue_is_pr',
+  'no_official_plan',
+  'slice_done',
+  'max_attempts',
+  'backoff',
+  'slice_already_claimed',
+]);
 
 async function runDispatchPlan(env) {
   const mode = env.MODE === 'act' ? 'act' : 'dry-run';
@@ -90,91 +99,127 @@ async function runDispatchPlan(env) {
 
   const issueMeta = { ...(env.issueMeta || {}) };
   const activeFrom = env.activeClaimsFromRefs || null;
-  const pick = pickNextBuildOrderIssue(
-    ordered,
-    activeFrom ? activeFrom(listed.refs) : [],
-    issueMeta,
-  );
-  if (!pick.ok) {
-    console.log(JSON.stringify({ kind: 'dispatch_idle', reason: pick.reason }));
-    return 0;
-  }
+  const activeClaims = activeFrom ? activeFrom(listed.refs) : [];
 
-  const issueNumber = pick.issue;
-  if (!issueMeta[issueNumber] && client.getIssue) {
-    const meta = await client.getIssue({ issue: issueNumber });
-    if (!meta.ok) {
-      console.error('dispatch: issue fetch failed');
+  const findBoundPlanPass = env.findBoundPlanPass || null;
+
+  let picked = null;
+
+  for (const issueNumber of ordered) {
+    if (issueBlockedByClaim(issueNumber, activeClaims)) continue;
+
+    if (!issueMeta[issueNumber] && client.getIssue) {
+      const meta = await client.getIssue({ issue: issueNumber });
+      if (!meta.ok) {
+        console.error('dispatch: issue fetch failed');
+        return 1;
+      }
+      if (meta.issue.state !== 'open') {
+        console.log(JSON.stringify({ kind: 'dispatch_skip', issue: issueNumber, reason: 'issue_not_open' }));
+        continue;
+      }
+      if (meta.issue.pull_request) {
+        console.log(JSON.stringify({ kind: 'dispatch_skip', issue: issueNumber, reason: 'issue_is_pr' }));
+        continue;
+      }
+      issueMeta[issueNumber] = { state: 'OPEN' };
+    }
+
+    const comments = await client.issueComments({ issue: issueNumber });
+    if (!comments.ok) {
+      console.error('dispatch: failed to list comments');
       return 1;
     }
-    if (meta.issue.state !== 'open') {
-      console.log(JSON.stringify({ kind: 'dispatch_hold', issue: issueNumber, reason: 'issue_not_open' }));
-      return 0;
+    const official = findOfficialPlan(comments.comments);
+    if (!official) {
+      console.log(JSON.stringify({ kind: 'dispatch_skip', issue: issueNumber, reason: 'no_official_plan' }));
+      continue;
     }
-    if (meta.issue.pull_request) {
-      console.log(JSON.stringify({ kind: 'dispatch_hold', issue: issueNumber, reason: 'issue_is_pr' }));
-      return 0;
-    }
-    issueMeta[issueNumber] = { state: 'OPEN' };
-  }
-
-  if (client.issueEvents) {
-    const events = await client.issueEvents({ issue: issueNumber });
-    if (events.ok) {
-      const edit = issueEditedByUntrusted(events.events);
-      if (edit.hold) {
-        console.log(JSON.stringify({ kind: 'dispatch_hold', issue: issueNumber, reason: 'untrusted_editor', editor: edit.editor }));
-        return 0;
-      }
-    }
-  }
-
-  const comments = await client.issueComments({ issue: issueNumber });
-  if (!comments.ok) {
-    console.error('dispatch: failed to list comments');
-    return 1;
-  }
-  const official = findOfficialPlan(comments.comments);
-  if (!official) {
-    console.log(JSON.stringify({ kind: 'dispatch_hold', issue: issueNumber, reason: 'no_official_plan' }));
-    return 0;
-  }
-  if (official.hold) {
-    console.log(JSON.stringify({ kind: 'dispatch_hold', issue: issueNumber, reason: official.reason, detail: official.detail }));
-    return 0;
-  }
-  if (anyProtectedInPlanFiles(official.files)) {
-    console.log(JSON.stringify({ kind: 'dispatch_hold', issue: issueNumber, reason: 'protected_paths_in_plan' }));
-    return 0;
-  }
-
-  const slices = defaultSlices(official.files);
-  const slice = slices[0];
-  const leasePayload = buildLeasePayload({
-    issue: issueNumber,
-    slice: slice.index,
-    planCommentId: official.databaseId || official.commentId,
-    planBodySha256: official.bodySha256,
-    files: slice.files,
-    runId: env.RUN_ID || 0,
-    runAttempt: env.RUN_ATTEMPT || 1,
-  }, leaseMinutes);
-
-  const progress = await assessSliceProgress(client, issueNumber, slice.index);
-  if (!progress.ok) {
-    if (progress.hold) {
+    if (official.hold) {
       console.log(JSON.stringify({
         kind: 'dispatch_hold',
         issue: issueNumber,
-        slice: slice.index,
-        reason: progress.reason,
-        waitMinutes: progress.waitMinutes,
+        reason: official.reason,
+        detail: official.detail,
       }));
-      return 0;
+      continue;
     }
-    console.error('dispatch: slice progress read failed');
-    return 1;
+    const edit = planCommentEditedByUntrusted(official);
+    if (edit.hold) {
+      console.log(JSON.stringify({
+        kind: 'dispatch_hold',
+        issue: issueNumber,
+        reason: 'untrusted_editor',
+        editor: edit.editor,
+      }));
+      continue;
+    }
+    if (anyProtectedInPlanFiles(official.files)) {
+      console.log(JSON.stringify({ kind: 'dispatch_hold', issue: issueNumber, reason: 'protected_paths_in_plan' }));
+      continue;
+    }
+
+    if (mode === 'act' && findBoundPlanPass) {
+      const gradePass = findBoundPlanPass(comments.comments, official);
+      if (!gradePass.ok) {
+        console.log(JSON.stringify({
+          kind: 'dispatch_hold',
+          issue: issueNumber,
+          reason: gradePass.reason || 'plan_not_graded',
+        }));
+        continue;
+      }
+    }
+
+    const slices = defaultSlices(official.files);
+    const slice = slices[0];
+    const leasePayload = buildLeasePayload({
+      issue: issueNumber,
+      slice: slice.index,
+      planCommentId: official.databaseId || official.commentId,
+      planBodySha256: official.bodySha256,
+      files: slice.files,
+      runId: env.RUN_ID || 0,
+      runAttempt: env.RUN_ATTEMPT || 1,
+    }, leaseMinutes);
+
+    const progress = await assessSliceProgress(client, issueNumber, slice.index);
+    if (!progress.ok) {
+      if (progress.hold) {
+        const reason = progress.reason;
+        if (SKIP_TO_NEXT.has(reason)) {
+          console.log(JSON.stringify({
+            kind: 'dispatch_skip',
+            issue: issueNumber,
+            slice: slice.index,
+            reason,
+            waitMinutes: progress.waitMinutes,
+          }));
+          continue;
+        }
+        console.log(JSON.stringify({
+          kind: 'dispatch_hold',
+          issue: issueNumber,
+          slice: slice.index,
+          reason,
+          waitMinutes: progress.waitMinutes,
+        }));
+        continue;
+      }
+      console.error('dispatch: slice progress read failed');
+      return 1;
+    }
+
+    picked = { issueNumber, slice, leasePayload, official };
+    break;
   }
+
+  if (!picked) {
+    console.log(JSON.stringify({ kind: 'dispatch_idle', reason: 'no_eligible_issue' }));
+    return 0;
+  }
+
+  const { issueNumber, slice, leasePayload, official } = picked;
 
   if (mode === 'dry-run') {
     const slotProbe = computeWouldClaimSlot(listed.refs, capParsed.value, leasePayload);
@@ -195,7 +240,13 @@ async function runDispatchPlan(env) {
     return 0;
   }
 
-  await readSwitches(repo, controlToken);
+  const reReadSwitch = () => reReadSwitchFn(repo, controlToken, readSwitches);
+  const switchesNow = await reReadSwitch();
+  if (!switchesNow.ok || !switchesNow.enabled) {
+    console.log('dispatch: act aborted (switch off before lease commit)');
+    return 0;
+  }
+
   let leaseSha = env.LEASE_COMMIT_SHA;
   if (!leaseSha && env.MAIN_SHA && client.createLeaseCommit) {
     const message = formatLeaseMessage(leasePayload);
@@ -211,7 +262,6 @@ async function runDispatchPlan(env) {
     return 1;
   }
 
-  const reReadSwitch = () => reReadSwitchFn(repo, controlToken, readSwitches);
   const mintLeaseSha = async (message) => {
     if (!client.createLeaseCommit || !env.MAIN_SHA) return null;
     const created = await client.createLeaseCommit(message, env.MAIN_SHA);
@@ -223,30 +273,22 @@ async function runDispatchPlan(env) {
     leaseSha,
     payload: leasePayload,
     recoverSameSha: true,
+    reReadSwitch,
   });
   if (!claim.ok) {
     if (claim.fatal) return 1;
-    const record = await recordDispatchAttempt(client, issueNumber, slice.index, { reReadSwitch, mintLeaseSha });
-    if (!record.ok) console.error(`dispatch: attempt record failed: ${record.reason}`);
-    console.log(JSON.stringify({ kind: 'dispatch_skip', reason: claim.reason }));
+    console.log(JSON.stringify({ kind: 'dispatch_skip', issue: issueNumber, reason: claim.reason }));
     return 0;
   }
 
   const holder = await assertHolderBeforePublish(client, [claim.ref, claim.claimRef], leaseSha);
   if (!holder.ok) {
-    const released = await releaseClaimPair(
-      client,
-      { laneRef: claim.ref, claimRef: claim.claimRef, leaseSha },
-      reReadSwitch,
-    );
-    if (!releaseResultsOk(released)) {
-      console.error('dispatch: release after holder mismatch failed');
-      return 1;
-    }
-    await recordDispatchAttempt(client, issueNumber, slice.index, { reReadSwitch, mintLeaseSha });
-    console.log(JSON.stringify({ kind: 'dispatch_skip', reason: holder.reason }));
+    console.log(JSON.stringify({ kind: 'dispatch_skip', issue: issueNumber, reason: holder.reason }));
     return 0;
   }
+
+  const record = await recordDispatchAttempt(client, issueNumber, slice.index, { reReadSwitch, mintLeaseSha });
+  if (!record.ok) console.error(`dispatch: attempt record failed: ${record.reason}`);
 
   console.log(JSON.stringify({
     kind: 'dispatch_claimed',
@@ -255,6 +297,7 @@ async function runDispatchPlan(env) {
     slot: claim.slot,
     laneRef: claim.ref,
     claimRef: claim.claimRef,
+    planCommentId: official.commentId,
   }));
   return 0;
 }

@@ -1,16 +1,18 @@
 'use strict';
 
-const { refUpdateCreate, refUpdateDelete } = require('./refs-graphql');
+const { refUpdateCreate, refUpdateDelete, refUpdateRenew, UPDATE_REFS_REF_EXISTS } = require('./refs-graphql');
 
 /**
- * In-memory GitHub ref client. Optional yieldBetweenCheckAndWrite for race tests.
+ * In-memory GitHub ref client. Optional yieldMs between check and write for race tests.
  */
 function createMockRefClient(options = {}) {
   const refs = new Map();
+  /** @type {Map<string, string>} sha -> commit message */
   const commitMessages = new Map();
   const yields = options.yieldMs || 0;
   const pending = new Map();
   let lock = Promise.resolve();
+  const updateLog = [];
 
   async function maybeYield(ref) {
     if (!yields) return;
@@ -24,11 +26,16 @@ function createMockRefClient(options = {}) {
     pending.delete(ref);
   }
 
+  function messageForSha(sha) {
+    return commitMessages.get(sha) || null;
+  }
+
   function exists(ref) {
     return refs.has(ref);
   }
 
   async function updateRefsInner(refUpdates) {
+    updateLog.push(refUpdates);
     for (const row of refUpdates) {
       await maybeYield(row.name);
     }
@@ -36,7 +43,14 @@ function createMockRefClient(options = {}) {
     const msgSnapshot = new Map(commitMessages);
     const zero = '0000000000000000000000000000000000000000';
     for (const row of refUpdates) {
-      const { name, oid, beforeOid } = row;
+      const { name, afterOid, beforeOid } = row;
+      if (!beforeOid) {
+        refs.clear();
+        for (const [k, v] of snapshot.entries()) refs.set(k, v);
+        commitMessages.clear();
+        for (const [k, v] of msgSnapshot.entries()) commitMessages.set(k, v);
+        return { ok: false, fatal: true, error: 'missing_before_oid' };
+      }
       const current = refs.get(name);
       if (beforeOid === zero) {
         if (current) {
@@ -44,12 +58,18 @@ function createMockRefClient(options = {}) {
           for (const [k, v] of snapshot.entries()) refs.set(k, v);
           commitMessages.clear();
           for (const [k, v] of msgSnapshot.entries()) commitMessages.set(k, v);
-          return { ok: false, status: 422, refExists: true, error: 'Reference already exists' };
+          return {
+            ok: false,
+            status: 422,
+            refExists: true,
+            error: UPDATE_REFS_REF_EXISTS,
+            errors: [{ message: UPDATE_REFS_REF_EXISTS }],
+          };
         }
-        refs.set(name, oid);
+        refs.set(name, afterOid);
         continue;
       }
-      if (oid === zero) {
+      if (afterOid === zero) {
         if (!current || current !== beforeOid) {
           refs.clear();
           for (const [k, v] of snapshot.entries()) refs.set(k, v);
@@ -58,7 +78,6 @@ function createMockRefClient(options = {}) {
           return { ok: false, fatal: true, error: 'cas_mismatch' };
         }
         refs.delete(name);
-        commitMessages.delete(name);
         continue;
       }
       if (!current || current !== beforeOid) {
@@ -68,7 +87,7 @@ function createMockRefClient(options = {}) {
         for (const [k, v] of msgSnapshot.entries()) commitMessages.set(k, v);
         return { ok: false, fatal: true, error: 'cas_mismatch' };
       }
-      refs.set(name, oid);
+      refs.set(name, afterOid);
     }
     return { ok: true, status: 201 };
   }
@@ -83,27 +102,32 @@ function createMockRefClient(options = {}) {
   return {
     refs,
     commitMessages,
+    updateLog,
     exists,
-    async createRefPair({ laneRef, claimRef: claimRefName, oid }) {
-      return updateRefs([refUpdateCreate(laneRef, oid), refUpdateCreate(claimRefName, oid)]);
+    async createRefPair({ laneRef, claimRef: claimRefName, afterOid, oid }) {
+      const target = afterOid || oid;
+      return updateRefs([refUpdateCreate(laneRef, target), refUpdateCreate(claimRefName, target)]);
     },
-    async createRef({ ref, sha, oid }) {
-      const target = sha || oid;
+    async createRef({ ref, sha, afterOid }) {
+      const target = afterOid || sha;
       return updateRefs([refUpdateCreate(ref, target)]);
     },
     async deleteRef({ ref, beforeOid }) {
-      const sha = beforeOid || refs.get(ref);
-      return updateRefs([refUpdateDelete(ref, sha)]);
+      if (!beforeOid) return { ok: false, fatal: true, error: 'missing_before_oid' };
+      return updateRefs([refUpdateDelete(ref, beforeOid)]);
     },
     async getRef({ ref }) {
+      if (yields) await new Promise((r) => setTimeout(r, yields));
       if (!exists(ref)) return { ok: false, status: 404 };
-      return { ok: true, ref, sha: refs.get(ref), message: commitMessages.get(ref) || null };
+      const sha = refs.get(ref);
+      return { ok: true, ref, sha, message: messageForSha(sha) };
     },
     async listRefs({ prefix }) {
+      if (yields) await new Promise((r) => setTimeout(r, yields));
       const rows = [];
       for (const [ref, sha] of refs.entries()) {
         if (!ref.startsWith(prefix || '')) continue;
-        rows.push({ ref, sha, message: commitMessages.get(ref) || null });
+        rows.push({ ref, sha, message: messageForSha(sha) });
       }
       return { ok: true, refs: rows };
     },
@@ -116,14 +140,27 @@ function createMockRefClient(options = {}) {
     async issueEvents() {
       return { ok: true, events: [] };
     },
-    async renewRef({ ref, newOid, beforeOid }) {
-      return updateRefs([{ name: ref, oid: newOid, beforeOid }]);
+    async renewRef({ ref, newAfterOid, newOid, beforeOid }) {
+      const afterOid = newAfterOid || newOid;
+      return updateRefs([refUpdateRenew(ref, afterOid, beforeOid)]);
     },
-    async createLeaseCommit() {
-      return { ok: true, sha: 'f'.repeat(40) };
+    async renewRefPair({ laneRef, claimRef, afterOid, beforeOid }) {
+      return updateRefs([
+        refUpdateRenew(laneRef, afterOid, beforeOid),
+        refUpdateRenew(claimRef, afterOid, beforeOid),
+      ]);
+    },
+    async createLeaseCommit(message) {
+      const sha = `f${String(updateLog.length).padStart(39, '0')}`.slice(0, 40);
+      commitMessages.set(sha, message);
+      return { ok: true, sha, message };
     },
     setRefMessage(ref, message) {
-      commitMessages.set(ref, message);
+      const sha = refs.get(ref);
+      if (sha) commitMessages.set(sha, message);
+    },
+    setCommitMessage(sha, message) {
+      commitMessages.set(sha, message);
     },
     updateRefs,
   };
