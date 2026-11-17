@@ -93,12 +93,15 @@ test('ci needs includes diff-guard and tier1-gate', () => {
 
 test('ci aggregator tier1 includes needs.diff-guard.result (not oracle-sweeps)', () => {
   const doc = loadWorkflow('ci.yml');
-  const run = doc.jobs.ci.steps.map((step) => step.run || '').join('\n');
-  const tier1 = run.match(/tier1="([^"]*)"/);
-  assert.ok(tier1, 'tier1 assignment');
-  assert.match(tier1[1], /needs\.diff-guard\.result/);
-  assert.doesNotMatch(tier1[1], /oracle-sweeps/);
-  assert.match(run, /needs\.tier1-gate\.result/);
+  const step = doc.jobs.ci.steps[0];
+  assert.match(step.run, /ci-aggregator\.sh/);
+  assert.ok(step.env.NEEDS_DIFF_GUARD_RESULT);
+  assert.ok(step.env.NEEDS_TIER1_GATE_RESULT);
+  assert.ok(step.env.NEEDS_ORACLE_SWEEPS_RESULT);
+  const agg = fs.readFileSync(path.join(REPO, '.github', 'scripts', 'ci-aggregator.sh'), 'utf8');
+  assert.match(agg, /NEEDS_DIFF_GUARD_RESULT/);
+  const tier1Loop = agg.match(/Tier 1 \(lint[\s\S]*?^done/m) || [''];
+  assert.doesNotMatch(tier1Loop[0], /oracle/i);
 });
 
 const TIER1_JOBS = ['lint', 'typecheck', 'unit', 'diff-guard', 'paths-filter', 'contracts'];
@@ -127,9 +130,9 @@ test('tier1-gate needs every Tier 1 job plus setup', () => {
   for (const job of ['setup', ...TIER1_JOBS]) {
     assert.ok(gate.needs.includes(job), `tier1-gate needs ${job}`);
   }
-  const run = gate.steps.map((step) => step.run || '').join('\n');
+  const envBlob = JSON.stringify(gate.steps[0].env || {});
   for (const job of ['setup', ...TIER1_JOBS]) {
-    assert.ok(run.includes(`needs.${job}.result`), `tier1-gate reads needs.${job}.result`);
+    assert.match(envBlob, new RegExp(`needs\\.${job.replace(/-/g, '\\-')}\\.result`));
   }
 });
 
@@ -180,24 +183,52 @@ test('e2e shards run on merge_group regardless of paths-filter', () => {
   }
 });
 
-test('paths-filter resolves run-e2e with merge_group fail-safe', () => {
-  const doc = loadWorkflow('ci.yml');
-  const steps = doc.jobs['paths-filter'].steps;
-  const resolveE2e = steps.find((step) => step.id === 'resolve-e2e');
-  assert.ok(resolveE2e, 'resolve-e2e step');
-  const run = String(resolveE2e.run);
-  assert.match(run, /merge_group/);
-  assert.match(run, /run-e2e=true/);
-  assert.match(doc.jobs['paths-filter'].outputs['run-e2e'], /resolve-e2e/);
+const PATHS_FILTER_PIN = 'ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d';
+
+test('paths-filter pins dorny/paths-filter to v4.0.3 commit SHA', () => {
+  const text = fs.readFileSync(path.join(WORKFLOWS, 'ci.yml'), 'utf8');
+  assert.match(text, new RegExp(`dorny/paths-filter@${PATHS_FILTER_PIN} # v4\\.0\\.3`));
+  assert.equal((text.match(new RegExp(PATHS_FILTER_PIN, 'g')) || []).length, 2);
 });
 
-test('paths-filter resolves docs-only fail-closed via resolve-docs', () => {
+test('paths-filter resolve steps call extracted bash scripts with env (not inline ${{ }})', () => {
+  const steps = loadWorkflow('ci.yml').jobs['paths-filter'].steps;
+  const resolveDocs = steps.find((step) => step.id === 'resolve-docs');
+  const resolveE2e = steps.find((step) => step.id === 'resolve-e2e');
+  assert.match(resolveDocs.run, /ci-paths-filter-resolve-docs\.sh/);
+  assert.match(resolveE2e.run, /ci-paths-filter-resolve-e2e\.sh/);
+  assert.equal(String(resolveDocs.run).includes('${{'), false);
+  assert.equal(String(resolveE2e.run).includes('${{'), false);
+  assert.ok(resolveDocs.env.FILTER_DOCS_OUTCOME);
+  assert.ok(resolveE2e.env.FILTER_E2E_RUN_E2E);
+  const docsRun = fs.readFileSync(path.join(REPO, '.github', 'scripts', 'ci-paths-filter-resolve-docs.sh'), 'utf8');
+  const e2eRun = fs.readFileSync(path.join(REPO, '.github', 'scripts', 'ci-paths-filter-resolve-e2e.sh'), 'utf8');
+  assert.match(docsRun, /FILTER_DOCS/);
+  assert.match(docsRun, /false/);
+  assert.match(e2eRun, /merge_group/);
+  assert.match(e2eRun, /run-e2e=true/);
+});
+
+test('tier1-gate and ci aggregator call extracted bash scripts', () => {
   const doc = loadWorkflow('ci.yml');
-  const resolveDocs = doc.jobs['paths-filter'].steps.find((step) => step.id === 'resolve-docs');
-  assert.ok(resolveDocs, 'resolve-docs step');
-  assert.match(String(resolveDocs.run), /docs-only=false/);
-  assert.match(doc.jobs['paths-filter'].outputs['docs-only'], /resolve-docs/);
-  assert.doesNotMatch(doc.jobs['paths-filter'].outputs['docs-only'], /filter-docs\.outputs\.docs-only/);
+  const tierStep = doc.jobs['tier1-gate'].steps[0];
+  const ciStep = doc.jobs.ci.steps[0];
+  assert.match(tierStep.run, /ci-tier1-gate\.sh/);
+  assert.match(ciStep.run, /ci-aggregator\.sh/);
+  assert.ok(tierStep.env.NEEDS_TIER1_RESULTS);
+  assert.ok(ciStep.env.NEEDS_ORACLE_SWEEPS_RESULT);
+});
+
+test('ci aggregator regression: e2e skip logic lives in ci-aggregator.sh', () => {
+  const agg = fs.readFileSync(path.join(REPO, '.github', 'scripts', 'ci-aggregator.sh'), 'utf8');
+  assert.match(agg, /require_e2e/);
+  assert.match(agg, /merge_group/);
+  assert.match(agg, /PATHS_FILTER_RUN_E2E/);
+  assert.doesNotMatch(
+    agg,
+    /skipped_count/,
+    'old partial-skip guard must not replace all-shards-required when e2e is mandatory',
+  );
 });
 
 test('ci concurrency cancels in-progress only for pull_request (not merge_group)', () => {
@@ -314,5 +345,7 @@ test('deleted workflows are absent', () => {
 
 // batch-automerge.yml rules and run-step behavior (kept in its own file; loaded here so CI runs it).
 require('./batch-automerge.test.js');
+// ci-tier1-gate / ci-aggregator bash scenarios (same scripts as ci.yml).
+require('./ci-gate-scripts.test.js');
 // Phase 1 unattended controller and workflow contracts. Loaded here so CI runs it.
 require('./unattended.test.js');

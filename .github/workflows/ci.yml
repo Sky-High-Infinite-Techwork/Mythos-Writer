@@ -72,7 +72,7 @@ jobs:
       - name: Detect changed paths — docs-only (path-based CI optimization)
         id: filter-docs
         continue-on-error: true
-        uses: dorny/paths-filter@v4
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: |
             docs-only:
@@ -93,7 +93,7 @@ jobs:
       - name: Detect changed paths — run-e2e (path-based CI optimization)
         id: filter-e2e
         continue-on-error: true
-        uses: dorny/paths-filter@v4
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           predicate-quantifier: every
           filters: |
@@ -107,31 +107,19 @@ jobs:
       # Fail closed: ambiguous filter → docs-only=false (run full CI, do not treat as docs-only).
       - name: Resolve docs-only output
         id: resolve-docs
-        run: |
-          if [ "${{ steps.filter-docs.outcome }}" != "success" ]; then
-            echo "docs-only=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ -z "${{ steps.filter-docs.outputs.docs-only }}" ]; then
-            echo "docs-only=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "docs-only=${{ steps.filter-docs.outputs.docs-only }}" >> "$GITHUB_OUTPUT"
-          fi
+        env:
+          FILTER_DOCS_OUTCOME: ${{ steps.filter-docs.outcome }}
+          FILTER_DOCS_DOCS_ONLY: ${{ steps.filter-docs.outputs.docs-only }}
+        run: bash .github/scripts/ci-paths-filter-resolve-docs.sh
 
       # merge_group / push / dispatch lack a normal PR diff base; never fail Tier 1 here.
       - name: Resolve run-e2e output
         id: resolve-e2e
-        run: |
-          if [ "${{ github.event_name }}" = "merge_group" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "${{ github.event_name }}" = "push" ]; then
-            echo "run-e2e=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ "${{ steps.filter-e2e.outcome }}" != "success" ] || [ -z "${{ steps.filter-e2e.outputs.run-e2e }}" ]; then
-            echo "paths-filter run-e2e step did not produce a value — defaulting run-e2e=true (fail-safe for required queue runs)."
-            echo "run-e2e=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "run-e2e=${{ steps.filter-e2e.outputs.run-e2e }}" >> "$GITHUB_OUTPUT"
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          FILTER_E2E_OUTCOME: ${{ steps.filter-e2e.outcome }}
+          FILTER_E2E_RUN_E2E: ${{ steps.filter-e2e.outputs.run-e2e }}
+        run: bash .github/scripts/ci-paths-filter-resolve-e2e.sh
 
   contracts:
     uses: ./.github/workflows/mythos-automation-contracts.yml
@@ -1164,25 +1152,27 @@ jobs:
     if: always()
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v7
       - name: Tier 1 checks passed
-        run: |
-          tier1="${{ needs.setup.result }} ${{ needs.lint.result }} ${{ needs.typecheck.result }} ${{ needs.unit.result }} ${{ needs.diff-guard.result }} ${{ needs.paths-filter.result }} ${{ needs.contracts.result }}"
-          echo "Tier 1 results: $tier1"
-          for r in $tier1; do
-            if [ "$r" != "success" ]; then
-              echo "ERROR: Tier 1 job outcome '$r' — expected 'success'. Tier 2 jobs will not run. tier1-gate: FAILED."
-              exit 1
-            fi
-          done
-          echo "Tier 1 green — Tier 2 (oracle-sweeps, build-electron, notes-windows, e2e) may run."
+        env:
+          NEEDS_TIER1_RESULTS: >-
+            ${{ needs.setup.result }}
+            ${{ needs.lint.result }}
+            ${{ needs.typecheck.result }}
+            ${{ needs.unit.result }}
+            ${{ needs.diff-guard.result }}
+            ${{ needs.paths-filter.result }}
+            ${{ needs.contracts.result }}
+        run: bash .github/scripts/ci-tier1-gate.sh
 
   ci:
     # Required check aggregator — always runs (if: always()) so branch protection
     # gets a definitive pass/fail rather than a "pending" indefinite skipped state
     # when Tier 1 (lint/typecheck/unit/diff-guard/contracts/paths-filter) fails and downstream jobs are skipped.
     # Explicit outcome check ensures any failure or skip in upstream jobs → failure here.
-    # SKY-8090: e2e shards may be legitimately skipped if the diff cannot affect them
-    # (e.g., docs-only changes). Accept 'skipped' as valid for e2e shards only.
+    # SKY-8090: e2e shards may be skipped only when run-e2e is false (docs-only). When run-e2e
+    # is true or the event is merge_group, every shard must succeed (build-electron failure
+    # must not masquerade as green via skipped shards).
     # oracle-sweeps is a matrix in `needs`. needs.oracle-sweeps.result == success
     # only when every leg succeeded. skipped, cancelled, and failed are not success.
     needs: [tier1-gate, lint, typecheck, unit, oracle-sweeps, paths-filter, e2e-shard-1, e2e-shard-2, e2e-shard-3, e2e-shard-4, diff-guard]
@@ -1192,50 +1182,20 @@ jobs:
 
     steps:
       - name: All checks passed
-        run: |
-          if [ "${{ needs.tier1-gate.result }}" != "success" ]; then
-            echo "ERROR: needs.tier1-gate.result is '${{ needs.tier1-gate.result }}' — expected 'success'. CI aggregator: FAILED."
-            exit 1
-          fi
-
-          tier1="${{ needs.lint.result }} ${{ needs.typecheck.result }} ${{ needs.unit.result }} ${{ needs.diff-guard.result }}"
-          echo "Tier 1 (lint/typecheck/unit/diff-guard) results: $tier1"
-          for r in $tier1; do
-            if [ "$r" != "success" ]; then
-              echo "ERROR: Required Tier 1 job outcome '$r' — expected 'success'. CI aggregator: FAILED."
-              exit 1
-            fi
-          done
-
-          if [ "${{ needs.oracle-sweeps.result }}" != "success" ]; then
-            echo "ERROR: needs.oracle-sweeps.result is '${{ needs.oracle-sweeps.result }}' — expected 'success'. Skipped, cancelled, or failed legs are not success. CI aggregator: FAILED."
-            exit 1
-          fi
-
-          # E2E shards may be legitimately skipped if path-filter determined they cannot be affected
-          e2e="${{ needs.e2e-shard-1.result }} ${{ needs.e2e-shard-2.result }} ${{ needs.e2e-shard-3.result }} ${{ needs.e2e-shard-4.result }}"
-          echo "E2E shard results: $e2e"
-          for r in $e2e; do
-            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
-              echo "ERROR: E2E shard outcome '$r' — expected 'success' or 'skipped'. CI aggregator: FAILED."
-              exit 1
-            fi
-          done
-
-          # Validate that at least one e2e shard ran if path-filter said to run e2e
-          run_e2e="${{ needs.paths-filter.outputs.run-e2e }}"
-          if [ "$run_e2e" = "true" ]; then
-            skipped_count=0
-            for r in $e2e; do
-              [ "$r" = "skipped" ] && skipped_count=$((skipped_count + 1))
-            done
-            if [ "$skipped_count" -eq 4 ]; then
-              echo "ERROR: path-filter indicated e2e should run, but all 4 shards were skipped. CI aggregator: FAILED."
-              exit 1
-            fi
-          fi
-
-          echo "All checks passed — lint, typecheck, unit, and applicable E2E shards are green."
+        env:
+          NEEDS_TIER1_GATE_RESULT: ${{ needs.tier1-gate.result }}
+          NEEDS_LINT_RESULT: ${{ needs.lint.result }}
+          NEEDS_TYPECHECK_RESULT: ${{ needs.typecheck.result }}
+          NEEDS_UNIT_RESULT: ${{ needs.unit.result }}
+          NEEDS_DIFF_GUARD_RESULT: ${{ needs.diff-guard.result }}
+          NEEDS_ORACLE_SWEEPS_RESULT: ${{ needs.oracle-sweeps.result }}
+          NEEDS_E2E_SHARD_1_RESULT: ${{ needs.e2e-shard-1.result }}
+          NEEDS_E2E_SHARD_2_RESULT: ${{ needs.e2e-shard-2.result }}
+          NEEDS_E2E_SHARD_3_RESULT: ${{ needs.e2e-shard-3.result }}
+          NEEDS_E2E_SHARD_4_RESULT: ${{ needs.e2e-shard-4.result }}
+          PATHS_FILTER_RUN_E2E: ${{ needs.paths-filter.outputs.run-e2e }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: bash .github/scripts/ci-aggregator.sh
 
   build-linux:
     # SKY-8081: moved PR guard from step-level to job-level so PRs don't allocate
