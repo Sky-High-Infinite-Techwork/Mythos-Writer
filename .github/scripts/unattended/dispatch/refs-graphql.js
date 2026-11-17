@@ -38,6 +38,9 @@ function refUpdateRenew(ref, afterOid, beforeOid) {
   assertDispatchRef(ref);
   assertSha40(afterOid, 'afterOid');
   assertSha40(beforeOid, 'beforeOid');
+  if (beforeOid === ZERO_OID) {
+    throw new Error('beforeOid must not be the zero OID for renew');
+  }
   return { name: ref, afterOid, beforeOid, force: true };
 }
 

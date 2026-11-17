@@ -280,8 +280,9 @@ async function runDispatchPlan(env) {
 
     const holder = await assertHolderBeforePublish(client, [claim.ref, claim.claimRef], leaseSha);
     if (!holder.ok) {
-      console.log(JSON.stringify({ kind: 'dispatch_skip', issue: issueNumber, reason: holder.reason }));
-      return 0;
+      console.error(JSON.stringify({ kind: 'dispatch_fail', issue: issueNumber, reason: holder.reason }));
+      await releaseClaimPair(client, { laneRef: claim.ref, claimRef: claim.claimRef, leaseSha }, reReadSwitch);
+      return 1;
     }
 
     const record = await recordDispatchAttempt(client, issueNumber, slice.index, { reReadSwitch, mintLeaseSha });

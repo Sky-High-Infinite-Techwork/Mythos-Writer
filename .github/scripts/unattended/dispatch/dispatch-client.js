@@ -78,9 +78,10 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
       const suffix = ref.startsWith('refs/') ? ref.slice('refs/'.length) : ref;
       const result = gh(['api', `${base}/git/ref/${encodeURIComponent(suffix)}`], readToken);
       if (result.status !== 0) {
+        const parsedHttp = httpStatusFromGh(result.stderr, result.status);
         return {
           ok: false,
-          status: httpStatusFromGh(result.stderr, result.status),
+          status: parsedHttp ?? result.status,
           ghStatus: result.status,
           error: result.stderr || 'get_ref_failed',
         };
@@ -88,9 +89,10 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
       const parsed = parseGhJson(result.stdout);
       const sha = parsed && parsed.object && parsed.object.sha;
       if (!sha || !OID_HEX.test(sha)) {
+        const parsedHttp = httpStatusFromGh(result.stderr, result.status);
         return {
           ok: false,
-          status: httpStatusFromGh(result.stderr, result.status),
+          status: parsedHttp ?? result.status,
           ghStatus: result.status,
           error: 'invalid_sha',
         };
@@ -170,8 +172,9 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
       const result = gh(['api', 'graphql', '--input', '-'], writeToken, body);
       const errors = parseGraphqlErrors(result.stdout);
       const httpStatus = httpStatusFromGh(result.stderr, result.status);
+      const statusCode = httpStatus ?? (result.status === 0 ? 201 : result.status);
       if (result.status === 0 && (!errors || errors.length === 0)) {
-        return { ok: true, status: httpStatus === 200 ? 201 : httpStatus, ghStatus: result.status };
+        return { ok: true, status: statusCode, ghStatus: result.status };
       }
       if (isRefExistsError(errors)) {
         return {
@@ -186,7 +189,7 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
       return {
         ok: false,
         fatal: true,
-        status: httpStatus,
+        status: statusCode,
         ghStatus: result.status,
         error: result.stderr || result.stdout,
         errors,

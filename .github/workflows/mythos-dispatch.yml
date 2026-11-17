@@ -242,9 +242,6 @@ jobs:
     if: needs.admit.result == 'success' && needs.admit.outputs.canary == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    concurrency:
-      group: mythos-dispatch-canary
-      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
@@ -294,14 +291,14 @@ jobs:
           CONTROL_TOKEN: ${{ secrets.MYTHOS_CONTROL_READ_TOKEN }}
           READ_TOKEN: ${{ github.token }}
           WRITE_TOKEN: ${{ steps.write.outputs.token }}
-          CANARY_OUTCOME_PATH: canary-outcome.json
+          CANARY_OUTCOME_PATH: canary-outcome-${{ matrix.index }}.json
         run: node .github/scripts/unattended/dispatch/dispatch-cli.js canary-ref
       - name: Upload canary leg outcome
         if: always()
         uses: actions/upload-artifact@52084008e1a45ac05fc2b12e7b2d03f02b899a9b # v4.6.0
         with:
           name: canary-outcome-${{ matrix.index }}
-          path: canary-outcome.json
+          path: canary-outcome-${{ matrix.index }}.json
           if-no-files-found: error
 
   canary-verify:
@@ -309,9 +306,6 @@ jobs:
     if: always() && needs.admit.result == 'success' && needs.admit.outputs.canary == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    concurrency:
-      group: mythos-dispatch-canary
-      cancel-in-progress: false
     environment: mythos-writer
     permissions:
       contents: read
@@ -331,7 +325,7 @@ jobs:
           fetch-depth: 1
           submodules: false
       - name: Download canary leg outcomes
-        uses: actions/download-artifact@2fa617845ae4a7a65bcae7b9aea2ad0367714431 # v4.1.0
+        uses: actions/download-artifact@52084008e1a45ac05fc2b12e7b2d03f02b899a9b # v4.6.0
         with:
           pattern: canary-outcome-*
           merge-multiple: true
