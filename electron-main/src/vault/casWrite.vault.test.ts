@@ -51,8 +51,8 @@ vi.mock('../db.js', () => db);
 
 import { ipcMain } from 'electron';
 import { IPC_CHANNELS, setupIpcMain, type VaultReadPayload, type VaultWritePayload } from '../ipc.js';
-import { writeVaultForIpc } from '../main.js';
-import { safeVaultIpcJoin, safeVaultJoin } from '../vault.js';
+import * as mainIpc from '../main.js';
+import { safeVaultJoin } from '../vault.js';
 import { mapVaultWriteError } from './writeErrors.js';
 import { readVaultFileBounded } from './boundedRead.js';
 import { vaultWriteForIpc, writeVaultFileCas } from './casWrite.js';
@@ -458,8 +458,8 @@ describe('vaultWriteForIpc', () => {
     expect(fs.readFileSync(inside, 'utf8')).toBe('{"x":1}');
   });
 
-  it('rejects path escape via writeVaultForIpc without throwing', () => {
-    const reply = writeVaultForIpc(root, '../escape.md', 'nope');
+  it('rejects path escape via writeStoryVaultForIpc without throwing', () => {
+    const reply = mainIpc.writeStoryVaultForIpc(root, '../escape.md', 'nope');
     expect(reply.bytes).toBe(0);
     expect(reply.error).toBe('Path not allowed.');
     expect(reply.code).toBeUndefined();
@@ -475,6 +475,7 @@ function topFrameEvent() {
 describe('vault:read / vault:write via setupIpcMain', () => {
   let tmp: string;
   let root: string;
+  let notesRoot: string;
   const rel = 'stories/s1/comments.json';
   let invokeRead: (payload: VaultReadPayload) => Promise<unknown>;
   let invokeWrite: (payload: VaultWritePayload) => Promise<unknown>;
@@ -488,23 +489,16 @@ describe('vault:read / vault:write via setupIpcMain', () => {
   beforeEach(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-story-ipc-'));
     root = path.join(tmp, 'vault');
+    notesRoot = path.join(tmp, 'notes-vault');
     fs.mkdirSync(path.join(root, 'stories', 's1'), { recursive: true });
+    fs.mkdirSync(path.join(notesRoot, 'stories', 's1'), { recursive: true });
     resetVolumeProbeCache();
     vi.mocked(ipcMain.handle).mockClear();
-    const handlers = {
-      [IPC_CHANNELS.VAULT_READ]: (payload: VaultReadPayload) => {
-        safeVaultIpcJoin(root, payload.path, false);
-        const { content, path: vaultPath, sha256 } = readVaultFileBounded(root, payload.path);
-        return { content, path: vaultPath, sha256 };
-      },
-      [IPC_CHANNELS.VAULT_WRITE]: (payload: VaultWritePayload) => {
-        const expected = Object.prototype.hasOwnProperty.call(payload, 'expectedSha256')
-          ? payload.expectedSha256
-          : undefined;
-        return writeVaultForIpc(root, payload.path, payload.content, expected);
-      },
-    };
-    setupIpcMain(handlers as never);
+    mainIpc.setStoryVaultIpcTestRoot(root);
+    setupIpcMain({
+      [IPC_CHANNELS.VAULT_READ]: mainIpc.handleStoryVaultReadIpc,
+      [IPC_CHANNELS.VAULT_WRITE]: mainIpc.handleStoryVaultWriteIpc,
+    } as never);
     const readReg = vi.mocked(ipcMain.handle).mock.calls.find((c) => c[0] === IPC_CHANNELS.VAULT_READ);
     const writeReg = vi.mocked(ipcMain.handle).mock.calls.find((c) => c[0] === IPC_CHANNELS.VAULT_WRITE);
     expect(readReg).toBeDefined();
@@ -516,6 +510,8 @@ describe('vault:read / vault:write via setupIpcMain', () => {
   });
 
   afterEach(() => {
+    mainIpc.setStoryVaultIpcTestRoot(undefined);
+    vi.restoreAllMocks();
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
@@ -565,5 +561,75 @@ describe('vault:read / vault:write via setupIpcMain', () => {
     };
     expect(reply.bytes).toBe(0);
     expect(reply.error).toBe('Path not allowed.');
+  });
+
+  it('mutant: dropping sha256 from read handler fails sha256 contract', async () => {
+    fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), '{"probe":1}');
+    const reply = (await invokeRead({ path: rel })) as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(reply, 'sha256')).toBe(true);
+    expect(typeof reply.sha256).toBe('string');
+    const mutant = { content: reply.content, path: reply.path };
+    expect(Object.prototype.hasOwnProperty.call(mutant, 'sha256')).toBe(false);
+  });
+
+  it('mutant: dropping hasOwn expectedSha256 wiring treats explicit null as plain write', async () => {
+    fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), '{"exists":1}');
+    const stale = (await invokeWrite({
+      path: rel,
+      content: '{"overwrite":1}',
+      expectedSha256: null,
+    })) as { bytes: number; code?: string };
+    expect(stale.bytes).toBe(0);
+    expect(stale.code).toBe('STALE');
+
+    vi.mocked(ipcMain.handle).mockClear();
+    const mutantWrite = (payload: VaultWritePayload) =>
+      mainIpc.writeStoryVaultForIpc(mainIpc.getVaultRootForStoryVaultIpc(), payload.path, payload.content);
+    setupIpcMain({
+      [IPC_CHANNELS.VAULT_WRITE]: mutantWrite,
+    } as never);
+  const writeReg = vi.mocked(ipcMain.handle).mock.calls.find((c) => c[0] === IPC_CHANNELS.VAULT_WRITE)!;
+    const invokeMutant = async (payload: VaultWritePayload) =>
+      (writeReg[1] as (event: unknown, p: VaultWritePayload) => Promise<unknown>)(topFrameEvent(), payload);
+    const evil = (await invokeMutant({
+      path: rel,
+      content: '{"overwrite":1}',
+      expectedSha256: null,
+    })) as { bytes: number; code?: string };
+    expect(evil.bytes).toBeGreaterThan(0);
+    expect(evil.code).toBeUndefined();
+    expect(fs.readFileSync(path.join(root, 'stories', 's1', 'comments.json'), 'utf8')).toBe('{"overwrite":1}');
+  });
+});
+
+describe('notesVault:write via main handler', () => {
+  let tmp: string;
+  let notesRoot: string;
+  const rel = 'stories/s1/note.md';
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-notes-ipc-'));
+    notesRoot = path.join(tmp, 'notes-vault');
+    fs.mkdirSync(path.join(notesRoot, 'stories', 's1'), { recursive: true });
+    mainIpc.setNotesVaultIpcTestRoot(notesRoot);
+  });
+
+  afterEach(() => {
+    mainIpc.setNotesVaultIpcTestRoot(undefined);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('notesVault:write reply has no sha256 key', () => {
+    const reply = mainIpc.handleNotesVaultWriteIpc({ path: rel, content: '# Note\n' });
+    expect(reply.bytes).toBeGreaterThan(0);
+    expect(Object.prototype.hasOwnProperty.call(reply, 'sha256')).toBe(false);
+    expect(Object.keys(reply).sort()).toEqual(['bytes', 'path']);
+    expect(fs.readFileSync(path.join(notesRoot, 'stories', 's1', 'note.md'), 'utf8')).toBe('# Note\n');
+  });
+
+  it('writeVaultForIpc notes path matches main shape without sha256', () => {
+    const reply = mainIpc.writeVaultForIpc(notesRoot, rel, '{"plain":true}');
+    expect(Object.prototype.hasOwnProperty.call(reply, 'sha256')).toBe(false);
+    expect(reply).toEqual({ path: rel, bytes: Buffer.byteLength('{"plain":true}', 'utf-8') });
   });
 });
