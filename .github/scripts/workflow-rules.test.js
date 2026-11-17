@@ -55,7 +55,7 @@ test('ci push branches stay main', () => {
 // (notes-windows and contracts are jobs in ci.yml). Privileged unattended workflows stay off merge_group.
 const MERGE_GROUP_WORKFLOWS = ['ci.yml', 'screenshot-check.yml'];
 
-test('merge_group is limited to required checks and the secretless contracts workflow', () => {
+test('merge_group is limited to required check workflows (ci, screenshot-check)', () => {
   for (const name of workflowNames()) {
     const on = triggerOf(loadWorkflow(name)) || {};
     const expected = MERGE_GROUP_WORKFLOWS.includes(name);
@@ -113,6 +113,10 @@ test('mythos-automation-contracts is workflow_call only (no duplicate PR runs)',
   const ci = loadWorkflow('ci.yml');
   assert.ok(ci.jobs.contracts && ci.jobs.contracts.uses, 'ci.yml calls contracts reusable workflow');
   assert.match(ci.jobs.contracts.uses, /mythos-automation-contracts\.yml$/);
+  assert.deepEqual(ci.jobs.contracts.permissions, { contents: 'read' });
+  const contractsYaml = fs.readFileSync(path.join(WORKFLOWS, 'mythos-automation-contracts.yml'), 'utf8');
+  assert.equal(contractsYaml.includes('secrets.'), false);
+  assert.equal(JSON.stringify(ci.jobs.contracts).includes('secrets'), false);
 });
 
 test('tier1-gate needs every Tier 1 job plus setup', () => {
@@ -122,6 +126,10 @@ test('tier1-gate needs every Tier 1 job plus setup', () => {
   assert.equal(gate.if, 'always()');
   for (const job of ['setup', ...TIER1_JOBS]) {
     assert.ok(gate.needs.includes(job), `tier1-gate needs ${job}`);
+  }
+  const run = gate.steps.map((step) => step.run || '').join('\n');
+  for (const job of ['setup', ...TIER1_JOBS]) {
+    assert.match(run, new RegExp(`needs\\.${job.replace(/-/g, '\\-')}\\.result`));
   }
 });
 
@@ -139,7 +147,7 @@ test('Tier 2 jobs need tier1-gate (not setup alone)', () => {
 
 test('notes-windows fails closed when tier1-gate is not success', () => {
   const job = loadWorkflow('ci.yml').jobs['notes-windows'];
-  assert.equal(job.if, 'always()');
+  assert.equal(job.if, '${{ !cancelled() }}');
   assert.match(
     job['runs-on'],
     /needs\.tier1-gate\.result == 'success' && 'windows-latest' \|\| 'ubuntu-latest'/,
@@ -164,8 +172,11 @@ test('Tier 2 jobs except notes-windows have no always/cancelled/failure job if',
 
 test('e2e shards run on merge_group regardless of paths-filter', () => {
   const jobs = loadWorkflow('ci.yml').jobs;
+  const mergeGroupClause = /\|\|\s*github\.event_name == 'merge_group'/;
   for (const job of ['e2e-shard-1', 'e2e-shard-2', 'e2e-shard-3', 'e2e-shard-4']) {
-    assert.match(jobs[job].if, /merge_group/);
+    assert.match(jobs[job].if, mergeGroupClause, job);
+    const matches = String(jobs[job].if).match(new RegExp(mergeGroupClause.source, 'g')) || [];
+    assert.equal(matches.length, 1, `${job} must not duplicate merge_group clause`);
   }
 });
 
@@ -175,6 +186,15 @@ test('paths-filter resolves run-e2e with merge_group fail-safe', () => {
   assert.match(text, /run-e2e=true.*merge_group/s);
   const doc = loadWorkflow('ci.yml');
   assert.match(doc.jobs['paths-filter'].outputs['run-e2e'], /resolve-e2e/);
+});
+
+test('paths-filter resolves docs-only fail-closed via resolve-docs', () => {
+  const text = fs.readFileSync(path.join(WORKFLOWS, 'ci.yml'), 'utf8');
+  assert.match(text, /id: resolve-docs/);
+  assert.match(text, /docs-only=false/s);
+  const doc = loadWorkflow('ci.yml');
+  assert.match(doc.jobs['paths-filter'].outputs['docs-only'], /resolve-docs/);
+  assert.doesNotMatch(doc.jobs['paths-filter'].outputs['docs-only'], /filter-docs\.outputs\.docs-only/);
 });
 
 test('ci concurrency cancels in-progress only for pull_request (not merge_group)', () => {
@@ -191,6 +211,7 @@ test('required ci.yml check job names are unchanged', () => {
   const jobs = loadWorkflow('ci.yml').jobs;
   for (const name of REQUIRED_CHECK_JOB_NAMES) {
     assert.ok(jobs[name], name);
+    assert.equal((jobs[name].name ?? name) === name, true, `job id ${name} must match displayed check name`);
   }
 });
 
