@@ -8,24 +8,25 @@ const path = require('node:path');
 const test = require('node:test');
 const yaml = require('js-yaml');
 
-const { classify, authorAssertion, evidenceOk, filesLookProtected } = require('./unattended/flow-policy');
-const { plan, undraft, enqueue } = require('./unattended/flow-run');
+const { classify, authorAssertion, evidenceOk, filesLookProtected, filesLookOwner, filesLookHighRisk, inspectGate } = require('./unattended/flow-policy');
+const { plan, undraft, enqueue, factsFrom } = require('./unattended/flow-run');
 const {
   ENQUEUE_QUERY, READY_QUERY, flattenPages, flattenRunPages, mapChangedFile, createClient,
   parseAllowlist, authorMatches, leaseHeldFrom, rulesetMatches, httpStatus,
 } = require('./unattended/flow-client');
-const { selectHead } = require('./unattended/discover-run');
+const { selectHead, thresholdFromCompare, DISCOVER_SLOT_SECONDS, isSettledGateRun } = require('./unattended/discover-run');
 const {
-  review, modelEnv, claudeInvocation, assessDiff, readCompare, userDiff, codexResult, codexBody, CHECKLIST,
+  review, modelEnv, claudeInvocation, assessDiff, readCompare, userDiff, systemPrompt, codexResult, codexBody, CHECKLIST,
 } = require('./unattended/transport');
 const { comparePath } = require('./unattended/transport-run');
-const { transportResult, reduce, acceptReducer, parseProviders, providersFromEnv, parseProvidersJson } = require('./unattended/gate-result');
+const { transportResult, reduce, acceptReducer, parseProviders, providersFromEnv, parseProvidersJson, strictClaimOk } = require('./unattended/gate-result');
 const { decideQueueEntry, stillQueue, parseQueueRef } = require('./unattended/queue-policy');
 const { treesMatch, parentsOf, fetchObjects, runPublish } = require('./unattended/publish-run');
 const { interpretGrant } = require('./unattended/token-grant');
 const { interpretSwitch, readSwitch } = require('./unattended/switch');
 const { gh } = require('./unattended/spawn');
-const { CI_INTEGRATION_ID, CHECK_NAME, GATE_APP_ID, REPO, WRITE_APP_ID, WRITE_INSTALLATION_ID } = require('./unattended/constants');
+const { CI_INTEGRATION_ID, CHECK_NAME, GATE_APP_ID, REPO, WRITE_APP_ID, WRITE_INSTALLATION_ID, PROTECTED_RE_SOURCE, protectedPath } = require('./unattended/constants');
+const { reviewPlan, headGateSummary, STRICT_REVIEW_PROMPT } = require('./unattended/risk-policy');
 
 const HEAD = 'a'.repeat(40);
 const BASE = 'b'.repeat(40);
@@ -151,7 +152,7 @@ function detailFor(pr, over = {}) {
       ci: { conclusion: 'success', headSha: head },
       'notes-windows': { conclusion: 'success', headSha: head },
       'screenshot-check': { conclusion: 'success', headSha: head },
-      gate: { conclusion: 'success', headSha: head, appId: GATE_APP_ID, summary: `Head: ${head}\n` },
+      gate: { conclusion: 'success', headSha: head, appId: GATE_APP_ID, summary: `Head: ${head}\nRisk: low\n` },
     },
     evidence: evidenceFor(head, pr.number),
     ruleset: { known: true, match: true },
@@ -286,13 +287,25 @@ test('author PROOF comments are assertions and do not authorize', () => {
   assert.equal(evidenceOk(wrongEvent, HEAD, 7, 'main', BASE), false);
   const movedBase = evidenceFor(HEAD, 7);
   movedBase.runs[0].prBaseSha = 'c'.repeat(40);
-  assert.equal(evidenceOk(movedBase, HEAD, 7, 'main', BASE), false);
+  movedBase.runs[1].prBaseSha = 'd'.repeat(40);
+  assert.equal(evidenceOk(movedBase, HEAD, 7, 'main', BASE), true);
+  const wrongHead = evidenceFor(HEAD, 7);
+  wrongHead.runs[0].headSha = 'c'.repeat(40);
+  assert.equal(evidenceOk(wrongHead, HEAD, 7, 'main', BASE), false);
+  const wrongPrHead = evidenceFor(HEAD, 7);
+  wrongPrHead.runs[0].prHeadSha = 'e'.repeat(40);
+  assert.equal(evidenceOk(wrongPrHead, HEAD, 7, 'main', BASE), false);
 });
 
 test('a rename out of a protected path is held', () => {
   const renamed = [{ filename: 'src/x.ts', status: 'renamed', previous_filename: 'electron-main/src/db.ts' }];
   assert.equal(filesLookProtected(renamed), true);
-  assert.equal(classify(readyFacts({ protectedPath: filesLookProtected(renamed) })).reason, 'protected path');
+  assert.equal(filesLookHighRisk(renamed), true);
+  assert.equal(filesLookOwner(renamed), false);
+  assert.equal(classify(readyFacts({ highRisk: true })).reason, 'high-risk review required');
+  const outOfGithub = [{ filename: 'src/x.ts', previous_filename: '.github/workflows/old.yml' }];
+  assert.equal(filesLookOwner(outOfGithub), true);
+  assert.equal(classify(readyFacts({ protectedPath: true, highRisk: true, strictGate: true })).reason, 'protected path');
 });
 
 test('classify holds forks, batch bases, protected paths, missing proof, and a missing tip gate', () => {
@@ -302,7 +315,9 @@ test('classify holds forks, batch bases, protected paths, missing proof, and a m
   assert.equal(classify(readyFacts({ protectedPath: true })).reason, 'protected path');
   assert.equal(classify(readyFacts({ labels: ['tip-freeze'] })).reason, 'hold label');
   assert.equal(classify(readyFacts({ proof: false })).reason, 'missing independent evidence run');
-  assert.equal(classify(readyFacts({ mergeState: 'BEHIND' })).reason, 'rebase needed');
+  assert.equal(classify(readyFacts({ mergeState: 'BEHIND' })).action, 'enqueue');
+  assert.equal(classify(readyFacts({ mergeState: 'DIRTY' })).reason, 'merge conflicts');
+  assert.equal(classify(readyFacts({ mergeState: 'UNMERGEABLE' })).reason, 'unmergeable');
   assert.equal(classify(readyFacts({ mergeState: 'UNKNOWN' })).reason, 'mergeability unknown');
   assert.equal(classify(readyFacts({ draft: true, gate: false })).action, 'undraft');
   assert.equal(classify(readyFacts({ gate: false })).reason, 'tip gate missing');
@@ -317,6 +332,127 @@ test('classify holds forks, batch bases, protected paths, missing proof, and a m
   assert.equal(classify(readyFacts({ labels: ['Lease:active'] })).reason, 'lease');
   assert.equal(classify(readyFacts({ rulesetKnown: false })).reason, 'ruleset policy unknown');
   assert.equal(classify(readyFacts({ rulesetMatch: false })).reason, 'ruleset policy mismatch');
+});
+
+test('high-risk paths need a strict low-risk pass, and .github stays owner-held', () => {
+  const paths = ['package.json', 'frontend/package-lock.json', 'frontend/vite.config.ts', '.claude/settings.json', 'AGENTS.md'];
+  for (const filename of paths) {
+    assert.equal(filesLookHighRisk([{ filename }]), true, filename);
+    assert.equal(filesLookOwner([{ filename }]), false, filename);
+    assert.equal(reviewPlan([{ filename }]).threshold, 'strict', filename);
+  }
+  assert.equal(filesLookOwner([{ filename: '.github/workflows/ci.yml' }]), true);
+  assert.equal(filesLookHighRisk([{ filename: '.github/workflows/ci.yml' }]), false);
+  assert.equal(reviewPlan([{ filename: '.github/workflows/ci.yml' }]).threshold, 'owner');
+  assert.equal(filesLookProtected([{ filename: 'frontend/src/app.ts' }]), false);
+  assert.match(STRICT_REVIEW_PROMPT, /risk is low/);
+  assert.match(STRICT_REVIEW_PROMPT, /block/i);
+  assert.equal(classify(readyFacts({ highRisk: true, gate: true, strictGate: false })).reason, 'high-risk review required');
+  assert.equal(classify(readyFacts({ highRisk: true, gate: true, strictGate: true })).action, 'enqueue');
+  assert.equal(classify(readyFacts({ highRisk: true, strictGate: true, labels: ['carve-out'] })).action, 'enqueue');
+  assert.equal(classify(readyFacts({ labels: ['carve-out'] })).reason, 'hold label');
+  assert.equal(classify(readyFacts({ highRisk: true, labels: ['carve-out'] })).reason, 'high-risk review required');
+  assert.equal(classify(readyFacts({ highRisk: true, strictGate: true, gateBlocked: true })).reason, 'provider review blocked');
+  assert.equal(classify(readyFacts({ gateBlocked: true })).reason, 'provider review blocked');
+  const blocked = inspectGate({
+    conclusion: 'success', headSha: HEAD, appId: GATE_APP_ID, summary: `Head: ${HEAD}\nRisk: high\n`,
+  }, HEAD);
+  assert.equal(blocked.blocked, true);
+  assert.equal(blocked.pass, false);
+  const strict = inspectGate({
+    conclusion: 'success', headSha: HEAD, appId: GATE_APP_ID,
+    summary: headGateSummary(HEAD, 'strict'),
+  }, HEAD);
+  assert.equal(strict.strict, true);
+  assert.equal(headGateSummary(HEAD, 'standard'), `Head: ${HEAD}\nRisk: low\nRule: reducer pass for this run`);
+  const duplicate = inspectGate({
+    conclusion: 'success', headSha: HEAD, appId: GATE_APP_ID,
+    summary: `Head: ${HEAD}\nRisk: low\nRisk: high\n`,
+  }, HEAD);
+  assert.equal(duplicate.blocked, true);
+  assert.equal(duplicate.pass, false);
+  assert.equal(duplicate.strict, false);
+  const duplicateReview = inspectGate({
+    conclusion: 'success', headSha: HEAD, appId: GATE_APP_ID,
+    summary: `Head: ${HEAD}\nRisk: low\nReview: strict\nReview: standard\n`,
+  }, HEAD);
+  assert.equal(duplicateReview.blocked, true);
+  assert.equal(duplicateReview.pass, false);
+  assert.equal(duplicateReview.strict, false);
+});
+
+test('a high-risk draft undrafts before the strict gate exists', () => {
+  const draft = readyFacts({ draft: true, highRisk: true, strictGate: false, gate: false, gateBlocked: true });
+  assert.equal(classify(draft).action, 'undraft');
+  assert.equal(classify(readyFacts({
+    draft: true, labels: ['carve-out'], highRisk: true, strictGate: false, gate: false,
+  })).action, 'undraft');
+  assert.equal(classify(readyFacts({ draft: true, labels: ['carve-out'] })).reason, 'hold label');
+  assert.equal(classify(readyFacts({ draft: true, protectedPath: true, labels: ['carve-out'] })).reason, 'protected path');
+  assert.equal(classify(readyFacts({ highRisk: true, strictGate: false, gate: false })).reason, 'high-risk review required');
+});
+
+test('dependabot stays held', () => {
+  assert.equal(classify(readyFacts({
+    author: 'dependabot[bot]',
+    authorAllowed: true,
+    highRisk: true,
+    strictGate: true,
+    gate: true,
+  })).reason, 'dependabot');
+});
+
+test('the new path list still matches every old main protected pattern', () => {
+  const oldMain = [
+    /(^|\/)\.github\//i,
+    /^electron-main\/src\/db\.ts$/,
+    /(^|\/)electron-builder[^/]*$/i,
+    /(^|\/)\.env($|\.)/,
+    /secrets?\.(ts|js|json|ya?ml)$/i,
+    /(^|\/)auth(\/|$)/i,
+    /(^|\/)release\//i,
+  ];
+  const samples = [
+    '.github/workflows/ci.yml',
+    'pkg/nested/.github/workflows/ci.yml',
+    'electron-main/src/db.ts',
+    'electron-builder.json',
+    'frontend/.env',
+    '.env.local',
+    '.env.',
+    'frontend/.env.',
+    'apiSecrets.ts',
+    'user-secrets.ts',
+    'clientSecret.ts',
+    'app-secret.yaml',
+    'src/secrets.json',
+    'electron-main/src/auth/session.ts',
+    'release/notes.md',
+  ];
+  for (const name of samples) {
+    assert.equal(oldMain.some((re) => re.test(name)), true, name);
+    assert.equal(protectedPath(name), true, name);
+  }
+});
+
+test('factsFrom reads a strict gate summary for a high-risk path', () => {
+  const pr = prRecord();
+  const detail = detailFor(pr, {
+    files: [{ filename: 'package.json' }],
+    checks: {
+      ci: { conclusion: 'success', headSha: HEAD },
+      'notes-windows': { conclusion: 'success', headSha: HEAD },
+      'screenshot-check': { conclusion: 'success', headSha: HEAD },
+      gate: { conclusion: 'success', headSha: HEAD, appId: GATE_APP_ID, summary: headGateSummary(HEAD, 'strict') },
+    },
+  });
+  const facts = factsFrom(pr, detail);
+  assert.equal(facts.highRisk, true);
+  assert.equal(facts.strictGate, true);
+  assert.equal(classify(facts).action, 'enqueue');
+  const owner = factsFrom(pr, detailFor(pr, { files: [{ filename: '.github/workflows/ci.yml' }] }));
+  assert.equal(owner.protectedPath, true);
+  assert.equal(classify(owner).reason, 'protected path');
 });
 
 test('a disabled or unreadable switch performs no undraft and no enqueue', () => {
@@ -511,14 +647,65 @@ test('model transports are unavailable and cannot reduce to a pass', () => {
   const roles = { critic: 'pass', shield: 'pass', probe: 'pass' };
   const pass = (provider, risk, reviewRoles = roles) => ({
     schema: 'mythos-gate-result/v1', provider, status: 'pass', repository: REPO, headSha: head,
-    runId: '9', runAttempt: '1', risk, pr: 7, roles: reviewRoles,
+    runId: '9', runAttempt: '1', risk, pr: 7, roles: reviewRoles, threshold: 'standard',
   });
+  const standard = { runId: '9', runAttempt: '1', threshold: 'standard' };
+  const strictExpected = { runId: '9', runAttempt: '1', threshold: 'strict' };
   assert.equal(reduce(pass('claude', 'high'), pass('codex', 'high'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
   assert.equal(reduce(pass('claude', 'low', { critic: 'pass', shield: 'pass', probe: 'hold' }), pass('codex', 'low'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
   assert.equal(reduce(unavailableRow('claude'), pass('codex', 'low'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
-  const accepted = reduce(pass('claude', 'low'), pass('codex', 'low'), { runId: '9', runAttempt: '1' });
+  assert.equal(reduce(pass('claude', 'medium'), pass('codex', 'low'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
+  const blocked = { ...pass('claude', 'low'), status: 'block' };
+  assert.equal(reduce(blocked, pass('codex', 'low'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
+  const strictRow = (provider) => ({ ...pass(provider, 'low'), threshold: 'strict' });
+  assert.equal(reduce(strictRow('claude'), pass('codex', 'low'), strictExpected).decision, 'no-pass');
+  assert.equal(reduce(strictRow('claude'), strictRow('codex'), { runId: '9', runAttempt: '1' }).decision, 'no-pass');
+  assert.equal(reduce(strictRow('claude'), strictRow('codex'), { runId: '9', runAttempt: '1', threshold: '' }).decision, 'no-pass');
+  assert.equal(reduce(strictRow('claude'), strictRow('codex'), { runId: '9', runAttempt: '1', threshold: 'bogus' }).decision, 'no-pass');
+  const strict = reduce(strictRow('claude'), strictRow('codex'), strictExpected);
+  assert.equal(strict.decision, 'pass');
+  assert.equal(strict.risk, 'low');
+  assert.equal(strict.threshold, 'strict');
+  assert.equal(strictClaimOk(strict), true);
+  assert.equal(acceptReducer({ ...strict, threshold: 'standard' }, strictExpected), null);
+  assert.equal(acceptReducer({
+    ...strict,
+    roles: { ...strict.roles, claude: { ...strict.roles.claude, threshold: 'standard' } },
+  }, strictExpected), null);
+  const accepted = reduce(pass('claude', 'low'), pass('codex', 'low'), standard);
   assert.equal(accepted.decision, 'pass');
+  assert.equal(accepted.threshold, 'standard');
   assert.equal(accepted.roles.claude.critic, 'pass');
+  assert.equal(acceptReducer({ ...accepted, threshold: 'strict' }, standard), null);
+  assert.equal(acceptReducer({
+    ...accepted,
+    roles: { ...accepted.roles, codex: { ...accepted.roles.codex, threshold: 'strict' } },
+  }, standard), null);
+  const claudeOnly = reduce(strictRow('claude'), pass('codex', 'low'), strictExpected, 'claude');
+  assert.equal(claudeOnly.decision, 'pass');
+  assert.equal(claudeOnly.threshold, 'strict');
+  assert.equal(claudeOnly.providers.length, 1);
+  assert.equal(reduce(pass('claude', 'low'), strictRow('codex'), strictExpected, 'claude').decision, 'no-pass');
+  const modelBlock = {
+    ...pass('claude', 'high'), status: 'hold', risk: 'high', decision: 'no-pass',
+    roles: { critic: 'hold', shield: 'pass', probe: 'pass' },
+  };
+  delete modelBlock.reason;
+  const blockedResult = reduce(modelBlock, pass('codex', 'low'), standard);
+  assert.equal(blockedResult.block, true);
+  assert.equal(blockedResult.headSha, HEAD);
+  const unavailableBlock = reduce(
+    { ...pass('claude', 'low'), status: 'unavailable', reason: 'malformed' },
+    pass('codex', 'low'),
+    standard,
+  );
+  assert.equal(unavailableBlock.block, undefined);
+  const infraHold = reduce(
+    { ...modelBlock, reason: 'owner-path' },
+    pass('codex', 'low'),
+    standard,
+  );
+  assert.equal(infraHold.block, undefined);
   assert.equal(acceptReducer(accepted, { runId: '8', runAttempt: '1' }), null);
   assert.equal(acceptReducer({ ...accepted, risk: 'high' }, { runId: '9', runAttempt: '1' }), null);
   assert.equal(acceptReducer({ ...accepted, roles: { ...accepted.roles, claude: { provider: 'claude', status: 'pass' } } }, { runId: '9', runAttempt: '1' }), null);
@@ -530,11 +717,11 @@ function unavailableRow(provider) {
 
 test('MYTHOS_GATE_PROVIDERS selects who must pass and fails closed otherwise', () => {
   const head = HEAD;
-  const expected = { runId: '9', runAttempt: '1' };
+  const expected = { runId: '9', runAttempt: '1', threshold: 'standard' };
   const roles = { critic: 'pass', shield: 'pass', probe: 'pass' };
   const pass = (provider, risk = 'low') => ({
     schema: 'mythos-gate-result/v1', provider, status: 'pass', repository: REPO, headSha: head,
-    runId: '9', runAttempt: '1', risk, pr: 7, roles,
+    runId: '9', runAttempt: '1', risk, pr: 7, roles, threshold: 'standard',
   });
   assert.deepEqual(parseProviders(undefined).providers, ['claude', 'codex']);
   assert.deepEqual(providersFromEnv({}).providers, ['claude', 'codex']);
@@ -1181,12 +1368,45 @@ esac
 
 test('discover selects one open main pull request', () => {
   const head = HEAD;
-  const open = { number: 9, state: 'open', draft: false, fork: false, base: 'main', baseSha: BASE, head };
-  assert.equal(selectHead([open, { ...open, number: 4 }], '').number, 4);
+  const open = {
+    number: 9, state: 'open', draft: false, fork: false, base: 'main', baseSha: BASE, head,
+    authorAllowed: true, author: 'ada',
+  };
+  assert.equal(selectHead([open, { ...open, number: 4 }], '', 0).number, 4);
   assert.equal(selectHead([open, { ...open, number: 3, fork: true }], '').number, 9);
   assert.equal(selectHead([{ ...open, draft: true }], '9'), null);
   assert.equal(selectHead([{ ...open, base: 'batch/lane' }], ''), null);
   assert.equal(selectHead([open], '9').head, head);
+  const held = { ...open, number: 4, ownerPath: true };
+  const newer = { ...open, number: 9 };
+  assert.equal(selectHead([held, newer], '').number, 9);
+  assert.equal(selectHead([held, newer], '').number, 9);
+  assert.equal(selectHead([{ ...open, number: 4, gatePosted: true }, newer], '').number, 9);
+  assert.equal(selectHead([{ ...open, number: 4, author: 'dependabot[bot]' }, newer], '').number, 9);
+  assert.equal(selectHead([{ ...open, number: 4, authorAllowed: false }, newer], '').number, 9);
+  assert.equal(selectHead([{ ...open, number: 4, labels: ['hold'] }, newer], '', 0).number, 9);
+  assert.equal(selectHead([{ ...open, number: 4, labels: ['do-not-merge'] }, newer], '', 0).number, 9);
+  assert.equal(selectHead([{ ...open, number: 4, labels: ['carve-out'], ownerPath: true }, newer], '', 0).number, 9);
+  assert.equal(selectHead([{ ...open, number: 4, gatePosted: true }], '4'), null);
+  assert.equal(selectHead([{ ...open, number: 4 }], '4').number, 4);
+  assert.equal(selectHead([{ ...open, number: 4, labels: ['tip-freeze'] }, newer], '', 0).number, 9);
+  assert.equal(isSettledGateRun({
+    head_sha: head, status: 'completed', conclusion: 'failure', app: { id: GATE_APP_ID },
+  }, head), true);
+  assert.equal(isSettledGateRun({
+    head_sha: head, status: 'completed', conclusion: 'success', app: { id: GATE_APP_ID },
+  }, head), true);
+  assert.equal(isSettledGateRun({
+    head_sha: head, status: 'in_progress', conclusion: null, app: { id: GATE_APP_ID },
+  }, head), false);
+  const heads = [
+    { ...open, number: 4 },
+    { ...open, number: 9 },
+    { ...open, number: 15 },
+  ];
+  const scans = [0, DISCOVER_SLOT_SECONDS, DISCOVER_SLOT_SECONDS * 2, DISCOVER_SLOT_SECONDS * 3]
+    .map((seconds) => selectHead(heads, '', seconds).number);
+  assert.deepEqual(scans, [4, 9, 15, 4]);
 });
 
 test('transports hold high risk, reject auth and malformed output, and hide the other secret', () => {
@@ -1202,12 +1422,39 @@ test('transports hold high risk, reject auth and malformed output, and hide the 
   assert.equal(high.risk, 'high');
   assert.equal(review(meta, { authFailed: true, modelText: text }).status, 'unavailable');
   assert.equal(review(meta, { modelText: 'not json', files: readable }).reason, 'malformed');
-  const held = review({ ...meta, provider: 'codex' }, {
+  const highRisk = review({ ...meta, provider: 'codex' }, {
     modelText: text,
-    files: [{ filename: 'electron-main/src/db.ts' }],
+    files: [{ filename: 'electron-main/src/db.ts', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' }],
   });
-  assert.equal(held.reason, 'protected-path');
-  assert.equal(held.risk, 'high');
+  assert.equal(highRisk.status, 'pass');
+  assert.equal(highRisk.threshold, 'strict');
+  assert.match(systemPrompt('strict'), new RegExp(STRICT_REVIEW_PROMPT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(systemPrompt('strict'), /"risk":"low"\|"high"/);
+  const ownerHeld = review(meta, {
+    modelText: text,
+    files: [{ filename: 'pkg/.github/workflows/ci.yml', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' }],
+  });
+  assert.equal(ownerHeld.reason, 'owner-path');
+  assert.equal(ownerHeld.risk, 'high');
+  const fromCompare = review({ ...meta, baseSha: BASE }, {
+    modelText: text,
+    files: [{ filename: 'frontend/src/app.ts', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' }],
+    compare: {
+      base_commit: { sha: BASE },
+      total_commits: 1,
+      ahead_by: 1,
+      commits: [{ sha: HEAD }],
+      files: [{ filename: 'package.json', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' }],
+    },
+  });
+  assert.equal(fromCompare.threshold, 'strict');
+  assert.equal(thresholdFromCompare(fromCompare && {
+    base_commit: { sha: BASE },
+    total_commits: 1,
+    ahead_by: 1,
+    commits: [{ sha: HEAD }],
+    files: [{ filename: 'package.json', status: 'modified', patch: '@@ -1 +1 @@\n+line\n' }],
+  }, BASE, HEAD), 'strict');
   const saved = {
     GITHUB_TOKEN: process.env.GITHUB_TOKEN,
     GH_TOKEN: process.env.GH_TOKEN,
@@ -1674,8 +1921,12 @@ test('a switch that flips during the ruleset re-read blocks queue and head check
   assert.deepEqual(writes, []);
 
   enabled = true;
+  let switchReads = 0;
   const headIo = {
-    readSwitch() { return { ok: true, enabled }; },
+    readSwitch() {
+      switchReads += 1;
+      return { ok: true, enabled };
+    },
     ruleset() {
       enabled = false;
       return { ok: true, ruleset: { known: true, match: true } };
@@ -1689,11 +1940,69 @@ test('a switch that flips during the ruleset re-read blocks queue and head check
     mode: 'act',
     gateAppId: String(GATE_APP_ID),
     gateToken: 'gate',
-    headDecision: { pr: 7, headSha: head },
+    threshold: 'standard',
+    headDecision: {
+      pr: 7,
+      headSha: head,
+      threshold: 'standard',
+      providers: ['claude'],
+      roles: {
+        claude: {
+          provider: 'claude', status: 'pass', critic: 'pass', shield: 'pass', probe: 'pass', threshold: 'standard',
+        },
+      },
+    },
   });
   assert.equal(posted.code, 0);
   assert.equal(posted.posted, 0);
+  assert.equal(switchReads, 2);
   assert.deepEqual(writes, []);
+});
+
+test('a model block on a head is not replaced by a later pass or a manual rerun', () => {
+  const writes = [];
+  let existing = null;
+  const io = {
+    readSwitch: () => ({ ok: true, enabled: true }),
+    ruleset: () => ({ ok: true, ruleset: { known: true, match: true } }),
+    listEntries: () => ({ ok: true, entries: [] }),
+    pull: () => ({ prReadable: true, state: 'open', draft: false, head: HEAD }),
+    ourRun: () => ({ headRunReadable: true, headRun: existing }),
+    writeRun(_prior, sha, status, conclusion, summary) {
+      writes.push({ sha, status, conclusion, summary });
+      existing = { id: 1, status, conclusion, summary, appId: GATE_APP_ID };
+      return { ok: true };
+    },
+  };
+  const block = { block: true, decision: 'no-pass', status: 'block', pr: 7, headSha: HEAD, reason: 'model-block' };
+  const first = runPublish(io, {
+    mode: 'act', gateAppId: String(GATE_APP_ID), gateToken: 'gate', blockDecision: block, threshold: 'standard',
+  });
+  assert.equal(first.posted, 1);
+  assert.equal(writes[0].status, 'completed');
+  assert.equal(writes[0].conclusion, 'failure');
+  assert.match(writes[0].summary, new RegExp(`^Head: ${HEAD}`));
+  const pass = {
+    pr: 7,
+    headSha: HEAD,
+    threshold: 'standard',
+    providers: ['claude'],
+    roles: {
+      claude: { provider: 'claude', status: 'pass', critic: 'pass', shield: 'pass', probe: 'pass', threshold: 'standard' },
+    },
+  };
+  const second = runPublish(io, {
+    mode: 'act', gateAppId: String(GATE_APP_ID), gateToken: 'gate', headDecision: pass, threshold: 'standard', pr: '7',
+  });
+  assert.equal(second.posted, 0);
+  assert.equal(writes.length, 1);
+  const retry = runPublish(io, {
+    mode: 'act', gateAppId: String(GATE_APP_ID), gateToken: 'gate',
+    blockDecision: { decision: 'no-pass', status: 'unavailable', pr: 7, headSha: HEAD },
+    threshold: 'standard',
+  });
+  assert.equal(retry.posted, 0);
+  assert.equal(writes.length, 1);
 });
 
 test('a check post re-reads the ruleset and skips a weaker policy', () => {

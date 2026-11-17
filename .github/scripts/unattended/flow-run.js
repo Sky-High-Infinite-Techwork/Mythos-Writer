@@ -2,7 +2,8 @@
 
 const fs = require('node:fs');
 const { REPO, WRITE_APP_ID, WRITE_INSTALLATION_ID } = require('./constants');
-const { classify, evidenceOk, ciGreen, gateOk, filesLookProtected } = require('./flow-policy');
+const { classify, evidenceOk, ciGreen, inspectGate } = require('./flow-policy');
+const { fileClasses } = require('./risk-policy');
 const { createClient } = require('./flow-client');
 
 function setOutput(name, value) {
@@ -26,6 +27,8 @@ function factsFrom(pr, detail) {
   const changed = Number(pr.changedFiles);
   const filesComplete = Number.isInteger(changed) && changed >= 0 && files.length === changed && changed < 3000;
   const fork = queue.fork === true || pr.isCrossRepository === true;
+  const classes = fileClasses(files);
+  const gate = inspectGate(detail.checks && detail.checks.gate, pr.headRefOid);
   return {
     number: pr.number,
     nodeId: queue.nodeId,
@@ -46,10 +49,13 @@ function factsFrom(pr, detail) {
     labelsComplete: queue.labelsComplete !== false,
     mergeState: String(pr.mergeStateStatus || '').toUpperCase(),
     filesComplete,
-    protectedPath: filesLookProtected(files),
+    protectedPath: classes.has('owner'),
+    highRisk: classes.has('high-risk'),
     proof: evidenceOk(detail.evidence, pr.headRefOid, pr.number, pr.baseRefName, queue.baseSha),
     ciGreen: ciGreen(detail.checks || {}, pr.headRefOid),
-    gate: gateOk(detail.checks && detail.checks.gate, pr.headRefOid),
+    gate: gate.pass,
+    strictGate: gate.strict,
+    gateBlocked: gate.blocked,
     queueEnabled: queue.queueEnabled === true,
     policyKnown: typeof queue.policyKnown === 'boolean' ? queue.policyKnown : typeof queue.queueEnabled === 'boolean',
     inQueue: queue.inQueue === true,

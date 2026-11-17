@@ -16,21 +16,23 @@ The switch is read again, with `MYTHOS_CONTROL_READ_TOKEN`, after every other ch
 
 Manual runs default to `dry-run`. `act` is the mode that can write. A scheduled run is `act`, and it still stops when the variable is not `true`.
 
-Phase 1b does not push, rebase, dispatch new work, call OpenRouter, or auto-merge `batch/**`. A pull request that touches `.github/`, auth, secrets, `electron-main/src/db.ts`, or release config stays held, including a rename out of those paths. The write App does not post PROOF comments.
+Phase 1b does not push, rebase, dispatch new work, or call OpenRouter. A pull request whose base is not `main` stays held. A pull request that touches `.github/**` stays held for the owner, including a nested path and a rename out of that tree. Other paths on the batch-automerge protected list are high-risk: the flow enqueues them only after `mythos/final-gate` from App 5736520 says `Risk: low` and `Review: strict` for the exact head. Any block or any risk other than low stays held. The transport derives that class from the compare file list and uses the strict prompt for high-risk diffs. It holds only `.github/**` before the model runs. There is no Ivy or Grok step. The write App does not post PROOF comments.
 
 `ci` (including `notes-windows`) and `screenshot-check` already run on `merge_group`.
 
-## Proof (Phase 1a, accepted by Ivy, PM)
+## Proof
 
-Phase 1a proof is required CI green from `main`'s workflow revision on the exact tip. Ivy accepted that trust level.
+Phase 1a proof is required CI green from `main`'s workflow revision on the exact tip. The run stays bound to that head SHA. A newer `main` (a different base SHA) does not void it. `mergeStateStatus` `BEHIND` can be enqueued, because the merge queue re-tests the merged result. `DIRTY` stays held as merge conflicts.
 
-For each of `.github/workflows/ci.yml` and `.github/workflows/screenshot-check.yml`, the latest Actions run on that tip must have `event` `pull_request`, `status` `completed`, and `conclusion` `success`. `run.head_sha` is the tip. The run's pull request link head SHA, base ref, and base SHA match the pull request now. The workflow file blob at that tip equals the blob on `main`. A later failure, cancellation, or in-progress run on that SHA voids an earlier success. An author `PROOF @ <sha>` comment is an assertion and does not count. The write App does not post one.
+For each of `.github/workflows/ci.yml` and `.github/workflows/screenshot-check.yml`, the latest Actions run on that tip must have `event` `pull_request`, `status` `completed`, and `conclusion` `success`. `run.head_sha` is the tip. The run's pull request link head SHA and base ref match the pull request now. The base SHA may be older than the pull request's current base. The workflow file blob at that tip equals the blob on `main`. A later failure, cancellation, or in-progress run on that SHA voids an earlier success. An author `PROOF @ <sha>` comment is an assertion and does not count. The write App does not post one.
 
-`MYTHOS_FLOW_AUTHOR_ALLOWLIST` is an author allow-list. It is not a team-membership check. The value is a comma-separated list of GitHub logins, compared case-insensitively. A missing or empty variable holds every pull request. The head repository must be `Sky-High-Infinite-Techwork/Mythos-Writer`; a fork is held. An author whose login is not in the list is held. The suggested initial value is `SkyyPlayz,cursor[bot]`.
+Dependabot pull requests stay held. Patch and minor auto-merge is a follow-up.
+
+`MYTHOS_FLOW_AUTHOR_ALLOWLIST` is an author allow-list. It is not a team-membership check. The value is a comma-separated list of GitHub logins, compared case-insensitively. A missing or empty variable holds every pull request. The head repository must be `Sky-High-Infinite-Techwork/Mythos-Writer`; a fork is held. An author whose login is not in the list is held. Dependabot is held even when the login is listed. The suggested initial value is `SkyyPlayz,cursor[bot]`.
 
 GraphQL `author.login` for a bot omits the `[bot]` suffix that REST includes (`cursor` versus `cursor[bot]`). The flow reads `author.__typename`. When that is `Bot` and the login does not already end in `[bot]`, the comparison uses `login[bot]`. A User named `cursor` does not match the allow-list entry `cursor[bot]`.
 
-The publisher does not read `MYTHOS_FLOW_AUTHOR_ALLOWLIST`, and it cannot undraft or enqueue. It mirrors an existing trusted head gate onto a queue commit. It can also post head success when the reducer result is accepted. The reducer accepts a result only when every listed provider passes at low risk with Critic, Shield, and Probe.
+The publisher does not read `MYTHOS_FLOW_AUTHOR_ALLOWLIST`, and it cannot undraft or enqueue. It mirrors an existing trusted head gate onto a queue commit. It posts head success when the reducer result is accepted. A model block posts a completed `mythos/final-gate` failure on that exact head. Unavailable or malformed transport output posts nothing, so that head can be retried. An existing success or failure on the same head is not replaced, including by a manual pull-request number. The reducer accepts a result only when every listed provider passes at low risk with Critic, Shield, and Probe.
 
 A pull request is also held when the lease label list or the `main` ruleset cannot be read. `lease` and `lease:` labels match without regard to case. After the other eligibility checks, the ruleset is read again. That fresh read must still require GitHub Actions (`integration_id` 15368) on `ci`, `notes-windows`, and `screenshot-check`, the gate App (`5736520`) on `mythos/final-gate`, `strict_required_status_checks_policy` true, and a merge queue whose `merge_method` is `SQUASH`. Ruleset 25235759 on `main` is that policy. A stale or weaker ruleset holds the write. The switch is read after that ruleset re-read and is the last call before the write.
 

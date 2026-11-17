@@ -92,10 +92,12 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      checks: read
     outputs:
       pr: ${{ steps.pick.outputs.pr }}
       head: ${{ steps.pick.outputs.head }}
       base: ${{ steps.pick.outputs.base }}
+      threshold: ${{ steps.pick.outputs.threshold }}
       run_claude: ${{ steps.pick.outputs.run_claude }}
       run_codex: ${{ steps.pick.outputs.run_codex }}
     steps:
@@ -120,6 +122,7 @@ jobs:
           REPO: Sky-High-Infinite-Techwork/Mythos-Writer
           PR_NUMBER: ${{ needs.admit.outputs.pr }}
           READ_TOKEN: ${{ github.token }}
+          MYTHOS_FLOW_AUTHOR_ALLOWLIST: ${{ vars.MYTHOS_FLOW_AUTHOR_ALLOWLIST }}
           MYTHOS_GATE_PROVIDERS_JSON: ${{ toJSON(vars.MYTHOS_GATE_PROVIDERS) }}
         run: node .github/scripts/unattended/discover-run.js
 
@@ -210,7 +213,7 @@ jobs:
         run: node .github/scripts/unattended/transport-run.js
 
   reduce:
-    needs: [admit, transport-claude, transport-codex]
+    needs: [admit, discover, transport-claude, transport-codex]
     if: always() && needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main' && (needs.transport-claude.result == 'success' || needs.transport-claude.result == 'skipped') && (needs.transport-codex.result == 'success' || needs.transport-codex.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -240,13 +243,14 @@ jobs:
         env:
           CLAUDE_RESULT: ${{ needs.transport-claude.outputs.result }}
           CODEX_RESULT: ${{ needs.transport-codex.outputs.result }}
+          THRESHOLD: ${{ needs.discover.outputs.threshold }}
           MYTHOS_GATE_PROVIDERS_JSON: ${{ toJSON(vars.MYTHOS_GATE_PROVIDERS) }}
           GITHUB_TOKEN: ''
           GH_TOKEN: ''
         run: node .github/scripts/unattended/gate-result.js reduce
 
   publish:
-    needs: [admit, reduce]
+    needs: [admit, discover, reduce]
     if: needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -285,6 +289,7 @@ jobs:
           READ_TOKEN: ${{ github.token }}
           REDUCER_RESULT: ${{ needs.reduce.outputs.result }}
           PR_NUMBER: ${{ needs.admit.outputs.pr }}
+          THRESHOLD: ${{ needs.discover.outputs.threshold }}
           MYTHOS_GATE_PROVIDERS_JSON: ${{ toJSON(vars.MYTHOS_GATE_PROVIDERS) }}
         run: |
           set -euo pipefail
@@ -333,5 +338,6 @@ jobs:
           GATE_TOKEN: ${{ steps.gate.outputs.token }}
           REDUCER_RESULT: ${{ needs.reduce.outputs.result }}
           PR_NUMBER: ${{ needs.admit.outputs.pr }}
+          THRESHOLD: ${{ needs.discover.outputs.threshold }}
           MYTHOS_GATE_PROVIDERS_JSON: ${{ toJSON(vars.MYTHOS_GATE_PROVIDERS) }}
         run: node .github/scripts/unattended/publish-run.js

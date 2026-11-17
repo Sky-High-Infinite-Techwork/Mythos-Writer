@@ -12,7 +12,7 @@ to mythos-ops/specs after merge.
 ![ops-health](https://github.com/SkyyPlayz/Mythos-Writer/actions/workflows/mythos-ops-health.yml/badge.svg)
 ```
 
-- **Main-push `workflow_run`:** `GET /actions/runs/{id}/pull_requests` is HTTP 404 (no PRs). `gh api` still prints that error JSON on stdout. Hygiene (`draft-ready-on-green`, `draft-ci-comment`, and the same list path in auto-rebase) soft-skips exit 0. Non-numeric tokens are never passed to `gh pr view`.
+- **Main-push `workflow_run`:** `GET /actions/runs/{id}/pull_requests` is HTTP 404 (no PRs). `gh api` still prints that error JSON on stdout. Hygiene (`draft-ci-comment`, and the same list path in auto-rebase) soft-skips exit 0. `draft-ready-on-green` is removed. Non-numeric tokens are never passed to `gh pr view`.
 
 ## Dependency map
 
@@ -23,11 +23,11 @@ to mythos-ops/specs after merge.
 | Circuit breaker | `MYTHOS_WAKE_CIRCUIT_BREAKER` | Grok Bot `mythos-pr-ci-watch` / Forge must stay SILENT while ISO future |
 | Shadow / autofix | `MYTHOS_AUTOFIX_MODE`, `MYTHOS_AUTOFIX_SHADOW_UNTIL` | [MYTHOS_AUTOFIX.md](./MYTHOS_AUTOFIX.md) |
 | Self-improvement loop | `MYTHOS_LOOP_ENABLED`, `MYTHOS_LOOP_STATE` | Retired with the weekly audit. `rollback.sh` `loop-*` actions are inert. |
-| **PR hygiene** `mythos-pr-hygiene.yml` | Labels `tip-freeze` (logged, not rebased); draft-CI sticky; draft→ready | No `gh` update-branch (#1703). Draft-CI comment and draft→ready remain. Main-push `workflow_run` with no PRs soft-skips (404 is not a red job) |
+| **PR hygiene** `mythos-pr-hygiene.yml` | Labels `tip-freeze` (logged, not rebased); draft-CI sticky | No `gh` update-branch (#1703). Draft-CI comment remains. Undraft is `mythos-flow-step` only. Main-push `workflow_run` with no PRs soft-skips (404 is not a red job) |
 | Tip-freeze docs | [FORGE_TIP_FREEZE.md](./FORGE_TIP_FREEZE.md), [FORGE_E2E_KEEPALIVE.md](./FORGE_E2E_KEEPALIVE.md) | Inventory → one batch; soft cap window var |
 | Standing agents | Forge / Critic / Shield / Probe / Sentinel / `bc-fb92daf9` | [STANDING_AGENT_CONTEXT_COMPRESSION.md](./STANDING_AGENT_CONTEXT_COMPRESSION.md) |
 | Branch protection | [BRANCH_PROTECTION_MAIN.md](./BRANCH_PROTECTION_MAIN.md) + `scripts/branch-protection/apply-main-ruleset.mjs` | Manual admin apply after merge |
-| Merge gate | [MERGE_GATE.md](./MERGE_GATE.md) | Tip-SHA Critic+Shield+Probe — not collapsed. Auto-merge workflow `mythos-gate-auto-merge.yml` (check `mythos-gate-auto-merge`) was removed; a human applies the bar. |
+| Merge gate | [MERGE_GATE.md](./MERGE_GATE.md) | `mythos/final-gate` from gate App 5736520, then the merge queue. `.github/**` stays owner-merged. Auto-merge workflow `mythos-gate-auto-merge.yml` was removed. |
 | Ops health | `mythos-ops-health.yml` | secrets-rotation (quarterly) only |
 | Secrets rotation | `vars.MYTHOS_PAT_SET_AT`, `vars.MYTHOS_SECRET_ROTATION_DAYS` (default 90) | Reminder only — never prints secrets. The auto-merge workflow was removed; do not confirm that it still merges. Deleting the repo bot PAT is owner-only. Copy any existing rotation date into `MYTHOS_PAT_SET_AT`; an unset date is treated as due. |
 

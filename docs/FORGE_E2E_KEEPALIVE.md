@@ -24,8 +24,9 @@ Workflow: [`.github/workflows/mythos-pr-hygiene.yml`](../.github/workflows/mytho
 
 ## Zero-intervention ready (greens)
 
-Separate job `draft-ready-on-green`: after **2 consecutive CI greens** on the
-**same** draft tip SHA → `gh pr ready`. **Never** auto-close drafts.
+`draft-ready-on-green` is retired. Two CI greens do not mark a draft ready.
+Undraft is `mythos-flow-step`, and only when `UNATTENDED_ENABLED` is `true`
+and the flow policy passes (allow-list plus evidence). This workflow does not call `gh pr ready`. It never auto-closes drafts.
 
 ## Tip-freeze soft cap
 

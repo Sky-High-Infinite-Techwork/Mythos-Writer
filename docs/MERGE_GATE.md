@@ -1,77 +1,68 @@
 # Mythos merge gate
 
-Airtight, tip-SHA-bound conditions for merging into `main`. A human applies
-them. Actions does not.
+Conditions for landing on `main`. The merge queue performs the merge.
+Builders do not merge, and they do not wait on Critic, Shield, Probe, or Ivy.
 
 `.github/workflows/mythos-gate-auto-merge.yml` (check name
-`mythos-gate-auto-merge`) was removed. It still had live triggers
-(`workflow_run` when CI completed successfully, `issue_comment`,
-`pull_request_review`, and `pull_request` labeled / unlabeled /
-ready_for_review / synchronize) and read the repo bot PAT, falling back to
-`GITHUB_TOKEN`. A working PAT would have revived auto-merge with no GitHub
-review. Skyy approved the removal. The repo secret is left in place; deleting
-it is a separate owner-only step.
+`mythos-gate-auto-merge`) was removed. Do not restore it.
 
-Fail-closed: if any condition below is missing or ambiguous, do not merge.
+Fail-closed: if any condition below is missing or ambiguous, the flow does not
+enqueue.
 
-## Who merges
+## Who lands a pull request
 
-| Path | Merger |
+| Path | What happens |
 | --- | --- |
-| Routine product/docs PRs | Ivy only, pinned to the frozen tip sha. The Mythos gate auto-merge workflow was removed. |
-| Dependabot (any update) | Human merge. `.github/workflows/dependabot-auto-merge.yml` was removed after PR #1696 (`abceeae7`) armed native auto-merge and landed on `main` with no reviews and no CI on `main` (owner Option A, 2026-10-16). |
-| Carve-out paths | Human **only** after owner tip-bound `CARVE-OUT APPROVE` |
-| Releases | [`release.yml`](../.github/workflows/release.yml) — draft only unless owner publishes |
+| Ordinary product and docs pull requests | `mythos-flow-step` enqueues into the `main` merge queue when the checks below are green on the exact head. The queue re-tests the merged result, so a pull request that is behind `main` can still be enqueued. A merge conflict (`DIRTY`) stays held. |
+| Dependabot | Held. Patch and minor auto-merge is a follow-up. |
+| `.github/**` | Owner-merged. The flow holds these, including a rename out of `.github/`. |
+| Other high-risk paths | Eligible only after a strict provider review for the exact head. The gate check must be success from gate App `5736520`, with `Risk: low` and `Review: strict`. Any block, or any risk other than low, stays held. |
+| Releases | [`release.yml`](../.github/workflows/release.yml) stays draft until the owner publishes. |
 
-Copilot / CI-fixer agents **never** merge (see `.github/copilot-instructions.md`).
+Copilot and other builder agents never merge (see `.github/copilot-instructions.md`).
+No build step and no merge step waits on Grok.
 
-While the bot PAT returns 403, Critic/Shield/Probe verdicts posted in the Mythos room with the tip sha count as official gate evidence. The only trusted approver is still SkyyPlayz (by `user.login`). Only Ivy merges, except protected-path carve-outs, which Skyy merges in the web UI. Sentinel only watches. Main requires branches to be up to date: a PR that falls behind gets GitHub's Update branch (a merge of main, no other change), then Critic, Shield and Probe re-stamp the new head (merge-only re-stamp) before it merges.
-`tip-freeze` goes on at the tip-freeze wake, before any verdict. No tip-freeze until CI has run on the current head sha.
+`hold`, `do-not-merge`, and `tip-freeze` still keep a pull request out of the
+queue. The `carve-out` label alone does not. On a high-risk pull request it is
+the old marker; a strict low-risk pass is what makes that pull request eligible.
+On any other pull request the label still holds.
 
-## Required conditions (ALL)
+## The gate check
 
-1. **PR shape** — open, not draft, base `main`, author ≠ `dependabot[bot]`.
-2. **Required checks SUCCESS on current head SHA**
-   - `ci` (CI workflow aggregator)
-   - `notes-windows`
-   - `screenshot-check`
-   - `carve-out-check` must be **completed** (it never fails the build; it labels/comments only).
-3. **Tip-bound gate signals from trusted authors** — issue comments and/or PR reviews by allowlisted accounts (`SkyyPlayz`, `SkyHigh-Mythos-Bot`) whose bodies reference the **current head SHA** (full or ≥7-char prefix) and include:
-   - Critic: latest tip-bound decision must be `APPROVE` (body must include Critic; COMMENT reviews count; a later tip-bound `CHANGES_REQUESTED` revokes an earlier APPROVE)
-   - Shield: body must include `Shield` + `CLEAR`
-   - Probe: body must include `Probe` near `VERIFY PASS` (fail closed on bare "verify pass" alone)
-4. **Carve-outs** — if label `carve-out` is present, or the diff hits carve-out paths (workflows, actions, `db.ts`, auth, secrets, release/electron-builder config), or the active `carve-out-check` sticky still requires review:
-   - **Do not merge** unless owner `SkyyPlayz` has commented tip-bound `CARVE-OUT APPROVE`.
-5. **Clean merge** — `mergeable === true`; no tip-bound Critic `CHANGES_REQUESTED`.
-6. **Merge method** — create a **merge commit** (`merge_method: merge`). Branch delete is not required.
-7. **Never** publish GitHub releases, push commits to `main` outside this merge, or weaken tests.
+`mythos/final-gate` is posted by gate App `5736520`. A success is for one head
+SHA. It comes from provider review (Claude, and Codex only when that transport
+is configured and also passes). The review has to pass at low risk. High-risk
+paths use a stricter prompt: uncertainty, a block, or any risk other than low
+is not a pass.
 
-## Triggers
+The check summary starts with `Head: <sha>` and includes `Risk: low`. A strict
+pass also includes `Review: strict`.
 
-Removed with the workflow. No remaining workflow re-checks a PR in order to
-merge it. Do not restore `workflow_run`, comment, review, or pull-request
-triggers that merge.
+Required CI checks, also on the merge queue: `ci`, `notes-windows`,
+`screenshot-check`. `carve-out-check` completes and labels. It does not fail
+the build.
 
-## Tokens
+Evidence for the flow is a successful pull-request run of those CI workflows
+on the exact head, using `main`'s copies of the workflow files. A newer `main`
+does not void that evidence.
 
-Removal note: the deleted workflow read the repo bot PAT (SkyHigh-Mythos-Bot,
-Contents + Pull requests write) and, when that secret was empty, `GITHUB_TOKEN`.
-That read is gone. This change does not delete the secret.
+## High-risk paths
 
-## Idempotency
+The flow uses the same path list as `batch-automerge` (dependency manifests,
+lockfiles, `*.config.*`, `.claude/`, `AGENTS.md`, auth, secrets,
+`electron-main/src/db.ts`, release and electron-builder config, and the rest
+of that list). `.github/**` is the owner hold. Every other path on the list is
+high-risk and needs the strict pass above.
 
-The deleted workflow posted this comment only after a successful merge API call:
+## Merge method
 
-`Mythos gate auto-merge: Critic+Shield+Probe tip-bound + required checks green on <sha>.`
-
-Nothing posts that marker now.
+The `main` merge queue squashes. The flow enqueues with `expectedHeadOid` set
+to the full head SHA. It does not push, rebase, or jump the queue.
 
 ## Out of scope
 
-- Branch protection UI (owner configures required checks) — see
-  [BRANCH_PROTECTION_MAIN.md](./BRANCH_PROTECTION_MAIN.md) for the canonical
-  `main — Mythos single tip-gate` ruleset (docs + manual apply helper; not
-  auto-applied by Actions).
-- Tip-freeze / CI-fix batching soft cap — see [FORGE_TIP_FREEZE.md](./FORGE_TIP_FREEZE.md)
-  and [FORGE_E2E_KEEPALIVE.md](./FORGE_E2E_KEEPALIVE.md) (comment-only draft CI sticky).
-- `release.yml` publish / draft policy
+- Rulesets and repository settings. The owner turns the queue and
+  `UNATTENDED_ENABLED` on.
+- The batch lane. Retargeting `batch/**` is an owner settings change, not this
+  gate.
+- `release.yml` publish policy.

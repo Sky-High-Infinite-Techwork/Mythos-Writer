@@ -21,6 +21,43 @@ function noPass(status) {
   return { schema: RESULT_SCHEMA, decision: 'no-pass', status: status || 'unavailable', repository: REPO };
 }
 
+const RETRY_REASONS = new Set([
+  'malformed',
+  'auth',
+  'missing-credential',
+  'transport',
+  'diff-unreadable',
+  'provider',
+  'no-head',
+  'model-transport-not-approved',
+]);
+
+// A model hold with a parsed verdict is final for this head. Unavailable output,
+// a malformed reply, and an infrastructure hold are not: those may be retried.
+function isModelBlock(row) {
+  if (!row || row.status !== 'hold') return false;
+  if (typeof row.reason === 'string' && (row.reason.length === 0 || RETRY_REASONS.has(row.reason))) return false;
+  if (typeof row.reason === 'string') return false;
+  if (!row.roles) return false;
+  return row.risk === 'high' || row.risk === 'low';
+}
+
+function definitiveBlock(rows, providers) {
+  const blocked = providers.map((name) => rows[name]).filter(isModelBlock);
+  const head = blocked.find((row) => sha40(row.headSha) && Number.isInteger(row.pr) && row.pr > 0);
+  if (!head) return null;
+  return {
+    schema: RESULT_SCHEMA,
+    decision: 'no-pass',
+    status: 'block',
+    block: true,
+    repository: REPO,
+    pr: head.pr,
+    headSha: head.headSha,
+    reason: 'model-block',
+  };
+}
+
 // Omitted means both providers. An empty or unknown value fails closed.
 function parseProviders(raw) {
   if (raw === undefined || raw === null) return { ok: true, providers: ['claude', 'codex'] };
@@ -83,9 +120,36 @@ function sameProviders(left, right) {
   return left.length === right.length && left.every((name, index) => name === right[index]);
 }
 
+function knownThreshold(value) {
+  return value === 'strict' || value === 'standard';
+}
+
+function rowThreshold(row) {
+  if (!row || row.status !== 'pass' || row.risk !== 'low') return null;
+  return knownThreshold(row.threshold) ? row.threshold : null;
+}
+
+// Discover's class is mandatory. An empty or invalid THRESHOLD cannot pass,
+// and a listed provider that disagrees cannot be upgraded.
+function agreedThreshold(rows, providers, expected) {
+  if (!expected || !knownThreshold(expected.threshold)) return null;
+  for (const name of providers) {
+    if (rowThreshold(rows[name]) !== expected.threshold) return null;
+  }
+  return expected.threshold;
+}
+
+function strictClaimOk(value) {
+  if (!value || !knownThreshold(value.threshold)) return false;
+  const providers = value.providers;
+  if (!Array.isArray(providers) || providers.length === 0) return false;
+  return providers.every((name) => value.roles && value.roles[name] && value.roles[name].threshold === value.threshold);
+}
+
 // A pass requires every listed provider on the same low-risk head.
 // High risk, a missing role, an unavailable listed provider, or a bad provider list cannot pass.
 // An unlisted provider cannot satisfy a listed one.
+// threshold comes from those listed providers and must match the compare class when one is supplied.
 function reduce(claude, codex, expected, rawProviders) {
   const parsed = parseProviders(rawProviders);
   if (!parsed.ok) return noPass('providers');
@@ -93,22 +157,27 @@ function reduce(claude, codex, expected, rawProviders) {
   const head = rows[parsed.providers[0]] && rows[parsed.providers[0]].headSha;
   for (const name of parsed.providers) {
     if (!rolePass(rows[name], name, head, expected.runId, expected.runAttempt)) {
+      const block = definitiveBlock(rows, parsed.providers);
+      if (block) return block;
       return noPass(rows[name] && rows[name].status);
     }
   }
+  const threshold = agreedThreshold(rows, parsed.providers, expected);
+  if (!threshold) return noPass('threshold');
   const pr = rows[parsed.providers[0]].pr;
   if (!Number.isInteger(pr) || pr < 1 || parsed.providers.some((name) => rows[name].pr !== pr)) {
     return noPass('refused');
   }
   const roles = {};
   for (const name of parsed.providers) {
-    roles[name] = { provider: name, status: 'pass', critic: 'pass', shield: 'pass', probe: 'pass' };
+    roles[name] = { provider: name, status: 'pass', critic: 'pass', shield: 'pass', probe: 'pass', threshold };
   }
   return {
     schema: RESULT_SCHEMA,
     decision: 'pass',
     status: 'pass',
     risk: 'low',
+    threshold,
     repository: REPO,
     pr,
     headSha: head,
@@ -134,6 +203,12 @@ function acceptReducer(value, expected, rawProviders) {
       return null;
     }
   }
+  if (!expected || !knownThreshold(expected.threshold)) return null;
+  if (value.threshold !== expected.threshold) return null;
+  for (const name of parsed.providers) {
+    if (!roles[name] || roles[name].threshold !== expected.threshold) return null;
+  }
+  if (!strictClaimOk(value)) return null;
   return value;
 }
 
@@ -163,7 +238,10 @@ function main(argv) {
     return 0;
   }
   if (command === 'reduce') {
-    const result = reduce(readJsonEnv('CLAUDE_RESULT'), readJsonEnv('CODEX_RESULT'), meta, providerArgument());
+    const result = reduce(readJsonEnv('CLAUDE_RESULT'), readJsonEnv('CODEX_RESULT'), {
+      ...meta,
+      threshold: process.env.THRESHOLD,
+    }, providerArgument());
     const line = JSON.stringify(result);
     setOutput('result', line);
     setOutput('decision', result.decision);
@@ -178,5 +256,5 @@ if (require.main === module) process.exit(main(process.argv));
 
 module.exports = {
   transportResult, reduce, acceptReducer, noPass, reviewRolesPass, parseProviders, providersFromEnv,
-  parseProvidersJson, providerArgument,
+  parseProvidersJson, providerArgument, strictClaimOk, isModelBlock,
 };

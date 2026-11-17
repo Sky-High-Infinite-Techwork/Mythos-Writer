@@ -2,7 +2,7 @@ name: Mythos flow step
 
 # Phase 1b. Undraft and enqueue from main.
 # The enqueue token requests pull requests write and merge queues write.
-# Batch bases stay held. There is no push.
+# A base other than main stays held. There is no push.
 # See docs/ops/unattended-flow.md.
 
 on:
