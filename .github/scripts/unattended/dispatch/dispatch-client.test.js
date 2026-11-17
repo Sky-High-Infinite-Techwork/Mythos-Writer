@@ -88,10 +88,11 @@ test('refExists is exact message only; other graphql errors are fatal', async ()
 
 test('listRefs fails closed when commit message GET fails', async () => {
   const gh = (args) => {
-    if (args.includes('matching-refs')) {
+    const flat = args.map((a) => String(a));
+    if (flat.some((a) => a.includes('matching-refs'))) {
       return { status: 0, stdout: JSON.stringify([{ ref: 'refs/mythos/dispatch/lane-00', object: { sha: 'c'.repeat(40) } }]) };
     }
-    if (args.some((a) => String(a).includes('/git/commits/'))) return { status: 500, stderr: 'denied' };
+    if (flat.some((a) => a.includes('/git/commits/'))) return { status: 500, stderr: 'denied' };
     return { status: 0, stdout: '[]' };
   };
   const { read } = createDispatchClients({ readToken: 'r', gh });
