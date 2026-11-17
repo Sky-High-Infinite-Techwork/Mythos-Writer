@@ -175,24 +175,27 @@ test('e2e shards run on merge_group regardless of paths-filter', () => {
   const mergeGroupClause = /\|\|\s*github\.event_name == 'merge_group'/;
   for (const job of ['e2e-shard-1', 'e2e-shard-2', 'e2e-shard-3', 'e2e-shard-4']) {
     assert.match(jobs[job].if, mergeGroupClause, job);
-    const matches = String(jobs[job].if).match(new RegExp(mergeGroupClause.source, 'g')) || [];
+    const matches = String(jobs[job].if).match(/\|\|\s*github\.event_name == 'merge_group'/g) || [];
     assert.equal(matches.length, 1, `${job} must not duplicate merge_group clause`);
   }
 });
 
 test('paths-filter resolves run-e2e with merge_group fail-safe', () => {
-  const text = fs.readFileSync(path.join(WORKFLOWS, 'ci.yml'), 'utf8');
-  assert.match(text, /id: resolve-e2e/);
-  assert.match(text, /run-e2e=true.*merge_group/s);
   const doc = loadWorkflow('ci.yml');
+  const steps = doc.jobs['paths-filter'].steps;
+  const resolveE2e = steps.find((step) => step.id === 'resolve-e2e');
+  assert.ok(resolveE2e, 'resolve-e2e step');
+  const run = String(resolveE2e.run);
+  assert.match(run, /merge_group/);
+  assert.match(run, /run-e2e=true/);
   assert.match(doc.jobs['paths-filter'].outputs['run-e2e'], /resolve-e2e/);
 });
 
 test('paths-filter resolves docs-only fail-closed via resolve-docs', () => {
-  const text = fs.readFileSync(path.join(WORKFLOWS, 'ci.yml'), 'utf8');
-  assert.match(text, /id: resolve-docs/);
-  assert.match(text, /docs-only=false/s);
   const doc = loadWorkflow('ci.yml');
+  const resolveDocs = doc.jobs['paths-filter'].steps.find((step) => step.id === 'resolve-docs');
+  assert.ok(resolveDocs, 'resolve-docs step');
+  assert.match(String(resolveDocs.run), /docs-only=false/);
   assert.match(doc.jobs['paths-filter'].outputs['docs-only'], /resolve-docs/);
   assert.doesNotMatch(doc.jobs['paths-filter'].outputs['docs-only'], /filter-docs\.outputs\.docs-only/);
 });
