@@ -52,7 +52,8 @@ vi.mock('../db.js', () => db);
 import { ipcMain } from 'electron';
 import { IPC_CHANNELS, setupIpcMain, type VaultReadPayload, type VaultWritePayload } from '../ipc.js';
 import * as mainIpc from '../main.js';
-import { safeVaultJoin, writeVaultFileAtomic } from '../vault.js';
+import { BLANK_MODE_STAGING_DIR } from '../brainstormRouting.js';
+import { safeVaultIpcJoin, safeVaultJoin, writeVaultFileAtomic } from '../vault.js';
 import { mapVaultWriteError } from './writeErrors.js';
 import { readVaultFileBounded } from './boundedRead.js';
 import { vaultWriteForIpc, writeVaultFileCas } from './casWrite.js';
@@ -769,6 +770,16 @@ describe('vault:read / vault:write via setupIpcMain', () => {
       expect(mutantReply.error).toBeUndefined();
     });
 
+    it('story vault write refuses dot-segment paths that notes may use (staging dir)', async () => {
+      const stagedRel = `${BLANK_MODE_STAGING_DIR}/probe.md`;
+      const reply = (await invokeWrite({ path: stagedRel, content: 'nope' })) as {
+        bytes: number;
+        error?: string;
+      };
+      expect(reply.bytes).toBe(0);
+      expect(reply.error).toBe('Path not allowed.');
+    });
+
     it('mutant F1 C14: vault:write without handler join allows a.txt', async () => {
       const before = countVaultFiles();
       vi.mocked(ipcMain.handle).mockClear();
@@ -847,5 +858,15 @@ describe('notesVault:write via main handler', () => {
     const reply = mainIpc.writeVaultForIpc(notesRoot, rel, '{"plain":true}');
     expect(Object.prototype.hasOwnProperty.call(reply, 'sha256')).toBe(false);
     expect(reply).toEqual({ path: rel, bytes: Buffer.byteLength('{"plain":true}', 'utf-8') });
+  });
+
+  it('notes vault write allows brainstorm blank-mode staging under dot directory', () => {
+    const stagedRel = `${BLANK_MODE_STAGING_DIR}/id__Test Note.md`;
+    expect(() => safeVaultIpcJoin(notesRoot, stagedRel, true)).not.toThrow();
+    const reply = mainIpc.handleNotesVaultWriteIpc({ path: stagedRel, content: '# staged\n' });
+    expect(reply.bytes).toBeGreaterThan(0);
+    expect(
+      fs.readFileSync(path.join(notesRoot, BLANK_MODE_STAGING_DIR, 'id__Test Note.md'), 'utf8'),
+    ).toBe('# staged\n');
   });
 });

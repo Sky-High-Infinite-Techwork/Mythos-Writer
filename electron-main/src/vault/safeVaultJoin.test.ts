@@ -225,10 +225,6 @@ describe('safeVaultIpcJoin — strict renderer-facing entry point', () => {
     expect(() => safeVaultIpcJoin(tmpDir, '.secret.md', true)).toThrow(/dotfile not allowed/);
   });
 
-  it('rejects a dot-prefixed directory segment at the IPC boundary', () => {
-    expect(() => safeVaultIpcJoin(tmpDir, '.mythos/a.json', true)).toThrow(/dotfile not allowed/);
-  });
-
   it('rejects a path whose leaf has a disallowed extension', () => {
     expect(() => safeVaultIpcJoin(tmpDir, 'notes/passwords.txt', true)).toThrow(
       /extension '\.txt' not allowed/,

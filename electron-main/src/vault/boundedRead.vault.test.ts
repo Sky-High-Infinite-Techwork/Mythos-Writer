@@ -73,7 +73,8 @@ describe('readVaultFileBounded', () => {
           return (fd: number, opts?: { bigint?: boolean }) => {
             const st = realFstat(fd, opts);
             if (!opts?.bigint) return st;
-            const size = sizeMatch ? st.size : st.size + 1n;
+            const rawSize = typeof st.size === 'bigint' ? st.size : BigInt(st.size);
+            const size = sizeMatch ? rawSize : rawSize + 1n;
             return new Proxy(st, {
               get(stats, key, statsReceiver) {
                 if (key === 'ino') return 0n;

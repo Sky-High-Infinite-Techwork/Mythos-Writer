@@ -2190,6 +2190,15 @@ function writeDialogExport(filePath: string, data: Buffer | string): void {
   }
 }
 
+/** Story vault IPC only: refuse dot-prefixed path segments (notes/brainstorm keep using safeVaultIpcJoin). */
+function assertStoryVaultIpcPathAllowed(rel: string): void {
+  for (const segment of rel.split(/[\\/]/)) {
+    if (segment.length > 0 && segment.startsWith('.') && segment !== '.' && segment !== '..') {
+      throw new Error(`Path traversal denied: ${rel} (dotfile not allowed)`);
+    }
+  }
+}
+
 function mapVaultIpcJoinFailure(err: unknown, rel: string): import('./ipc.js').VaultWriteResponse | null {
   const mapped = mapVaultWriteError(err, rel);
   if (mapped) return { path: rel, bytes: 0, error: mapped.error, code: mapped.code };
@@ -2224,6 +2233,7 @@ export function writeStoryVaultForIpc(
   expectedSha256?: string | null,
 ): import('./ipc.js').VaultWriteResponse {
   try {
+    assertStoryVaultIpcPathAllowed(rel);
     safeVaultIpcJoin(root, rel, true);
     return vaultWriteForIpc(root, rel, content, expectedSha256);
   } catch (err) {
@@ -2254,6 +2264,7 @@ export function ensureVaultDirForStoryVaultIpc(): void {
 export function handleStoryVaultReadIpc(payload: VaultReadPayload): StoryVaultReadResponse {
   ensureVaultDirForStoryVaultIpc();
   const root = getVaultRootForStoryVaultIpc();
+  assertStoryVaultIpcPathAllowed(payload.path);
   safeVaultIpcJoin(root, payload.path, false);
   const { content, path: vaultPath, sha256 } = readVaultFileBounded(root, payload.path);
   return { content, path: vaultPath, sha256 };
