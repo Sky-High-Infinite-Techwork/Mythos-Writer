@@ -224,6 +224,13 @@ function symlinkAncestorStopsWalk(ancestor: string, relPath: string): 'stop' | '
 }
 
 function applyOptionalChecks(absPath: string, relPath: string, opts: SafeVaultJoinOptions): void {
+  if (opts.rejectDotfiles) {
+    for (const segment of relPath.split(/[\\/]/)) {
+      if (segment.length > 0 && segment.startsWith('.') && segment !== '.' && segment !== '..') {
+        throw new Error(`Path traversal denied: ${relPath} (dotfile not allowed)`);
+      }
+    }
+  }
   const leaf = path.basename(absPath);
   if (opts.rejectDotfiles && leaf.startsWith('.')) {
     throw new Error(`Path traversal denied: ${relPath} (dotfile not allowed)`);

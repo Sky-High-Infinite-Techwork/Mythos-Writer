@@ -52,7 +52,7 @@ vi.mock('../db.js', () => db);
 import { ipcMain } from 'electron';
 import { IPC_CHANNELS, setupIpcMain, type VaultReadPayload, type VaultWritePayload } from '../ipc.js';
 import * as mainIpc from '../main.js';
-import { safeVaultJoin } from '../vault.js';
+import { safeVaultJoin, writeVaultFileAtomic } from '../vault.js';
 import { mapVaultWriteError } from './writeErrors.js';
 import { readVaultFileBounded } from './boundedRead.js';
 import { vaultWriteForIpc, writeVaultFileCas } from './casWrite.js';
@@ -154,6 +154,99 @@ describe('writeVaultFileCas', () => {
     expect(fs.readFileSync(path.join(root, 'stories', 's1', 'comments.json'), 'utf8')).toBe('{"note":"user"}');
     const leftovers = fs.readdirSync(path.join(root, 'stories', 's1')).filter((n) => n.endsWith('.tmp'));
     expect(leftovers).toHaveLength(0);
+  });
+
+  it('F3a CAS STALE on same-size external content swap (sha compare)', () => {
+    const a = '{"aaaa":1}';
+    const b = '{"bbbb":1}';
+    expect(Buffer.byteLength(a)).toBe(Buffer.byteLength(b));
+    fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), a);
+    const seen = readVaultFileBounded(root, rel);
+    fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), b);
+    expect(() => writeVaultFileCas(root, rel, '{"cccc":1}', seen.sha256)).toThrow(VaultWriteRefusedError);
+    try {
+      writeVaultFileCas(root, rel, '{"cccc":1}', seen.sha256);
+    } catch (err) {
+      expect((err as VaultWriteRefusedError).code).toBe('STALE');
+    }
+    expect(fs.readFileSync(path.join(root, 'stories', 's1', 'comments.json'), 'utf8')).toBe(b);
+  });
+
+  it('F3a CAS STALE when beforeRename rewrites same-size bytes and bumps mtimeNs', () => {
+    const body = '{"aaaa":1}';
+    const racer = '{"bbbb":1}';
+    fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), body);
+    const seen = readVaultFileBounded(root, rel);
+    setNoFollowHooksForTests({
+      afterOpen() {},
+      beforeRename(absPath) {
+        fs.writeFileSync(absPath, racer);
+        const future = new Date(Date.now() + 60_000);
+        fs.utimesSync(absPath, future, future);
+      },
+    });
+    expect(() => writeVaultFileCas(root, rel, '{"cccc":1}', seen.sha256)).toThrow(VaultWriteRefusedError);
+    try {
+      writeVaultFileCas(root, rel, '{"cccc":1}', seen.sha256);
+    } catch (err) {
+      expect((err as VaultWriteRefusedError).code).toBe('STALE');
+    }
+    expect(fs.readFileSync(path.join(root, 'stories', 's1', 'comments.json'), 'utf8')).toBe(racer);
+  });
+
+  it('F3b CAS STALE when beforeRename replaces the inode but keeps size and mtimeNs', () => {
+    const body = '{"inode":1}';
+    fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), body);
+    const seen = readVaultFileBounded(root, rel);
+    setNoFollowHooksForTests({
+      afterOpen() {},
+      beforeRename(absPath) {
+        const st = fs.lstatSync(absPath, { bigint: true });
+        const staged = `${absPath}.inode-swap`;
+        fs.writeFileSync(staged, body);
+        fs.utimesSync(staged, Number(st.atimeMs), Number(st.mtimeMs));
+        fs.unlinkSync(absPath);
+        fs.renameSync(staged, absPath);
+      },
+    });
+    expect(() => writeVaultFileCas(root, rel, '{"inode":2}', seen.sha256)).toThrow(VaultWriteRefusedError);
+    try {
+      writeVaultFileCas(root, rel, '{"inode":2}', seen.sha256);
+    } catch (err) {
+      expect((err as VaultWriteRefusedError).code).toBe('STALE');
+    }
+    expect(fs.readFileSync(path.join(root, 'stories', 's1', 'comments.json'), 'utf8')).toBe(body);
+  });
+
+  it('F5 HARD_LINK when an outside hard link appears just before rename', () => {
+    fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), '{"link":1}');
+    const seen = readVaultFileBounded(root, rel);
+    const outsideDir = path.join(tmp, 'f5-outside');
+    fs.mkdirSync(outsideDir);
+    setNoFollowHooksForTests({
+      afterOpen() {},
+      beforeRename(absPath) {
+        fs.linkSync(absPath, path.join(outsideDir, 'sibling.json'));
+      },
+    });
+    const reply = vaultWriteForIpc(root, rel, '{"link":2}', seen.sha256);
+    expect(reply.bytes).toBe(0);
+    expect(reply.code).toBe('HARD_LINK');
+    expect(fs.readFileSync(path.join(root, 'stories', 's1', 'comments.json'), 'utf8')).toBe('{"link":1}');
+  });
+
+  it('F6 expectedSha256 null STALE when the file appears before rename', () => {
+    expect(fs.existsSync(path.join(root, 'stories', 's1', 'comments.json'))).toBe(false);
+    setNoFollowHooksForTests({
+      afterOpen() {},
+      beforeRename(absPath) {
+        fs.writeFileSync(absPath, '{"race":1}');
+      },
+    });
+    const reply = vaultWriteForIpc(root, rel, '{"new":1}', null);
+    expect(reply.bytes).toBe(0);
+    expect(reply.code).toBe('STALE');
+    expect(fs.readFileSync(path.join(root, 'stories', 's1', 'comments.json'), 'utf8')).toBe('{"race":1}');
   });
 
   it('STALE when the target changes during write before rename', () => {
@@ -349,6 +442,51 @@ describe('writeVaultFileCas', () => {
         expect(mutantMatches(post, expectId)).toBe(true);
       } finally {
         local.cleanup();
+      }
+    });
+
+    it('F4 network zero-ID CAS write accepts when post size matches expectTarget', () => {
+      fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), '{"net":1}');
+      const probe = withProbe('network');
+      try {
+        const snap = readVaultFileBounded(root, rel, undefined, { deps: probe.deps });
+        expect(snap.id.ino).toBe(0n);
+        const out = writeVaultFileCas(root, rel, '{"net":2}', snap.sha256, { deps: probe.deps });
+        expect(out.bytes).toBeGreaterThan(0);
+        expect(fs.readFileSync(path.join(root, 'stories', 's1', 'comments.json'), 'utf8')).toBe('{"net":2}');
+      } finally {
+        probe.cleanup();
+      }
+    });
+
+    it('F4 network zero-ID CAS write STALE when post size drifts before rename', () => {
+      fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), '{"net":1}');
+      const probe = withProbe('network');
+      let snap;
+      try {
+        snap = readVaultFileBounded(root, rel, undefined, { deps: probe.deps });
+      } finally {
+        probe.cleanup();
+      }
+      const netAgain = withProbe('network');
+      setNoFollowHooksForTests({
+        afterOpen() {},
+        beforeRename(absPath) {
+          fs.appendFileSync(absPath, 'z');
+        },
+      });
+      try {
+        expect(() =>
+          writeVaultFileCas(root, rel, '{"net":9}', snap!.sha256, { deps: netAgain.deps }),
+        ).toThrow(VaultWriteRefusedError);
+        try {
+          writeVaultFileCas(root, rel, '{"net":9}', snap!.sha256, { deps: netAgain.deps });
+        } catch (err) {
+          expect((err as VaultWriteRefusedError).code).toBe('STALE');
+        }
+      } finally {
+        netAgain.cleanup();
+        resetNoFollowHooksForTests();
       }
     });
 
@@ -570,6 +708,84 @@ describe('vault:read / vault:write via setupIpcMain', () => {
     expect(typeof reply.sha256).toBe('string');
     const mutant = { content: reply.content, path: reply.path };
     expect(Object.prototype.hasOwnProperty.call(mutant, 'sha256')).toBe(false);
+  });
+
+  describe('F1 safeVaultIpcJoin through setupIpcMain', () => {
+    const joinDeniedPaths = ['.mythos/a.json', '.hidden.md', 'a.txt'] as const;
+
+    function countVaultFiles(): number {
+      let n = 0;
+      const walk = (dir: string) => {
+        for (const name of fs.readdirSync(dir)) {
+          const full = path.join(dir, name);
+          if (fs.statSync(full).isDirectory()) walk(full);
+          else n += 1;
+        }
+      };
+      walk(root);
+      return n;
+    }
+
+    function prepareTrapFiles(): void {
+      fs.mkdirSync(path.join(root, '.mythos'), { recursive: true });
+      fs.writeFileSync(path.join(root, '.mythos', 'a.json'), '{"trap":1}');
+      fs.writeFileSync(path.join(root, '.hidden.md'), 'hide');
+      fs.writeFileSync(path.join(root, 'a.txt'), 'txt');
+    }
+
+    it.each(joinDeniedPaths)('vault:read rejects %s with Path not allowed', async (relPath) => {
+      prepareTrapFiles();
+      const reply = (await invokeRead({ path: relPath })) as { error?: string; content?: string };
+      expect(reply.error).toBe('Path not allowed.');
+      expect(reply.content).toBeUndefined();
+    });
+
+    it.each(joinDeniedPaths)('vault:write rejects %s with Path not allowed and writes nothing', async (relPath) => {
+      prepareTrapFiles();
+      const before = countVaultFiles();
+      const reply = (await invokeWrite({ path: relPath, content: '{"deny":1}' })) as {
+        bytes: number;
+        error?: string;
+      };
+      expect(reply.bytes).toBe(0);
+      expect(reply.error).toBe('Path not allowed.');
+      expect(countVaultFiles()).toBe(before);
+    });
+
+    it('mutant F1 C15: vault:read without handler join exposes .mythos/a.json', async () => {
+      prepareTrapFiles();
+      vi.mocked(ipcMain.handle).mockClear();
+      const readWithoutJoin = (payload: VaultReadPayload) => {
+        const { content, path: vaultPath, sha256 } = readVaultFileBounded(root, payload.path);
+        return { content, path: vaultPath, sha256 };
+      };
+      setupIpcMain({ [IPC_CHANNELS.VAULT_READ]: readWithoutJoin } as never);
+      const reg = vi.mocked(ipcMain.handle).mock.calls.find((c) => c[0] === IPC_CHANNELS.VAULT_READ)!;
+      const mutantReply = (await (reg[1] as (e: unknown, p: VaultReadPayload) => Promise<unknown>)(
+        topFrameEvent(),
+        { path: '.mythos/a.json' },
+      )) as { content?: string; error?: string };
+      expect(mutantReply.content).toBe('{"trap":1}');
+      expect(mutantReply.error).toBeUndefined();
+    });
+
+    it('mutant F1 C14: vault:write without handler join allows a.txt', async () => {
+      const before = countVaultFiles();
+      vi.mocked(ipcMain.handle).mockClear();
+      const writeWithoutJoin = (payload: VaultWritePayload) => {
+        const written = writeVaultFileAtomic(root, payload.path, payload.content);
+        return { path: written.path, bytes: written.bytes };
+      };
+      setupIpcMain({ [IPC_CHANNELS.VAULT_WRITE]: writeWithoutJoin } as never);
+      const reg = vi.mocked(ipcMain.handle).mock.calls.find((c) => c[0] === IPC_CHANNELS.VAULT_WRITE)!;
+      const evil = (await (reg[1] as (e: unknown, p: VaultWritePayload) => Promise<unknown>)(
+        topFrameEvent(),
+        { path: 'a.txt', content: 'evil' },
+      )) as { bytes: number; error?: string };
+      expect(evil.bytes).toBeGreaterThan(0);
+      expect(evil.error).toBeUndefined();
+      expect(countVaultFiles()).toBe(before + 1);
+    });
   });
 
   it('mutant: dropping hasOwn expectedSha256 wiring treats explicit null as plain write', async () => {
