@@ -57,6 +57,15 @@ export function mapVaultWriteError(
     if (err.code === 'LEAF_LINK' || err.code === 'HANDLE_MISMATCH' || err.code === 'SWAP') {
       return { error: SYMLINK_SAVE_TEXT(name), code: err.code };
     }
+    if (err.code === 'STALE') {
+      return { error: 'File changed on disk.', code: 'STALE' };
+    }
+    if (err.code === 'CAS_MISSING') {
+      return { error: 'File no longer exists.', code: 'CAS_MISSING' };
+    }
+    if (err.code === 'HARD_LINK') {
+      return { error: "Couldn't save file: it has multiple hard links.", code: 'HARD_LINK' };
+    }
     return null;
   }
   if (err instanceof Error) {

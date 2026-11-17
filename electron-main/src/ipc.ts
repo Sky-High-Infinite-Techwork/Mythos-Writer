@@ -1350,16 +1350,19 @@ export interface VaultReadPayload {
 export interface VaultReadResponse {
   content: string;
   path: string;
+  sha256: string;
 }
 
 export interface VaultWritePayload {
   path: string;
   content: string;
+  expectedSha256?: string | null;
 }
 
 export interface VaultWriteResponse {
   path: string;
   bytes: number;
+  sha256?: string;
   /** Set when the write was refused. `path` is the requested relative path and `bytes` is 0. */
   error?: string;
   code?: string;
