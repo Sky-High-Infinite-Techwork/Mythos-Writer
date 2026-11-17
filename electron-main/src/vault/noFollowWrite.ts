@@ -299,7 +299,12 @@ export function zeroIndexPolicy(dir: string, deps: NoFollowDeps, exempt: boolean
   return 'unsupported';
 }
 
-function expectTargetMatches(
+/**
+ * CAS pre-rename identity check. When dev/ino are unusable (0n), `zeroIndexPolicy`
+ * runs first. **Residual (C1):** after FAT/network acceptance, match uses only
+ * `size` + `mtimeNs` — never dev/ino.
+ */
+export function expectTargetMatches(
   post: fs.BigIntStats,
   expect: Exclude<ExpectTarget, 'absent'>,
   dir: string,

@@ -102,6 +102,22 @@ describe('readVaultFileBounded', () => {
     expect(read.sha256).toBe(sha(body));
   });
 
+  it('refuses an in-vault symlinked .md leaf', () => {
+    fs.mkdirSync(path.join(root, 'stories', 's1'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'stories', 's1', 'real.md'), 'REAL');
+    fs.symlinkSync(path.join(root, 'stories', 's1', 'real.md'), path.join(root, 'stories', 's1', 'link.md'));
+    const err = (() => {
+      try {
+        readVaultFileBounded(root, 'stories/s1/link.md');
+        return null;
+      } catch (e) {
+        return e;
+      }
+    })();
+    expect((err as Error).message).toMatch(/symlink escape detected/);
+    expect(sanitizeIpcError('vault:read', err).error).toBe('Path not allowed.');
+  });
+
   it('refuses a symlink leaf with Path not allowed and does not return outside bytes', () => {
     const outside = path.join(tmp, 'outside');
     fs.mkdirSync(outside);

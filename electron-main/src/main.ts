@@ -2190,14 +2190,23 @@ function writeDialogExport(filePath: string, data: Buffer | string): void {
   }
 }
 
-function writeVaultForIpc(
+export function writeVaultForIpc(
   root: string,
   rel: string,
   content: string,
   expectedSha256?: string | null,
 ): import('./ipc.js').VaultWriteResponse {
-  safeVaultIpcJoin(root, rel, true);
-  return vaultWriteForIpc(root, rel, content, expectedSha256);
+  try {
+    safeVaultIpcJoin(root, rel, true);
+    return vaultWriteForIpc(root, rel, content, expectedSha256);
+  } catch (err) {
+    const mapped = mapVaultWriteError(err, rel);
+    if (mapped) return { path: rel, bytes: 0, error: mapped.error, code: mapped.code };
+    if (err instanceof Error && /^Path traversal denied/i.test(err.message)) {
+      return { path: rel, bytes: 0, error: 'Path not allowed.' };
+    }
+    throw err;
+  }
 }
 
 // ─── IPC Handlers ───
@@ -6874,17 +6883,7 @@ export const handlers: IpcHandlers = {
   },
   [IPC_CHANNELS.NOTES_VAULT_WRITE]: (payload: NotesVaultWritePayload): VaultWriteResponse => {
     ensureNotesVaultDir();
-    const root = getNotesVaultRoot();
-    const rel = payload.path;
-    try {
-      safeVaultIpcJoin(root, rel, true);
-      const written = writeVaultFileAtomic(root, rel, payload.content);
-      return { path: written.path, bytes: written.bytes };
-    } catch (err) {
-      const mapped = mapVaultWriteError(err, rel);
-      if (mapped) return { path: rel, bytes: 0, error: mapped.error, code: mapped.code };
-      throw err;
-    }
+    return writeVaultForIpc(getNotesVaultRoot(), payload.path, payload.content);
   },
   // SKY-11360: brainstorm/idea board is agent state → Agent Vault, never the
   // Notes Vault. The main process owns the fixed relpath; the renderer only

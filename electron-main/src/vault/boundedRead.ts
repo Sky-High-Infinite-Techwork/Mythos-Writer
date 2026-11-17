@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
-import { realSafePath } from '../vault.js';
+import { safePath } from '../vault.js';
 import { VaultFileTooLargeError, MAX_VAULT_FILE_BYTES } from './limits.js';
 import { defaultDeps, zeroIndexPolicy } from './noFollowWrite.js';
 import type { NoFollowDeps } from './noFollowWrite.js';
@@ -46,9 +46,17 @@ function zeroIndexRefused(rel: string): Error {
   return new Error(`Path traversal denied: ${rel} (zero file index unsupported)`);
 }
 
+/**
+ * Containment identity on the opened fd vs the path stats. **Residual (C1):**
+ * when dev/ino are 0n, FAT/exFAT skips dev/ino; network shares compare fd
+ * `fstat.size` to the pre-open leaf `lstat.size` (swap between lstat and open);
+ * local/unknown refuses. Full dev/ino+size identity uses realpath `stat` when
+ * indexes are non-zero.
+ */
 function idsMatch(
   fd: fs.BigIntStats,
   listed: fs.BigIntStats,
+  preOpen: fs.BigIntStats | undefined,
   dir: string,
   rel: string,
   deps: NoFollowDeps,
@@ -63,20 +71,27 @@ function idsMatch(
   if (policy === 'unsupported') {
     throw zeroIndexRefused(rel);
   }
-  if (policy === 'network' && fd.size !== listed.size) {
+  if (policy === 'network' && preOpen !== undefined && fd.size !== preOpen.size) {
     throw pathNotAllowed(rel);
   }
 }
 
-function assertContainmentOnFd(abs: string, rel: string, fd: number, vaultRoot: string, deps: NoFollowDeps): void {
+function assertContainmentOnFd(
+  abs: string,
+  rel: string,
+  fd: number,
+  vaultRoot: string,
+  preOpen: fs.BigIntStats | undefined,
+  deps: NoFollowDeps,
+): void {
   const realVaultRoot = fs.realpathSync.native(vaultRoot);
   const realPath = fs.realpathSync.native(abs);
   if (!isResolvedPathInsideRoot(realVaultRoot, realPath, deps.platform)) {
     throw new Error(`Path traversal denied: ${rel}`);
   }
-  const st = deps.fs.statSync(realPath, { bigint: true });
+  const listed = deps.fs.statSync(realPath, { bigint: true });
   const fst = deps.fs.fstatSync(fd, { bigint: true });
-  idsMatch(fst, st, path.dirname(abs), rel, deps);
+  idsMatch(fst, listed, preOpen, path.dirname(abs), rel, deps);
 }
 
 export interface ReadVaultFileBoundedOptions {
@@ -95,8 +110,16 @@ export function readVaultFileBounded(
 ): BoundedReadResult {
   const deps = options.deps ?? defaultDeps;
   const fsImpl = deps.fs;
-  const abs = realSafePath(vaultRoot, rel, false);
+  const abs = safePath(vaultRoot, rel, false);
   testHooks?.afterJoin?.();
+
+  let preOpen: fs.BigIntStats | undefined;
+  try {
+    preOpen = fsImpl.lstatSync(abs, { bigint: true });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err;
+  }
 
   let fd: number | undefined;
   try {
@@ -128,7 +151,7 @@ export function readVaultFileBounded(
       throw new VaultFileTooLargeError(Number(fst.size), maxBytes);
     }
 
-    assertContainmentOnFd(abs, rel, fd, vaultRoot, deps);
+    assertContainmentOnFd(abs, rel, fd, vaultRoot, preOpen, deps);
 
     const chunkSize = 64 * 1024;
     const scratch = Buffer.alloc(chunkSize);

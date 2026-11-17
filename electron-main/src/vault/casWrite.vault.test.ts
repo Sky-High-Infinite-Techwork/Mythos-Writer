@@ -1,13 +1,70 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+const db = vi.hoisted(() => {
+  const bag: Record<string, ReturnType<typeof vi.fn>> = {};
+  const proxy = new Proxy(bag, {
+    get(target, prop) {
+      if (typeof prop !== 'string') return undefined;
+      if (prop === 'then') return undefined;
+      if (!target[prop]) target[prop] = vi.fn();
+      return target[prop];
+    },
+  });
+  return proxy;
+});
+
+vi.mock('electron', () => ({
+  app: {
+    isPackaged: false,
+    disableHardwareAcceleration: vi.fn(),
+    whenReady: () => new Promise(() => {}),
+    on: vi.fn(),
+    once: vi.fn(),
+    getPath: () => path.join(os.tmpdir(), 'mythos-cas-ipc-userdata'),
+    getAppPath: () => '/workspace',
+    getVersion: () => '0.0.0-test',
+    getName: () => 'Mythos Writer',
+    requestSingleInstanceLock: () => true,
+    quit: vi.fn(),
+    exit: vi.fn(),
+    setPath: vi.fn(),
+    commandLine: { appendSwitch: vi.fn() },
+  },
+  BrowserWindow: { getAllWindows: () => [] },
+  ipcMain: { handle: vi.fn(), removeHandler: vi.fn(), on: vi.fn() },
+  dialog: { showErrorBox: vi.fn(), showOpenDialog: vi.fn(), showSaveDialog: vi.fn(), showMessageBox: vi.fn() },
+  shell: { openExternal: vi.fn(), trashItem: vi.fn() },
+  safeStorage: { isEncryptionAvailable: () => false, encryptString: vi.fn(), decryptString: vi.fn() },
+  screen: { getAllDisplays: () => [], getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 800, height: 600 } }) },
+  Menu: { setApplicationMenu: vi.fn(), buildFromTemplate: vi.fn() },
+}));
+
+vi.mock('../jobs/jobWorker?nodeWorker', () => ({
+  default: () => ({ postMessage() {}, terminate() {}, on() {}, once() {} }),
+}));
+
+vi.mock('../db.js', () => db);
+
+import { ipcMain } from 'electron';
+import { IPC_CHANNELS, setupIpcMain, type VaultReadPayload, type VaultWritePayload } from '../ipc.js';
+import { writeVaultForIpc } from '../main.js';
+import { safeVaultIpcJoin, safeVaultJoin } from '../vault.js';
 import { mapVaultWriteError } from './writeErrors.js';
 import { readVaultFileBounded } from './boundedRead.js';
 import { vaultWriteForIpc, writeVaultFileCas } from './casWrite.js';
-import { defaultDeps, resetVolumeProbeCache, VaultWriteRefusedError, type VolumeKind } from './noFollowWrite.js';
+import * as noFollowWriteModule from './noFollowWrite.js';
+import {
+  defaultDeps,
+  expectTargetMatches,
+  resetVolumeProbeCache,
+  VaultWriteRefusedError,
+  writeNoFollowAtomic,
+  type VolumeKind,
+} from './noFollowWrite.js';
 import { resetNoFollowHooksForTests, setNoFollowHooksForTests } from './noFollowWrite.testing.js';
 import { installNoFollowTestHooks } from './noFollowWrite.js';
 
@@ -222,6 +279,98 @@ describe('writeVaultFileCas', () => {
       }
     });
   });
+
+  describe('C1 expectTargetMatches zero-ino at pre-rename (write path)', () => {
+    it('expectTargetMatches FAT zero-ino accepts CAS when size+mtimeNs match', () => {
+      fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), '{"v":1}');
+      const probe = withProbe('fat');
+      try {
+        const snap = readVaultFileBounded(root, rel, undefined, { deps: probe.deps });
+        expect(snap.id.ino).toBe(0n);
+        const out = writeVaultFileCas(root, rel, '{"v":2}', snap.sha256, { deps: probe.deps });
+        expect(out.bytes).toBeGreaterThan(0);
+        expect(fs.readFileSync(path.join(root, 'stories', 's1', 'comments.json'), 'utf8')).toBe('{"v":2}');
+      } finally {
+        probe.cleanup();
+      }
+    });
+
+    it('expectTargetMatches local zero-ino refuses with STALE', () => {
+      fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), '{"v":1}');
+      const fat = withProbe('fat');
+      let snap;
+      try {
+        snap = readVaultFileBounded(root, rel, undefined, { deps: fat.deps });
+        expect(snap.id.ino).toBe(0n);
+      } finally {
+        fat.cleanup();
+      }
+      const abs = safeVaultJoin(root, rel, { writeMode: true });
+      expect(() =>
+        writeNoFollowAtomic(abs, Buffer.from('{"v":2}', 'utf-8'), {
+          durable: false,
+          mkdir: true,
+          rel,
+          expectTarget: snap!.id,
+          deps: defaultDeps,
+        }),
+      ).toThrow(VaultWriteRefusedError);
+      try {
+        writeNoFollowAtomic(abs, Buffer.from('{"v":2}', 'utf-8'), {
+          durable: false,
+          mkdir: true,
+          rel,
+          expectTarget: snap!.id,
+          deps: defaultDeps,
+        });
+      } catch (err) {
+        expect((err as VaultWriteRefusedError).code).toBe('STALE');
+      }
+      expect(fs.readFileSync(path.join(root, 'stories', 's1', 'comments.json'), 'utf8')).toBe('{"v":1}');
+    });
+
+    it('mutant: expectTargetMatches without zeroIndexPolicy gate would accept local zero-ino', () => {
+      const local = withProbe('local');
+      const expectId = { dev: 1n, ino: 0n, size: 12n, mtimeNs: 99n, nlink: 1n };
+      const post = {
+        dev: 2n,
+        ino: 44n,
+        size: 12n,
+        mtimeNs: 99n,
+        nlink: 1n,
+        isFile: () => true,
+      } as fs.BigIntStats;
+      const mutantMatches = (
+        got: fs.BigIntStats,
+        want: typeof expectId,
+      ): boolean => got.size === want.size && got.mtimeNs === want.mtimeNs;
+      try {
+        expect(noFollowWriteModule.expectTargetMatches(post, expectId, root, local.deps)).toBe(false);
+        expect(mutantMatches(post, expectId)).toBe(true);
+      } finally {
+        local.cleanup();
+      }
+    });
+
+    it('expectTargetMatches unknown volume zero-ino refuses', () => {
+      fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), '{"v":1}');
+      const fat = withProbe('fat');
+      let snap;
+      try {
+        snap = readVaultFileBounded(root, rel, undefined, { deps: fat.deps });
+      } finally {
+        fat.cleanup();
+      }
+      const unknown = withProbe('unknown');
+      const abs = safeVaultJoin(root, rel, { writeMode: true });
+      const post = fs.lstatSync(abs, { bigint: true });
+      try {
+        expect(expectTargetMatches(post, snap!.id, path.dirname(abs), unknown.deps)).toBe(false);
+      } finally {
+        unknown.cleanup();
+      }
+    });
+  });
 });
 
 describe('vaultWriteForIpc', () => {
@@ -307,5 +456,114 @@ describe('vaultWriteForIpc', () => {
     expect(reply.bytes).toBe(0);
     expect(reply.code).toBe('HARD_LINK');
     expect(fs.readFileSync(inside, 'utf8')).toBe('{"x":1}');
+  });
+
+  it('rejects path escape via writeVaultForIpc without throwing', () => {
+    const reply = writeVaultForIpc(root, '../escape.md', 'nope');
+    expect(reply.bytes).toBe(0);
+    expect(reply.error).toBe('Path not allowed.');
+    expect(reply.code).toBeUndefined();
+  });
+});
+
+function topFrameEvent() {
+  const frame: { top?: unknown } = {};
+  frame.top = frame;
+  return { senderFrame: frame };
+}
+
+describe('vault:read / vault:write via setupIpcMain', () => {
+  let tmp: string;
+  let root: string;
+  const rel = 'stories/s1/comments.json';
+  let invokeRead: (payload: VaultReadPayload) => Promise<unknown>;
+  let invokeWrite: (payload: VaultWritePayload) => Promise<unknown>;
+
+  beforeAll(() => {
+    vi.mocked(ipcMain.handle).mockClear();
+    invokeRead = async () => ({ error: 'missing' });
+    invokeWrite = async () => ({ error: 'missing' });
+  });
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-story-ipc-'));
+    root = path.join(tmp, 'vault');
+    fs.mkdirSync(path.join(root, 'stories', 's1'), { recursive: true });
+    resetVolumeProbeCache();
+    vi.mocked(ipcMain.handle).mockClear();
+    const handlers = {
+      [IPC_CHANNELS.VAULT_READ]: (payload: VaultReadPayload) => {
+        safeVaultIpcJoin(root, payload.path, false);
+        const { content, path: vaultPath, sha256 } = readVaultFileBounded(root, payload.path);
+        return { content, path: vaultPath, sha256 };
+      },
+      [IPC_CHANNELS.VAULT_WRITE]: (payload: VaultWritePayload) => {
+        const expected = Object.prototype.hasOwnProperty.call(payload, 'expectedSha256')
+          ? payload.expectedSha256
+          : undefined;
+        return writeVaultForIpc(root, payload.path, payload.content, expected);
+      },
+    };
+    setupIpcMain(handlers as never);
+    const readReg = vi.mocked(ipcMain.handle).mock.calls.find((c) => c[0] === IPC_CHANNELS.VAULT_READ);
+    const writeReg = vi.mocked(ipcMain.handle).mock.calls.find((c) => c[0] === IPC_CHANNELS.VAULT_WRITE);
+    expect(readReg).toBeDefined();
+    expect(writeReg).toBeDefined();
+    invokeRead = async (payload) =>
+      (readReg![1] as (event: unknown, p: VaultReadPayload) => Promise<unknown>)(topFrameEvent(), payload);
+    invokeWrite = async (payload) =>
+      (writeReg![1] as (event: unknown, p: VaultWritePayload) => Promise<unknown>)(topFrameEvent(), payload);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  function sha(content: string): string {
+    return crypto.createHash('sha256').update(Buffer.from(content, 'utf-8')).digest('hex');
+  }
+
+  it('plain vault:write without expectedSha256 returns sha256', async () => {
+    const reply = (await invokeWrite({ path: rel, content: '{"ipc":1}' })) as { bytes: number; sha256?: string };
+    expect(reply.bytes).toBeGreaterThan(0);
+    expect(reply.sha256).toBe(sha('{"ipc":1}'));
+  });
+
+  it('vault:read returns sha256 for a file', async () => {
+    fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), '{"r":1}');
+    const reply = (await invokeRead({ path: rel })) as { sha256: string; content: string };
+    expect(reply.sha256).toBe(sha('{"r":1}'));
+    expect(reply.content).toBe('{"r":1}');
+  });
+
+  it('CAS stale via vault:write returns STALE and leaves disk', async () => {
+    fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), '{"v":1}');
+    const seen = readVaultFileBounded(root, rel);
+    fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), '{"v":9}');
+    const reply = (await invokeWrite({ path: rel, content: '{"v":2}', expectedSha256: seen.sha256 })) as {
+      bytes: number;
+      code?: string;
+    };
+    expect(reply.bytes).toBe(0);
+    expect(reply.code).toBe('STALE');
+    expect(fs.readFileSync(path.join(root, 'stories', 's1', 'comments.json'), 'utf8')).toBe('{"v":9}');
+  });
+
+  it('invalid expectedSha256 via vault:write returns Invalid input', async () => {
+    const reply = (await invokeWrite({ path: rel, content: 'X', expectedSha256: 'not-a-hash' })) as {
+      bytes: number;
+      error?: string;
+    };
+    expect(reply.bytes).toBe(0);
+    expect(reply.error).toBe('Invalid input.');
+  });
+
+  it('path escape via vault:write returns Path not allowed object', async () => {
+    const reply = (await invokeWrite({ path: '../escape.md', content: 'nope' })) as {
+      bytes: number;
+      error?: string;
+    };
+    expect(reply.bytes).toBe(0);
+    expect(reply.error).toBe('Path not allowed.');
   });
 });
