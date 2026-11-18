@@ -29,7 +29,7 @@ case "$raw" in
   true) github_out "run-e2e=true" ;;
   false) github_out "run-e2e=false" ;;
   *)
-    echo "paths-filter run-e2e output was not true/false (${raw@Q}) — defaulting run-e2e=true (fail-safe)." >&2
+    echo "paths-filter run-e2e output was not true/false (raw=${raw}) — defaulting run-e2e=true (fail-safe)." >&2
     github_out "run-e2e=true"
     ;;
 esac

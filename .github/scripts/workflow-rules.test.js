@@ -143,7 +143,7 @@ test('Tier 2 jobs need tier1-gate (not setup alone)', () => {
   const jobs = loadWorkflow('ci.yml').jobs;
   for (const job of TIER2_JOBS) {
     assert.ok(jobs[job].needs.includes('tier1-gate'), job);
-    assert.equal(jobs[job].needs.includes('setup') && !jobs[job].needs.includes('tier1-gate'), false, job);
+    assert.equal(jobs[job].needs.includes('setup'), false, `${job} must not depend on setup without tier1-gate`);
   }
   for (const job of ['e2e-shard-1', 'e2e-shard-2', 'e2e-shard-3', 'e2e-shard-4']) {
     assert.ok(jobs[job].needs.includes('build-electron'), job);
@@ -280,7 +280,6 @@ test('ci aggregator regression: e2e skip logic lives in ci-aggregator.sh', () =>
 });
 
 test('ci concurrency cancels in-progress only for pull_request (not merge_group)', () => {
-  const on = triggerOf(loadWorkflow('ci.yml'));
   const doc = loadWorkflow('ci.yml');
   const cancel = doc.concurrency['cancel-in-progress'];
   assert.match(String(cancel), /github\.event_name == 'pull_request'/);
