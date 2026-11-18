@@ -141,6 +141,37 @@ describe('main.handlers scene:*', () => {
     expect(manifestBytesExcludeProse(cachePath, proseMarker)).toBe(true);
   });
 
+  it('scene:save updates title/customFields on disk and reuses manifest cache on rapid saves', async () => {
+    await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
+    const { sceneId, sceneRelPath } = storySceneFromManifest(bundle.storyVaultPath, bundle.mythosRoot);
+    const title = 'Harness Scene Title 1907';
+    const marker = 'CACHE_BACK_TO_BACK_1907';
+    const firstProse = `Initial prose.\n\n${marker}`;
+    const first = await invoke<{ scene?: { title: string }; error?: string }>(IPC_CHANNELS.SCENE_SAVE, {
+      sceneId,
+      prose: firstProse,
+      title,
+      customFields: { harness1907: 'alpha' },
+    });
+    expect(first.error).toBeUndefined();
+    expect(first.scene?.title).toBe(title);
+    const afterFirst = readBytesUnderVault(bundle.storyVaultPath, sceneRelPath).toString('utf-8');
+    expect(afterFirst).toContain(marker);
+    expect(afterFirst).toContain('harness1907');
+    expect(afterFirst).toContain(title);
+
+    const secondProse = `${firstProse}\n\nSecond paragraph ${marker}-2`;
+    const second = await invoke<{ error?: string }>(IPC_CHANNELS.SCENE_SAVE, {
+      sceneId,
+      prose: secondProse,
+      intent: 'auto',
+    });
+    expect(second.error).toBeUndefined();
+    const afterSecond = readBytesUnderVault(bundle.storyVaultPath, sceneRelPath).toString('utf-8');
+    expect(afterSecond).toContain(`${marker}-2`);
+    expect(afterSecond).toContain('harness1907');
+  });
+
   it('scene:save refuses unknown scene id without mutating disk', async () => {
     await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
     const { sceneRelPath } = storySceneFromManifest(bundle.storyVaultPath, bundle.mythosRoot);

@@ -41,6 +41,32 @@ describe('main.handlers settings:set', () => {
     expect(after.theme).toBe(next.theme);
   });
 
+  it('refuses invalid brainstorm agent baseUrl without persisting', async () => {
+    const settingsPath = path.join(bundle.userData, 'app-settings.json');
+    const before = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
+    const prior = before.agents.brainstorm.provider?.baseUrl;
+    const poisoned: AppSettings = {
+      ...before,
+      agents: {
+        ...before.agents,
+        brainstorm: {
+          ...before.agents.brainstorm,
+          provider: {
+            ...before.agents.brainstorm.provider,
+            baseUrl: 'file:///etc/passwd',
+          },
+        },
+      },
+    };
+    const result = await invoke<{ saved: boolean; error?: string }>(IPC_CHANNELS.SETTINGS_SET, {
+      settings: poisoned,
+    });
+    expect(result.saved).toBe(false);
+    expect(result.error).toMatch(/agents\.brainstorm\.provider\.baseUrl/i);
+    const after = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
+    expect(after.agents.brainstorm.provider?.baseUrl).toBe(prior);
+  });
+
   it('refuses invalid provider baseUrl and does not persist the hostile URL', async () => {
     const settingsPath = path.join(bundle.userData, 'app-settings.json');
     const before = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
