@@ -177,27 +177,6 @@ test.afterAll(async () => {
   fs.rmSync(notesVaultDir, { recursive: true, force: true });
 });
 
-// ─── TC-VB-01..03: SKIPPED — SKY-9022/M6 ─────────────────────────────────────
-//
-// These cases test the Story/Notes/Both scope-switching UI itself
-// (`vb-scope-*`, the side-by-side split). M6 removed scope-switching
-// entirely — VaultBrowser is now always locked to notes scope, so there is
-// no "Both" or "Story" scope to switch to anymore. This isn't a locator
-// fixup; the feature under test no longer exists. Skipped rather than
-// deleted so the gap stays visible/traceable.
-
-test.skip('TC-VB-01: Vault tab shows Story Vault + Notes Vault split in Both scope', async () => {
-  // See SKY-9022/M6 skip note above — scope-switching UI no longer exists.
-});
-
-test.skip('TC-VB-02: switching to Story scope hides Notes Vault panel', async () => {
-  // See SKY-9022/M6 skip note above.
-});
-
-test.skip('TC-VB-03: switching to Notes scope hides Story Vault panel', async () => {
-  // See SKY-9022/M6 skip note above.
-});
-
 // ─── TC-VB-04: Create story via StoryNavigator ───────────────────────────────
 // SKY-9022/M6: story creation now happens via StoryNavigator, not the dead
 // VaultBrowser "vault" panel's Story Vault section.

@@ -190,18 +190,3 @@ test.describe('F3#9 WelcomeOverlay first-run (replaces OnboardingWizard ACs)', (
   });
 });
 
-// Retired wizard-only ACs (OnboardingWizard deleted F3#9). Kept as explicit skips
-// so CI history / ticket IDs remain searchable.
-const RETIRED = 'F3#9: OnboardingWizard deleted; WelcomeOverlay + create-vault modal replaces this AC.';
-
-test.describe('Retired OnboardingWizard ACs (F3#9)', () => {
-  for (const id of [
-    'AC-OB-02', 'AC-OB-04', 'AC-OB-06', 'AC-OB-07', 'AC-OB-08', 'AC-OB-09', 'AC-OB-10',
-    'AC-OB-11', 'AC-OB-12', 'AC-OB-13', 'AC-OB-15', 'AC-OB-16', 'AC-OB-17', 'AC-OB-18',
-    'AC-OB-19', 'AC-OB-20',
-  ] as const) {
-    test(`${id}: retired with OnboardingWizard`, () => {
-      test.skip(true, RETIRED);
-    });
-  }
-});

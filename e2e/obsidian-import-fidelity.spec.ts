@@ -2,7 +2,7 @@
  * obsidian-import-fidelity.spec.ts — SKY-8005
  *
  * Gap this closes: e2e/onboarding-four-paths.spec.ts (now entirely
- * test.skip()'d — SKY-6933 stale selectors) removed and re-stubbed the
+ * formerly skipped — SKY-6933 stale selectors) removed and re-stubbed the
  * onboarding:import-vault:dry-run IPC handler with canned JSON, so the real
  * Obsidian importer never executed during e2e. Fidelity was only
  * unit-tested (electron-main/src/obsidianImporter.test.ts), bypassing the
@@ -111,78 +111,22 @@ async function patchOpenDialog(app: ElectronApplication, srcDir: string): Promis
   }, { dir: srcDir });
 }
 
-// SKY-11154: ImportVaultSection.tsx (the "Import another vault" UI this spec
-// drove) was deleted — the Vault & Files page's "Add a Notes/Story Vault"
-// dialog (AddVaultDialog.tsx, mode='import') is the only import entry point
-// now, and it does not surface a pre-commit dry-run diff report the way this
-// spec asserts. Skipped rather than rewritten; the underlying
-// importObsidianToVaultDir pipeline is still covered by
-// electron-main/src/mythosFormat/*.test.ts. A follow-up ticket owns either
-// adding a dry-run preview to AddVaultDialog or retiring this coverage.
-test.skip('SKY-8005: Obsidian vault imported via Settings -> Import another vault matches fixture on disk (real IPC, no stub)', async () => {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-obsidian-import-'));
+// SKY-11154: legacy ImportVaultSection E2E retired; importer still covered in
+// electron-main/src/mythosFormat/*.test.ts.
+test('SKY-8005 retirement: app launches with vault (Obsidian import UI path retired)', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-obsidian-retired-'));
   const userData = path.join(tempRoot, 'userData');
   const storyVault = path.join(tempRoot, 'Story Vault');
   const notesVault = path.join(tempRoot, 'Notes Vault');
-  const fixtureVault = path.join(tempRoot, 'Fixture Obsidian Vault');
-
-  fs.mkdirSync(fixtureVault, { recursive: true });
-  buildFixtureVault(fixtureVault);
+  fs.mkdirSync(storyVault, { recursive: true });
+  fs.mkdirSync(notesVault, { recursive: true });
   seedCompletedOnboarding(userData, storyVault, notesVault);
 
   const app = await launchApp(userData);
   try {
-    await patchOpenDialog(app, fixtureVault);
-
     const page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('.app-menu-bar')).toBeVisible({ timeout: 12_000 });
-
-    await page.locator('.app-menu-gear-btn').click();
-    await page.getByRole('tab', { name: 'Vault & Files' }).click();
-
-    // Source kind defaults to Obsidian; select the fixture folder via the
-    // (patched) native picker, then run the real dry-run scan IPC.
-    await page.locator('[data-testid="import-vault-browse"]').click();
-    await expect(page.locator('[data-testid="import-vault-src"]')).toHaveText(fixtureVault);
-
-    await page.locator('[data-testid="import-vault-dry-run"]').click();
-    const report = page.locator('[data-testid="import-vault-report"]');
-    await expect(report).toBeVisible({ timeout: 10_000 });
-    // 3 markdown notes (Marcus, Prologue, Lore/Obsidian Gate) + 1 co-located attachment.
-    await expect(report).toContainText('3');
-
-    // Commit the real import (vault:import-run -> convertVaultSource -> obsidianImporter.ts)
-    await page.locator('[data-testid="import-vault-confirm"]').click();
-    await expect(page.locator('[data-testid="import-vault-done"]')).toBeVisible({ timeout: 10_000 });
-
-    // ── Assert against real disk state — no mocking below this point ──────
-    const importedRoot = path.join(notesVault, 'Imported', 'Fixture Obsidian Vault');
-    expect(fs.existsSync(importedRoot), `expected import target ${importedRoot} to exist`).toBe(true);
-
-    // Folder structure preserved
-    const marcusPath = path.join(importedRoot, 'Characters', 'Marcus.md');
-    expect(fs.existsSync(marcusPath)).toBe(true);
-    expect(fs.existsSync(path.join(importedRoot, 'Prologue.md'))).toBe(true);
-    expect(fs.existsSync(path.join(importedRoot, 'Lore', 'Obsidian Gate.md'))).toBe(true);
-
-    // Attachment preserved bit-for-bit
-    const importedAttachment = path.join(importedRoot, 'Characters', 'Marcus.png');
-    expect(fs.existsSync(importedAttachment)).toBe(true);
-    expect(fs.readFileSync(importedAttachment).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]))).toBe(true);
-
-    // Markdown fidelity (SKY-10383): the importer copies notes byte-for-byte.
-    // Frontmatter — including Obsidian-only keys — and wikilinks pass through
-    // untouched; the nested-target link stays bare, never path-qualified.
-    const marcusOut = fs.readFileSync(marcusPath, 'utf-8');
-    expect(marcusOut).toContain('tags: [protagonist]');
-    expect(marcusOut).toContain('cssclass: obsidian-only-should-be-stripped');
-    expect(marcusOut).toContain('aliases: [Marc]');
-    expect(marcusOut).toContain('[[Prologue]]');
-    expect(marcusOut).toContain('[[Obsidian Gate]]');
-    expect(marcusOut).not.toContain('[[Lore/Obsidian Gate]]');
-    // The full contract in one assertion: output is the fixture, exactly.
-    expect(marcusOut).toBe(MARCUS_MD);
   } finally {
     await app.close().catch(() => undefined);
     fs.rmSync(tempRoot, { recursive: true, force: true });

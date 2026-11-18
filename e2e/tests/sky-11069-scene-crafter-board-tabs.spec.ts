@@ -31,6 +31,12 @@ import { confirmNewStoryModalIfOpen } from '../helpers/newStoryModal';
 
 const MAIN_JS = path.resolve(__dirname, '../../out/main/main.js');
 
+test.beforeAll(() => {
+  if (!fs.existsSync(MAIN_JS)) {
+    throw new Error('needs npm run build:electron');
+  }
+});
+
 function seedUserData(userData: string, vaultDir: string, notesVaultDir: string): void {
   fs.mkdirSync(userData, { recursive: true });
   fs.mkdirSync(vaultDir, { recursive: true });
@@ -183,7 +189,6 @@ test('SKY-11069: BOARDS gallery → board tabs → focus-existing → restart pe
 
 test('F1#2: New board with NO story selected opens tab aria-selected=true', async () => {
   test.setTimeout(120_000);
-  test.skip(!fs.existsSync(MAIN_JS), 'needs npm run build:electron');
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-f1-nb-'));
   const userData = path.join(tempRoot, 'userData');
   const vaultDir = path.join(tempRoot, 'story-vault');
@@ -212,7 +217,6 @@ test('F1#2: New board with NO story selected opens tab aria-selected=true', asyn
 
 test('F1#1: Create Scene form → Structure + board persist on SAME userData relaunch', async () => {
   test.setTimeout(180_000);
-  test.skip(!fs.existsSync(MAIN_JS), 'needs npm run build:electron');
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-f1-cs-'));
   const userData = path.join(tempRoot, 'userData');
   const vaultDir = path.join(tempRoot, 'story-vault');

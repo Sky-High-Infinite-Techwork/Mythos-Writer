@@ -283,8 +283,6 @@ test('SKY-214-02: EntityBrowser grouped tree', async () => {
 // plans/fidelity-rebuild/PLAN.md §4, "Entity Browser lives on per M5.5").
 // Same deferred product gap as entity-system.spec.ts TC-E-02; re-enable and
 // recapture entity-03-entity-card.png when M5.5 lands.
-test.skip('SKY-214-03: Entity card with Connections + Backlinks — product gap, no UI path opens EntityDetail until M5.5 lands', () => {});
-
 test('SKY-214-04: WikiLink autocomplete in scene editor', async () => {
   // Switch to the Story Writer section (nav-rail rewrite, SKY-3098/3218).
   // Re-clicking an already-active "Story Writer" item toggles the Stories
