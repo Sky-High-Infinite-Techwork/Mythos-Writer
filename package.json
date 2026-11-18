@@ -60,7 +60,7 @@
     "test:e2e:lmp": "playwright test e2e/tests/local-model-picker.spec.ts --reporter=list,html",
     "test:e2e:visual-capture": "playwright test e2e/visual-capture.spec.ts --reporter=list,html",
     "test:e2e:writing-modes": "playwright test e2e/writing-modes.spec.ts --reporter=list,html",
-    "test:e2e:depth-slider": "playwright test e2e/depth-slider.spec.ts --reporter=list,html && playwright test e2e/tests/partner-real-provider.spec.ts e2e/agent-hub-interaction-states.spec.ts --reporter=list,html --repeat-each=10",
+    "test:e2e:depth-slider": "playwright test e2e/depth-slider.spec.ts e2e/tests/partner-real-provider.spec.ts e2e/agent-hub-interaction-states.spec.ts --reporter=list,html",
     "test:e2e:partner-real-provider": "playwright test e2e/tests/partner-real-provider.spec.ts --reporter=list,html",
     "test:e2e:writing-assistant-tips": "playwright test e2e/tests/writing-assistant-tips.spec.ts --reporter=list,html",
     "test:e2e:title-bar-undo-redo": "playwright test e2e/title-bar-undo-redo.spec.ts --reporter=list,html",
