@@ -355,9 +355,12 @@ test.describe.serial('#1774 Accent breathe', () => {
     // window (frames and style work alike), so a one-off stall (GC,
     // compositor) in a single 4 s window can't decide the result; a per-tick
     // cost shows up in both.
-    const best = (a: FrameStats, b: FrameStats) => ({
-      droppedFramePct: Math.min(a.droppedFramePct, b.droppedFramePct),
-      p95Fps: Math.max(a.p95Fps, b.p95Fps),
+    const meanStats = (a: FrameStats, b: FrameStats): FrameStats => ({
+      avgFps: (a.avgFps + b.avgFps) / 2,
+      p50Fps: (a.p50Fps + b.p50Fps) / 2,
+      p95Fps: (a.p95Fps + b.p95Fps) / 2,
+      droppedFramePct: (a.droppedFramePct + b.droppedFramePct) / 2,
+      sampleCount: Math.min(a.sampleCount, b.sampleCount),
     });
     const fmt = (s: FrameStats) =>
       `avg=${s.avgFps.toFixed(1)} p50=${s.p50Fps.toFixed(1)} floor(p5)=${s.p95Fps.toFixed(1)} ` +
@@ -387,22 +390,40 @@ test.describe.serial('#1774 Accent breathe', () => {
       document.getElementById('breathe-perf-proxy-css')?.remove();
     });
 
-    // ON (the state test 4 left it in).
+    const toggleBreathe = async (on: boolean) => {
+      const dialog = await openAppearance(page);
+      const toggle = dialog.locator('[data-testid="lnas-accentbreathe"]');
+      const checked = await toggle.getAttribute('aria-checked');
+      if ((checked === 'true') !== on) {
+        await toggle.click();
+        await expect(toggle).toHaveAttribute('aria-checked', on ? 'true' : 'false');
+      }
+      await closeSettings(page);
+      await expect.poll(() => readState(page), { timeout: 3_000 }).toBe(on ? 'running' : 'off');
+    };
+
+    // Interleaved ON/OFF windows so shared-runner jank hits both modes equally.
+    // Sequential ON×2 then OFF×2 let a stall that lands only on the ON side
+    // inflate droppedFramePct even when breathe is innocent (#1912: deltas 2.1–5.7
+    // over the +2pp bar in 4/23 CI runs; best-of-two per mode did not cancel that).
     await closeSettings(page);
     await expect.poll(() => readState(page), { timeout: 3_000 }).toBe('running');
     await addProxy();
-    const on = await measure();
+    const on1 = await measure();
+    await removeProxy();
+
+    await toggleBreathe(false);
+    await addProxy();
+    const off1 = await measure();
+    await removeProxy();
+
+    await toggleBreathe(true);
+    await addProxy();
     const on2 = await measure();
     await removeProxy();
 
-    // OFF, through the UI.
-    const dialog = await openAppearance(page);
-    await dialog.locator('[data-testid="lnas-accentbreathe"]').click();
-    await expect(dialog.locator('[data-testid="lnas-accentbreathe"]')).toHaveAttribute('aria-checked', 'false');
-    await closeSettings(page);
-    await expect.poll(() => readState(page), { timeout: 3_000 }).toBe('off');
+    await toggleBreathe(false);
     await addProxy();
-    const off = await measure();
     const off2 = await measure();
     // Baseline, still OFF with the proxy: the cost of one root custom-property
     // change at the tick rate, flushed the way the driver flushes its write.
@@ -424,8 +445,10 @@ test.describe.serial('#1774 Accent breathe', () => {
     await removeProxy();
     await client.detach().catch(() => {});
     const ticks = 4000 / TICK_MS;
-    const onRecalcMs = Math.min(on.recalcStyleMs, on2.recalcStyleMs);
-    const offRecalcMs = Math.min(off.recalcStyleMs, off2.recalcStyleMs);
+    const on = on1;
+    const off = off1;
+    const onRecalcMs = Math.min(on1.recalcStyleMs, on2.recalcStyleMs);
+    const offRecalcMs = Math.min(off1.recalcStyleMs, off2.recalcStyleMs);
     const perTickRecalcMs = (onRecalcMs - offRecalcMs) / ticks;
     const perChangeRecalcMs = (probe.recalcStyleMs - offRecalcMs) / ticks;
 
@@ -447,20 +470,14 @@ test.describe.serial('#1774 Accent breathe', () => {
     expect(on2.distinct).toBeGreaterThanOrEqual(10);
     expect(off.distinct).toBe(1);
     expect(off2.distinct).toBe(1);
-    // Best ON window within 2 points of the best OFF window. One point is ~2.4
-    // of the ~240 frames in 4 s, so +2 is ~4.8 frames over OFF: about one frame
-    // of headroom over the worst single ON window measured (local 1.7% = 4
-    // frames). ON and OFF are separate, sequential windows (a Settings round
-    // trip between them), so runner jank in only one of them does NOT cancel
-    // out; the best-of-2 per mode above is what absorbs a one-off stall, and
-    // being relative to OFF is what absorbs a uniformly slow runner. Measured:
-    // CI shard-1 ON 0.8% / OFF 0.0%; local ON 0.0–1.7% / OFF 0.0–0.8%. The
-    // pre-fix per-tick transition restarts measured 5–9% ON vs 0% OFF in every
-    // window, which this fails.
-    const onBest = best(on.stats, on2.stats);
-    const offBest = best(off.stats, off2.stats);
-    expect(onBest.droppedFramePct).toBeLessThanOrEqual(offBest.droppedFramePct + 2);
-    expect(onBest.p95Fps).toBeGreaterThanOrEqual(offBest.p95Fps - 3);
+    // Mean of interleaved ON windows within +2 points of the mean OFF windows
+    // (no best-of-N). Interleaving is what absorbs runner jank that hits only
+    // one side; the pre-fix per-tick transition restarts measured 5–9% ON vs
+    // 0% OFF in every window, which this still fails.
+    const onMean = meanStats(on1.stats, on2.stats);
+    const offMean = meanStats(off1.stats, off2.stats);
+    expect(onMean.droppedFramePct).toBeLessThanOrEqual(offMean.droppedFramePct + 2);
+    expect(onMean.p95Fps).toBeGreaterThanOrEqual(offMean.p95Fps - 3);
     // A tick costs about one root-token change: no extra whole-tree recalc.
     expect(perChangeRecalcMs).toBeGreaterThan(0);
     expect(perTickRecalcMs).toBeLessThanOrEqual(perChangeRecalcMs * PER_TICK_RECALC_RATIO_MAX);

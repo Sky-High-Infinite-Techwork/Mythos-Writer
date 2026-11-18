@@ -97,13 +97,22 @@ export async function installMockChatStream(
  * Assumes the caller already navigated to the editor and opened a scene
  * (e.g. via `openSeededScene` in e2e/helpers/launchApp.ts) so the panel has scene context —
  * this only expands the panel and drills into the chat row, mirroring
- * `openAssistantTab` in e2e/writing-assistant.spec.ts.
+ * `openWritingAssistantWithScene` in e2e/writing-assistant.spec.ts.
  */
 export async function openWritingCoachChat(page: Page): Promise<void> {
   const hubPanel = page.locator('[data-testid="agent-hub-panel"]');
   await expect(hubPanel).toBeVisible({ timeout: 4_000 });
-  await openPartnerWriterTips(page);
+  const partnerTab = page.locator('[data-testid="ahp-tab-partner"]');
+  if (await partnerTab.isVisible({ timeout: 1_000 }).catch(() => false)) {
+    await partnerTab.click();
+  }
+  await expect(page.getByTestId('ahp-partner-view')).toBeVisible({ timeout: 8_000 });
+  const panel = page.locator('.writing-assistant-panel');
+  if ((await panel.count()) === 0) {
+    await openPartnerWriterTips(page);
+  }
   await expect(page.locator('.writing-assistant-panel')).toBeAttached({ timeout: 8_000 });
+  await expect(page.getByTestId('ahp-partner-chat-input')).toBeVisible({ timeout: 8_000 });
 }
 
 /**
@@ -113,19 +122,18 @@ export async function openWritingCoachChat(page: Page): Promise<void> {
  * so this deliberately does not wait for stream completion.
  *
  * "Stream has started" reuses the same signal e2e/writing-assistant.spec.ts's
- * TC-WA-10 uses to detect an in-progress assistant message: the `.wa-cursor`
- * streaming-cursor glyph becoming visible (rendered only while a response is
- * actively streaming in).
+ * TC-WA-10 uses to detect an in-progress assistant message: the partner hub
+ * typing indicator (F3 N4-A: `.wa-cursor` is retired).
  */
 export async function sendPromptAndWaitForStreamStart(page: Page, prompt: string): Promise<void> {
-  const input = page.getByRole('textbox', { name: 'Writing coach prompt' });
+  const input = page.getByTestId('ahp-partner-chat-input');
   await expect(input).toBeVisible({ timeout: 5_000 });
   await expect(input).toBeEnabled({ timeout: 5_000 });
   await input.fill(prompt);
 
-  const askBtn = page.getByRole('button', { name: 'Ask' });
+  const askBtn = page.getByTestId('ahp-partner-chat-send');
   await expect(askBtn).toBeEnabled({ timeout: 5_000 });
   await askBtn.click();
 
-  await expect(page.locator('.wa-cursor')).toBeVisible({ timeout: 6_000 });
+  await expect(page.getByTestId('ahp-partner-typing')).toBeVisible({ timeout: 6_000 });
 }

@@ -15,16 +15,11 @@
  * On headless Linux (no real display), wrap with xvfb-run per PERFORMANCE.md §1:
  *   xvfb-run -a npm run perf:ui-runtime
  *
- * IMPORTANT — this is a MEASUREMENT harness, not a regression gate. Per
- * SKY-8217's scope, a metric missing its PERFORMANCE.md target gets a
- * separate scoped follow-up issue, not a red build here (real UI-runtime
- * numbers depend on host GPU/CPU and are far noisier under headless
- * Xvfb/CI than the repo's existing byte-count-based perf guards, e.g.
- * scene-save-perf.spec.ts). Every `expect()` below is a SANITY check that
- * the measurement pipeline produced a real signal (non-empty samples, a
- * finite number, etc.) — never a check against the target itself. Pass/fail
- * against target is recorded in `plans/PERF_UI_RUNTIME_BASELINE.json` and the
- * printed table for a human (or a follow-up issue) to act on.
+ * Regression gates (#1912): keystroke-to-paint p95 and ambient fps floor are
+ * enforced with CI-calibrated budgets (max(2× p95, 1.25× max) over repeated
+ * Xvfb runs — see PR PROOF). Streaming-dropped-frame delta and idle CPU stay
+ * report-first with sanity expects; PERF_UI_RUNTIME_BASELINE.json still records
+ * all metrics for humans.
  */
 import fs from 'fs';
 import path from 'path';
@@ -52,8 +47,12 @@ import { writeMetricResult, printReportTable } from './ui-runtime/report';
 // PERFORMANCE.md §0 acceptance targets, transcribed verbatim in each
 // constant's comment so a reviewer can diff this file against that doc.
 
-/** "Keystroke → paint under 16 ms with all panels open." — checked at p95 across N reps. */
+/**
+ * PERFORMANCE.md aspirational target is 16ms p95; CI/Xvfb budget (#1912) derived
+ * from box+local calibration (see PR PROOF): max(2×p95, 1.25×max) ≈ 120ms.
+ */
 const KEYSTROKE_P95_TARGET_MS = 16;
+const KEYSTROKE_P95_BUDGET_MS = 120;
 
 /**
  * "Idle CPU ~0%, GPU steady, no repaints while nothing moves." "~0%" isn't a
@@ -71,6 +70,8 @@ const IDLE_CPU_TARGET_PCT = 1;
  * i.e. at least 95% of sampled frames ran at 57fps or better.
  */
 const AMBIENT_FPS_FLOOR_TARGET = 57;
+/** #1912 budget: min observed fps floor in calibration × 0.9 (PROOF table). */
+const AMBIENT_FPS_FLOOR_BUDGET = 27;
 
 /**
  * "Typing with Writing Assistant + watcher live: no dropped frames." Read
@@ -126,6 +127,7 @@ test.describe('SKY-8217 metric 1 — keystroke-to-paint main-thread time', () =>
 
     expect(result.samples.length).toBeGreaterThan(0);
     expect(Number.isFinite(result.p95)).toBe(true);
+    expect(result.p95).toBeLessThan(KEYSTROKE_P95_BUDGET_MS);
   });
 });
 
@@ -232,6 +234,7 @@ test.describe('SKY-8217 metric 3 — ambient animation fps', () => {
 
     expect(stats.sampleCount).toBeGreaterThan(0);
     expect(Number.isFinite(stats.avgFps)).toBe(true);
+    expect(stats.p95Fps).toBeGreaterThanOrEqual(AMBIENT_FPS_FLOOR_BUDGET);
   });
 });
 
