@@ -59,18 +59,10 @@ vi.mock('electron', () => ({
     },
   },
   ipcRenderer: {
-    invoke: (...args: unknown[]) => {
-      harness.invokeMock(...args);
-    },
-    send: (...args: unknown[]) => {
-      harness.sendMock(...args);
-    },
-    on: (...args: unknown[]) => {
-      harness.onMock(...args);
-    },
-    removeListener: (...args: unknown[]) => {
-      harness.removeListenerMock(...args);
-    },
+    invoke: (...args: unknown[]) => harness.invokeMock(...args),
+    send: (...args: unknown[]) => harness.sendMock(...args),
+    on: (...args: unknown[]) => harness.onMock(...args),
+    removeListener: (...args: unknown[]) => harness.removeListenerMock(...args),
   },
   webUtils: {
     getPathForFile: (file: File) => `/mock/${file.name}`,
@@ -233,17 +225,17 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     ]
   },
   "api.agentPersonaRead": {
-    "agentName": "bridge-sample",
-    "key": "bridge-sample-2"
+    "agentName": "bridge-id-a",
+    "key": "bridge-id-b"
   },
   "api.agentPersonaReset": {
-    "agentName": "bridge-sample",
-    "key": "bridge-sample-2"
+    "agentName": "bridge-id-a",
+    "key": "bridge-id-b"
   },
   "api.agentPersonaWrite": {
-    "agentName": "bridge-sample",
-    "key": "bridge-sample-2",
-    "content": "bridge-sample-2"
+    "agentName": "bridge-id-a",
+    "key": "bridge-id-b",
+    "content": "bridge-id-c"
   },
   "api.agentSessions.appendTurns": {
     "sessionId": "bridge-id",
@@ -262,98 +254,122 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     "id": "bridge-id"
   },
   "api.agentSessions.delete": {
-    "sessionId": "bridge-sample"
+    "sessionId": {
+      "bridge": true
+    }
   },
   "api.agentSessions.duplicate": {
-    "sessionId": "bridge-sample"
+    "sessionId": {
+      "bridge": true
+    }
   },
   "api.agentSessions.list": {
-    "agent": "bridge-sample"
+    "agent": {
+      "bridge": true
+    }
   },
   "api.agentSessions.read": {
-    "sessionId": "bridge-sample"
+    "sessionId": {
+      "bridge": true
+    }
   },
   "api.agentSessions.rename": {
-    "sessionId": "bridge-sample",
-    "title": "bridge-sample-2"
+    "sessionId": "bridge-id-a",
+    "title": "bridge-id-b"
   },
   "api.agentVaultCheck": {
-    "sceneContent": "/tmp/bridge-sample"
+    "sceneContent": {
+      "bridge": true
+    }
   },
   "api.agentVaultIndex": {},
   "api.agentWritingAssistant": {
-    "prompt": "bridge-sample",
-    "context": "bridge-sample-2"
+    "prompt": "bridge-id-a",
+    "context": "bridge-id-b"
   },
   "api.agentsVaultSyncPartner": "/tmp/bridge-sample",
   "api.archive": {
-    "manuscript": "bridge-sample",
-    "vaultPath": "bridge-sample-2"
+    "manuscript": "bridge-id-a",
+    "vaultPath": "bridge-id-b"
   },
   "api.archiveConfirm": {
-    "suggestionId": "bridge-sample",
-    "action": "bridge-sample-2"
+    "suggestionId": "bridge-id-a",
+    "action": "bridge-id-b"
   },
   "api.archiveListContinuity": "bridge-sample",
   "api.archiveResolveContinuity": {
-    "itemId": "bridge-sample",
-    "action": "bridge-sample-2",
-    "note": "bridge-sample-2"
+    "itemId": "bridge-id-a",
+    "action": "bridge-id-b",
+    "note": "bridge-id-c"
   },
   "api.archiveScan": {
-    "sceneText": "bridge-sample",
-    "scenePath": "bridge-sample-2"
+    "sceneText": "bridge-id-a",
+    "scenePath": "bridge-id-b"
   },
   "api.archiveScanContinuity": {
-    "sceneId": "bridge-sample",
-    "text": "bridge-sample-2",
-    "scope": "bridge-sample-2",
-    "checkType": "bridge-sample-2"
+    "sceneId": "bridge-id-a",
+    "text": "bridge-id-b",
+    "scope": "bridge-id-c",
+    "checkType": "bridge-id-d"
   },
   "api.auditList": {
-    "suggestionId": "bridge-sample"
+    "suggestionId": {
+      "bridge": true
+    }
   },
   "api.autoLinkerSetSettings": "bridge-sample",
   "api.backupAppData": {},
   "api.betaReadCreate": {
-    "sceneId": "bridge-sample",
-    "anchorText": "bridge-sample-2",
-    "commentText": "bridge-sample-2"
+    "sceneId": "bridge-id-a",
+    "anchorText": "bridge-id-b",
+    "commentText": "bridge-id-c"
   },
   "api.betaReadDismiss": {
-    "id": "bridge-sample"
+    "id": {
+      "bridge": true
+    }
   },
   "api.betaReadList": {
-    "sceneId": "bridge-sample"
+    "sceneId": {
+      "bridge": true
+    }
   },
   "api.betaReadScan": {
-    "sceneId": "bridge-sample",
-    "prose": "bridge-sample-2",
-    "scenePath": "bridge-sample-2"
+    "sceneId": "bridge-id-a",
+    "prose": "bridge-id-b",
+    "scenePath": "bridge-id-c"
   },
   "api.betaReportGet": {
-    "id": "bridge-sample"
+    "id": {
+      "bridge": true
+    }
   },
   "api.betaReportList": {
-    "storyId": "bridge-sample"
+    "storyId": {
+      "bridge": true
+    }
   },
   "api.betaReportRun": "bridge-sample",
   "api.brainstormBoard.write": {
-    "content": "bridge-sample"
+    "content": {
+      "bridge": true
+    }
   },
   "api.brainstormEnrichEntry": "bridge-sample",
   "api.brainstormExtractProposals": "bridge-sample",
   "api.brainstormProposalConfirm": "bridge-sample",
   "api.brainstormProposalReject": "bridge-sample",
   "api.brainstormResetCategoryRouting": {
-    "category": "bridge-sample"
+    "category": {
+      "bridge": true
+    }
   },
   "api.brainstormResolveRouting": "bridge-sample",
   "api.brainstormSelectContext": "bridge-sample",
   "api.brainstormWriteNote": "bridge-sample",
   "api.brainstormer": {
-    "topic": "bridge-sample",
-    "context": "bridge-sample-2"
+    "topic": "bridge-id-a",
+    "context": "bridge-id-b"
   },
   "api.cancelAiActivity": {
     "requestId": "bridge-id"
@@ -370,32 +386,40 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
   "api.chapterCreate": "bridge-sample",
   "api.chooseVaultFolder": {
     "title": "/tmp/bridge-sample",
-    "defaultPath": "bridge-sample"
+    "defaultPath": "bridge-id-b"
   },
   "api.continuityMatchSelection": {
-    "selectedText": "bridge-sample",
-    "notesVaultRoot": "bridge-sample-2"
+    "selectedText": "bridge-id-a",
+    "notesVaultRoot": "bridge-id-b"
   },
   "api.continuityReadEntity": {
-    "path": "bridge-sample"
+    "path": {
+      "bridge": true
+    }
   },
   "api.continuitySearch": {
-    "query": "bridge-sample",
-    "notesVaultRoot": "bridge-sample-2"
+    "query": "bridge-id-a",
+    "notesVaultRoot": "bridge-id-b"
   },
   "api.createBlankVault": {
     "targetPath": "/tmp/bridge-sample",
-    "registrationToken": "bridge-sample"
+    "registrationToken": "bridge-id-b"
   },
   "api.createVaultFromOptions": "/tmp/bridge-sample",
   "api.customFieldsSet": {
-    "fields": "bridge-sample"
+    "fields": {
+      "bridge": true
+    }
   },
   "api.deleteNotesVault": {
-    "path": "/tmp/bridge-sample"
+    "path": {
+      "bridge": true
+    }
   },
   "api.deleteVault": {
-    "path": "/tmp/bridge-sample"
+    "path": {
+      "bridge": true
+    }
   },
   "api.draftsCreate": {
     "sceneId": "bridge-id-a",
@@ -403,17 +427,23 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     "label": "bridge-id-c"
   },
   "api.draftsDelete": {
-    "snapshotId": "bridge-id-a"
+    "snapshotId": {
+      "bridge": true
+    }
   },
   "api.draftsLabel": {
     "snapshotId": "bridge-id-a",
     "label": "bridge-id-b"
   },
   "api.draftsList": {
-    "sceneId": "bridge-id-a"
+    "sceneId": {
+      "bridge": true
+    }
   },
   "api.draftsPreview": {
-    "snapshotId": "bridge-id-a"
+    "snapshotId": {
+      "bridge": true
+    }
   },
   "api.draftsRestore": {
     "snapshotId": "bridge-id-a",
@@ -421,35 +451,49 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     "currentContent": "bridge-id-c"
   },
   "api.dryRunObsidianImport": {
-    "srcPath": "bridge-sample",
-    "targetVaultKind": "bridge-sample-2"
+    "srcPath": "bridge-id-a",
+    "targetVaultKind": "bridge-id-b"
   },
   "api.entityBacklinks": {
-    "entityId": "bridge-sample"
+    "entityId": {
+      "bridge": true
+    }
   },
   "api.entityCreate": "bridge-sample",
   "api.entityDelete": {
-    "id": "bridge-sample"
+    "id": {
+      "bridge": true
+    }
   },
   "api.entityLinkedScenes": {
-    "entityId": "bridge-sample"
+    "entityId": {
+      "bridge": true
+    }
   },
   "api.entityList": {
-    "type": "bridge-sample"
+    "type": {
+      "bridge": true
+    }
   },
   "api.entityRead": {
-    "id": "bridge-sample"
+    "id": {
+      "bridge": true
+    }
   },
   "api.entityRelationshipsCreate": {
-    "fromEntityId": "bridge-sample",
-    "toEntityId": "bridge-sample-2",
-    "label": "bridge-sample-2"
+    "fromEntityId": "bridge-id-a",
+    "toEntityId": "bridge-id-b",
+    "label": "bridge-id-c"
   },
   "api.entityRelationshipsDelete": {
-    "relationshipId": "bridge-sample"
+    "relationshipId": {
+      "bridge": true
+    }
   },
   "api.entityRelationshipsList": {
-    "entityId": "bridge-sample"
+    "entityId": {
+      "bridge": true
+    }
   },
   "api.entityUpdate": "bridge-sample",
   "api.exportDocx": {
@@ -459,28 +503,34 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     }
   },
   "api.exportEpub": {
-    "storyId": "bridge-sample",
-    "metadata": "bridge-sample-2",
-    "targetPath": "bridge-sample-2",
-    "options": "bridge-sample-2"
+    "storyId": "bridge-id-a",
+    "metadata": "bridge-id-b",
+    "targetPath": "bridge-id-c",
+    "options": "bridge-id-d"
   },
   "api.exportMarkdown": {
-    "scope": "bridge-sample"
+    "scope": {
+      "bridge": true
+    }
   },
   "api.exportPdf": {
-    "scope": "bridge-sample",
-    "options": "bridge-sample-2"
+    "scope": "bridge-id-a",
+    "options": "bridge-id-b"
   },
   "api.exportPlaintext": {
-    "scope": "bridge-sample"
+    "scope": {
+      "bridge": true
+    }
   },
   "api.generationLogGet": {
-    "id": "bridge-sample"
+    "id": {
+      "bridge": true
+    }
   },
   "api.generationLogList": {
-    "page": "bridge-sample",
-    "pageSize": "bridge-sample-2",
-    "agent": "bridge-sample-2"
+    "page": "bridge-id-a",
+    "pageSize": "bridge-id-b",
+    "agent": "bridge-id-c"
   },
   "api.generationLogRecent": "bridge-sample",
   "api.getRefinementSuggestions": {
@@ -490,7 +540,7 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
         "content": "Action: shorten\nAdditional instruction: more\nActive preset: preset-1\nOriginal suggestion:\norig"
       }
     ],
-    "system": "You are a creative writing refinement assistant. Apply the requested refinement to the suggestion below, maintaining prose quality. Return only the refined suggestion text \u2014 no preamble."
+    "system": "You are a creative writing refinement assistant. Apply the requested refinement to the suggestion below, maintaining prose quality. Return only the refined suggestion text — no preamble."
   },
   "api.goalsLogWords": {
     "date": "2026-01-01",
@@ -500,8 +550,8 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     "dailyGoal": 500
   },
   "api.iconReadSvg": {
-    "packName": "bridge-sample",
-    "iconName": "bridge-sample-2"
+    "packName": "bridge-id-a",
+    "iconName": "bridge-id-b"
   },
   "api.importDocxToStoryVault": {
     "filePaths": [
@@ -515,7 +565,9 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     }
   },
   "api.importHub.pick": {
-    "mode": "bridge-sample"
+    "mode": {
+      "bridge": true
+    }
   },
   "api.importHub.previewDropped": {
     "path": "/mock/sample.txt"
@@ -523,144 +575,182 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
   "api.importObsidianVault": "/tmp/bridge-sample",
   "api.importVault": {
     "sourcePath": "/tmp/bridge-sample",
-    "registrationToken": "bridge-sample"
+    "registrationToken": "bridge-id-b"
   },
   "api.importVaultCommit": {
-    "sourcePath": "/tmp/bridge-sample"
+    "sourcePath": {
+      "bridge": true
+    }
   },
   "api.importVaultDryRun": {
-    "sourcePath": "/tmp/bridge-sample"
+    "sourcePath": {
+      "bridge": true
+    }
   },
   "api.installUpdate": {
     "quit": false
   },
   "api.jobs.cancel": {
-    "jobId": "bridge-sample"
+    "jobId": {
+      "bridge": true
+    }
   },
   "api.jobs.enqueue": {
-    "type": "bridge-sample"
+    "type": "bridge-id-a"
   },
   "api.jobs.list": "bridge-sample",
   "api.jobs.progress": {
-    "jobId": "bridge-sample"
+    "jobId": {
+      "bridge": true
+    }
   },
   "api.listNotesVault": {
-    "root": "/tmp/bridge-sample"
+    "root": {
+      "bridge": true
+    }
   },
   "api.listVault": {
-    "root": "/tmp/bridge-sample"
+    "root": {
+      "bridge": true
+    }
   },
   "api.loadBgImage": {
-    "filePath": "bridge-sample"
+    "filePath": {
+      "bridge": true
+    }
   },
   "api.loadSampleProject": {},
   "api.loadSampleTwoVault": {
-    "parentPath": "/tmp/bridge-sample"
+    "parentPath": {
+      "bridge": true
+    }
   },
   "api.migrationApply": {
-    "planId": "bridge-sample",
-    "storyPath": "bridge-sample-2"
+    "planId": "bridge-id-a",
+    "storyPath": "bridge-id-b"
   },
   "api.migrationDryRun": {
-    "storyPath": "bridge-sample"
+    "storyPath": {
+      "bridge": true
+    }
   },
   "api.mkdirNotesVault": {
-    "path": "/tmp/bridge-sample"
+    "path": {
+      "bridge": true
+    }
   },
   "api.moveNotesVault": {
     "fromPath": "/tmp/bridge-sample",
-    "toPath": "bridge-sample"
+    "toPath": "bridge-id-b"
   },
   "api.moveVault": {
     "fromPath": "/tmp/bridge-sample",
-    "toPath": "bridge-sample"
+    "toPath": "bridge-id-b"
   },
   "api.navigatorReportScene": {
-    "sceneId": "bridge-sample"
+    "sceneId": {
+      "bridge": true
+    }
   },
   "api.navigatorSelectScene": {
-    "sceneId": "bridge-sample"
+    "sceneId": {
+      "bridge": true
+    }
   },
   "api.noteBacklinks": {
-    "notePath": "/tmp/bridge-sample"
+    "notePath": {
+      "bridge": true
+    }
   },
   "api.noteTemplateList": {
-    "kind": "bridge-sample"
+    "kind": {
+      "bridge": true
+    }
   },
   "api.notesBoardCreateItem": {
-    "folderPath": "bridge-sample",
-    "kind": "bridge-sample-2",
-    "position": "bridge-sample-2"
+    "folderPath": "bridge-id-a",
+    "kind": "bridge-id-b",
+    "position": "bridge-id-c"
   },
   "api.notesBoardEmptyTrash": {},
   "api.notesBoardFurnitureCreate": {
-    "folderPath": "bridge-sample",
-    "item": "bridge-sample-2"
+    "folderPath": "bridge-id-a",
+    "item": "bridge-id-b"
   },
   "api.notesBoardFurnitureDelete": {
-    "folderPath": "bridge-sample",
-    "furnitureId": "bridge-sample-2"
+    "folderPath": "bridge-id-a",
+    "furnitureId": "bridge-id-b"
   },
   "api.notesBoardFurnitureUpdate": {
-    "folderPath": "bridge-sample",
-    "furnitureId": "bridge-sample-2",
-    "patch": "bridge-sample-2"
+    "folderPath": "bridge-id-a",
+    "furnitureId": "bridge-id-b",
+    "patch": "bridge-id-c"
   },
   "api.notesBoardGet": {
-    "folderPath": "bridge-sample"
+    "folderPath": {
+      "bridge": true
+    }
   },
   "api.notesBoardItemDelete": {
-    "folderPath": "bridge-sample",
-    "itemPath": "bridge-sample-2"
+    "folderPath": "bridge-id-a",
+    "itemPath": "bridge-id-b"
   },
   "api.notesBoardItemRename": {
-    "folderPath": "bridge-sample",
-    "fromPath": "bridge-sample-2",
-    "toPath": "bridge-sample-2"
+    "folderPath": "bridge-id-a",
+    "fromPath": "bridge-id-b",
+    "toPath": "bridge-id-c"
   },
   "api.notesBoardPatchColors": {
-    "folderPath": "bridge-sample",
-    "itemPath": "bridge-sample-2",
-    "color": "bridge-sample-2"
+    "folderPath": "bridge-id-a",
+    "itemPath": "bridge-id-b",
+    "color": "bridge-id-c"
   },
   "api.notesBoardPatchLayout": {
-    "folderPath": "bridge-sample",
-    "itemPath": "bridge-sample-2",
-    "patch": "bridge-sample-2"
+    "folderPath": "bridge-id-a",
+    "itemPath": "bridge-id-b",
+    "patch": "bridge-id-c"
   },
   "api.notesBoardRecentlyDeletedList": {},
   "api.notesBoardRenameItem": {
-    "folderPath": "bridge-sample",
-    "itemPath": "bridge-sample-2",
-    "newName": "bridge-sample-2"
+    "folderPath": "bridge-id-a",
+    "itemPath": "bridge-id-b",
+    "newName": "bridge-id-c"
   },
   "api.notesBoardRestore": {
-    "id": "bridge-sample"
+    "id": {
+      "bridge": true
+    }
   },
   "api.notesBoardTrashItems": {
     "folderPath": "/tmp/bridge-sample",
     "targets": []
   },
   "api.notesGet": {
-    "sceneId": "bridge-sample"
+    "sceneId": {
+      "bridge": true
+    }
   },
   "api.notesSet": {
-    "sceneId": "bridge-sample",
-    "content": "bridge-sample-2"
+    "sceneId": "bridge-id-a",
+    "content": "bridge-id-b"
   },
   "api.notesTagMerge": {
     "sourceTag": "/tmp/bridge-sample",
-    "targetTag": "bridge-sample"
+    "targetTag": "bridge-id-b"
   },
   "api.notesTagRename": {
     "oldTag": "/tmp/bridge-sample",
-    "newTag": "bridge-sample"
+    "newTag": "bridge-id-b"
   },
   "api.notesThumbGet": {
-    "src": "/tmp/bridge-sample"
+    "src": {
+      "bridge": true
+    }
   },
   "api.notesThumbImport": {
-    "sourcePath": "/tmp/bridge-sample"
+    "sourcePath": {
+      "bridge": true
+    }
   },
   "api.notesThumbPut": {
     "src": "/tmp/bridge-sample",
@@ -672,55 +762,71 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     }
   },
   "api.notesThumbResolve": {
-    "paths": "/tmp/bridge-sample"
+    "paths": {
+      "bridge": true
+    }
   },
   "api.notesTierContext": {
-    "sceneId": "bridge-sample"
+    "sceneId": {
+      "bridge": true
+    }
   },
   "api.notesVaultRegistryCreate": "/tmp/bridge-sample",
   "api.notesVaultRegistryRename": {
     "id": "/tmp/bridge-sample",
-    "displayName": "bridge-sample"
+    "displayName": "bridge-id-b"
   },
   "api.notesVaultRegistrySetActive": {
-    "id": "/tmp/bridge-sample"
+    "id": {
+      "bridge": true
+    }
   },
   "api.notesVaultRegistrySetActivePreview": {
-    "id": "/tmp/bridge-sample"
+    "id": {
+      "bridge": true
+    }
   },
   "api.notesVaultSetIcon": {
     "path": "/tmp/bridge-sample",
-    "icon": "bridge-sample",
-    "color": "bridge-sample-2"
+    "icon": "bridge-id-b",
+    "color": "bridge-id-c"
   },
   "api.obsidianDryRun": {
     "sourcePath": "/tmp/bridge-sample",
-    "registrationToken": "bridge-sample"
+    "registrationToken": "bridge-id-b"
   },
   "api.obsidianPickFolderByPath": {
     "sourcePath": "/tmp/bridge-sample"
   },
   "api.obsidianRegister": {
     "sourcePath": "/tmp/bridge-sample",
-    "registrationToken": "bridge-sample"
+    "registrationToken": "bridge-id-b"
   },
   "api.onboardingComplete": "bridge-sample",
   "api.onboardingDetectMythosVault": {
-    "path": "/tmp/bridge-sample"
+    "path": {
+      "bridge": true
+    }
   },
   "api.onboardingOpenExistingVault": {
-    "path": "/tmp/bridge-sample"
+    "path": {
+      "bridge": true
+    }
   },
   "api.onboardingReset": "bridge-sample",
   "api.onboardingValidatePath": {
-    "path": "/tmp/bridge-sample"
+    "path": {
+      "bridge": true
+    }
   },
   "api.outline.load": {
-    "storyVaultPath": "bridge-sample"
+    "storyVaultPath": {
+      "bridge": true
+    }
   },
   "api.outline.save": {
-    "storyVaultPath": "bridge-sample",
-    "data": "bridge-sample-2"
+    "storyVaultPath": "bridge-id-a",
+    "data": "bridge-id-b"
   },
   "api.panelFloat": {
     "0": "b",
@@ -730,112 +836,120 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     "4": "g",
     "5": "e",
     "6": "-",
-    "7": "s",
-    "8": "a",
-    "9": "m",
-    "10": "p",
-    "11": "l",
-    "12": "e",
-    "13": "-",
-    "14": "2",
-    "panelId": "bridge-sample"
+    "7": "i",
+    "8": "d",
+    "9": "-",
+    "10": "b",
+    "panelId": "bridge-id-a"
   },
   "api.panelFloatDockBack": {
-    "panelId": "bridge-sample"
+    "panelId": {
+      "bridge": true
+    }
   },
   "api.panelFloatSetPin": {
-    "panelId": "bridge-sample",
-    "alwaysOnTop": "bridge-sample-2"
+    "panelId": "bridge-id-a",
+    "alwaysOnTop": "bridge-id-b"
   },
   "api.panelPopout": {
-    "panelId": "bridge-sample",
-    "sceneId": "bridge-sample-2"
+    "panelId": "bridge-id-a",
+    "sceneId": "bridge-id-b"
   },
   "api.pickFolder": "/tmp/bridge-sample",
   "api.productionRoleRun": "bridge-sample",
   "api.projectIconSet": "bridge-sample",
   "api.projectNameSet": "bridge-sample",
   "api.projectSwitch": {
-    "vaultRoot": "bridge-sample",
-    "notesVaultRoot": "bridge-sample-2"
+    "vaultRoot": "bridge-id-a",
+    "notesVaultRoot": "bridge-id-b"
   },
   "api.provenanceUpsert": {
-    "entityId": "bridge-sample",
-    "entityKind": "bridge-sample-2",
-    "agentId": "bridge-sample-2",
-    "agentType": "bridge-sample-2",
-    "runId": "bridge-sample-2"
+    "entityId": "bridge-id-a",
+    "entityKind": "bridge-id-b",
+    "agentId": "bridge-id-c",
+    "agentType": "bridge-id-d",
+    "runId": "bridge-id-e"
   },
   "api.providerListModels": "bridge-sample",
   "api.readNotesVault": {
-    "path": "/tmp/bridge-sample"
+    "path": {
+      "bridge": true
+    }
   },
   "api.readVault": {
-    "path": "/tmp/bridge-sample"
+    "path": {
+      "bridge": true
+    }
   },
   "api.reorderNotesVault": {
     "parentPath": "/tmp/bridge-sample",
-    "orderedPaths": "bridge-sample"
+    "orderedPaths": "bridge-id-b"
   },
   "api.restoreAppData": {
-    "confirmed": "bridge-sample"
+    "confirmed": {
+      "bridge": true
+    }
   },
   "api.sceneAppendBrainstormNote": {
-    "sceneId": "bridge-sample",
-    "content": "bridge-sample-2"
+    "sceneId": "bridge-id-a",
+    "content": "bridge-id-b"
   },
   "api.sceneCrafterAddCard": "bridge-sample",
   "api.sceneCrafterAddLane": {
-    "storySlug": "bridge-sample",
-    "name": "bridge-sample-2"
+    "storySlug": "bridge-id-a",
+    "name": "bridge-id-b"
   },
   "api.sceneCrafterClose": {
-    "storySlug": "bridge-sample"
+    "storySlug": {
+      "bridge": true
+    }
   },
   "api.sceneCrafterCreateBoard": {
-    "storyId": "bridge-sample",
-    "storySlug": "bridge-sample-2"
+    "storyId": "bridge-id-a",
+    "storySlug": "bridge-id-b"
   },
   "api.sceneCrafterDeleteCard": "bridge-sample",
   "api.sceneCrafterDeleteLane": "bridge-sample",
   "api.sceneCrafterGetBoard": {
-    "storyId": "bridge-sample",
-    "storySlug": "bridge-sample-2"
+    "storyId": "bridge-id-a",
+    "storySlug": "bridge-id-b"
   },
   "api.sceneCrafterMoveCard": "bridge-sample",
   "api.sceneCrafterRenameLane": "bridge-sample",
   "api.sceneCrafterReorderLanes": "bridge-sample",
   "api.sceneCrafterSaveBoard": "bridge-sample",
   "api.sceneCrafterSuggestionAccept": {
-    "suggestionId": "bridge-sample",
-    "actor": "bridge-sample-2"
+    "suggestionId": "bridge-id-a",
+    "actor": "bridge-id-b"
   },
   "api.sceneCrafterSuggestionReject": {
-    "suggestionId": "bridge-sample",
-    "actor": "bridge-sample-2"
+    "suggestionId": "bridge-id-a",
+    "actor": "bridge-id-b"
   },
   "api.sceneCrafterToggleCardDone": "bridge-sample",
   "api.sceneCreate": "bridge-sample",
   "api.scenePropsGet": {
-    "sceneId": "bridge-sample"
+    "sceneId": {
+      "bridge": true
+    }
   },
   "api.scenePropsSet": {
-    "sceneId": "bridge-sample",
-    "customFields": "bridge-sample-2"
+    "sceneId": "bridge-id-a",
+    "customFields": "bridge-id-b"
   },
   "api.sceneRename": "bridge-sample",
   "api.sceneSave": "bridge-sample",
   "api.sceneSetTags": "bridge-sample",
   "api.searchVault": {
     "query": "/tmp/bridge-sample",
-    "scope": "bridge-sample",
-    "limit": "bridge-sample-2",
-    "filterTags": "bridge-sample-2"
+    "scope": "bridge-id-b",
+    "limit": "bridge-id-c",
+    "filterTags": "bridge-id-d"
   },
   "api.sessionSaveScene": "bridge-sample",
   "api.setAgentConfig": {
-    "agent": "bridge-sample",
-    "config": "bridge-sample-2"
+    "agent": "bridge-id-a",
+    "config": "bridge-id-b"
   },
   "api.settingsSet": {
     "0": "b",
@@ -845,28 +959,30 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     "4": "g",
     "5": "e",
     "6": "-",
-    "7": "s",
-    "8": "a",
-    "9": "m",
-    "10": "p",
-    "11": "l",
-    "12": "e",
-    "13": "-",
-    "14": "2",
-    "settings": "bridge-sample"
+    "7": "i",
+    "8": "d",
+    "9": "-",
+    "10": "b",
+    "settings": "bridge-id-a"
   },
   "api.settingsTestConnection": {
-    "provider": "bridge-sample"
+    "provider": {
+      "bridge": true
+    }
   },
   "api.smartFolderCreate": {
-    "name": "bridge-sample",
-    "query": "bridge-sample-2"
+    "name": "bridge-id-a",
+    "query": "bridge-id-b"
   },
   "api.smartFolderDelete": {
-    "id": "bridge-sample"
+    "id": {
+      "bridge": true
+    }
   },
   "api.smartFolderQuery": {
-    "query": "bridge-sample"
+    "query": {
+      "bridge": true
+    }
   },
   "api.smartFolderUpdate": {
     "0": "b",
@@ -876,29 +992,29 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     "4": "g",
     "5": "e",
     "6": "-",
-    "7": "s",
-    "8": "a",
-    "9": "m",
-    "10": "p",
-    "11": "l",
-    "12": "e",
-    "13": "-",
-    "14": "2",
-    "id": "bridge-sample"
+    "7": "i",
+    "8": "d",
+    "9": "-",
+    "10": "b",
+    "id": "bridge-id-a"
   },
   "api.snapshotDelete": {
     "sceneId": "bridge-id-a",
     "snapshotId": "bridge-id-b"
   },
   "api.snapshotDeleteAll": {
-    "sceneId": "bridge-id-a"
+    "sceneId": {
+      "bridge": true
+    }
   },
   "api.snapshotGet": {
     "sceneId": "bridge-id-a",
     "snapshotId": "bridge-id-b"
   },
   "api.snapshotList": {
-    "sceneId": "bridge-id-a"
+    "sceneId": {
+      "bridge": true
+    }
   },
   "api.snapshotRestore": {
     "sceneId": "bridge-id-a",
@@ -914,42 +1030,48 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     "format": "docx"
   },
   "api.storyImportRun": {
-    "format": "bridge-sample",
-    "filePath": "bridge-sample-2"
+    "format": "bridge-id-a",
+    "filePath": "bridge-id-b"
   },
   "api.storyStashRestore": "bridge-sample",
   "api.storyStashSave": "bridge-sample",
   "api.storyVaultRegistryCreate": "/tmp/bridge-sample",
   "api.storyVaultRegistryPair": {
     "storyVaultId": "/tmp/bridge-sample",
-    "notesVaultId": "bridge-sample"
+    "notesVaultId": "bridge-id-b"
   },
   "api.storyVaultRegistryRename": {
     "id": "/tmp/bridge-sample",
-    "displayName": "bridge-sample"
+    "displayName": "bridge-id-b"
   },
   "api.storyVaultRegistrySetActive": {
-    "id": "/tmp/bridge-sample"
+    "id": {
+      "bridge": true
+    }
   },
   "api.streamAck": {
     "streamId": "bridge-id",
     "count": 7
   },
   "api.streamCancel": {
-    "streamId": "bridge-sample"
+    "streamId": {
+      "bridge": true
+    }
   },
   "api.streamStart": "bridge-sample",
   "api.suggestionsAccept": {
-    "id": "bridge-sample",
-    "actor": "bridge-sample-2"
+    "id": "bridge-id-a",
+    "actor": "bridge-id-b"
   },
   "api.suggestionsBatchAction": "bridge-sample",
   "api.suggestionsGet": {
-    "id": "bridge-sample"
+    "id": {
+      "bridge": true
+    }
   },
   "api.suggestionsIgnore": {
-    "id": "bridge-sample",
-    "actor": "bridge-sample-2"
+    "id": "bridge-id-a",
+    "actor": "bridge-id-b"
   },
   "api.suggestionsList": {
     "0": "b",
@@ -959,30 +1081,28 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     "4": "g",
     "5": "e",
     "6": "-",
-    "7": "s",
-    "8": "a",
-    "9": "m",
-    "10": "p",
-    "11": "l",
-    "12": "e",
-    "13": "-",
-    "14": "2",
-    "status": "bridge-sample",
-    "sourceAgent": "bridge-sample-2"
+    "7": "i",
+    "8": "d",
+    "9": "-",
+    "10": "c",
+    "status": "bridge-id-a",
+    "sourceAgent": "bridge-id-b"
   },
   "api.suggestionsReject": {
-    "id": "bridge-sample",
-    "reason": "bridge-sample-2",
-    "actor": "bridge-sample-2"
+    "id": "bridge-id-a",
+    "reason": "bridge-id-b",
+    "actor": "bridge-id-c"
   },
   "api.suggestionsRollback": {
-    "id": "bridge-sample",
-    "actor": "bridge-sample-2"
+    "id": "bridge-id-a",
+    "actor": "bridge-id-b"
   },
   "api.suggestionsSearch": "bridge-sample",
   "api.suggestionsUnifiedList": "bridge-sample",
   "api.suggestionsUpsert": {
-    "suggestion": "bridge-sample"
+    "suggestion": {
+      "bridge": true
+    }
   },
   "api.tagsBulkApply": {
     "itemIds": [
@@ -997,97 +1117,125 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     ]
   },
   "api.tagsDelete": {
-    "id": "bridge-sample"
+    "id": {
+      "bridge": true
+    }
   },
   "api.tagsForItem": {
-    "itemId": "bridge-sample",
-    "itemKind": "bridge-sample-2"
+    "itemId": "bridge-id-a",
+    "itemKind": "bridge-id-b"
   },
   "api.tagsItemsForTag": {
-    "tagName": "bridge-sample"
+    "tagName": {
+      "bridge": true
+    }
   },
   "api.tagsRename": {
-    "id": "bridge-sample",
-    "name": "bridge-sample-2"
+    "id": "bridge-id-a",
+    "name": "bridge-id-b"
   },
   "api.tagsSetForItem": {
-    "itemId": "bridge-sample",
-    "itemKind": "bridge-sample-2",
-    "tags": "bridge-sample-2"
+    "itemId": "bridge-id-a",
+    "itemKind": "bridge-id-b",
+    "tags": "bridge-id-c"
   },
   "api.tagsUpsert": {
-    "name": "bridge-sample",
-    "color": "bridge-sample-2"
+    "name": "bridge-id-a",
+    "color": "bridge-id-b"
   },
   "api.telemetryReport": {
-    "type": "bridge-sample",
-    "meta": "bridge-sample-2"
+    "type": "bridge-id-a",
+    "meta": "bridge-id-b"
   },
   "api.templateDelete": {
-    "id": "bridge-sample"
+    "id": {
+      "bridge": true
+    }
   },
   "api.templateDuplicate": {
-    "id": "bridge-sample"
+    "id": {
+      "bridge": true
+    }
   },
   "api.templateExport": {
-    "id": "bridge-sample"
+    "id": {
+      "bridge": true
+    }
   },
   "api.templateImportFromPath": {
-    "filePath": "/tmp/bridge-sample"
+    "filePath": {
+      "bridge": true
+    }
   },
   "api.templateRename": {
-    "id": "bridge-sample",
-    "name": "bridge-sample-2"
+    "id": "bridge-id-a",
+    "name": "bridge-id-b"
   },
   "api.templateSaveAs": {
-    "name": "bridge-sample"
+    "name": {
+      "bridge": true
+    }
   },
   "api.templateScaffold": {
-    "templateId": "bridge-sample",
-    "parentToken": "bridge-sample-2"
+    "templateId": "bridge-id-a",
+    "parentToken": "bridge-id-b"
   },
   "api.timelineGetScenes": {
-    "storyId": "bridge-sample"
+    "storyId": {
+      "bridge": true
+    }
   },
   "api.timelineGetSettings": {
-    "storyId": "bridge-sample"
+    "storyId": {
+      "bridge": true
+    }
   },
   "api.timelineInfer": {
-    "storyId": "bridge-sample"
+    "storyId": {
+      "bridge": true
+    }
   },
   "api.timelineList": {},
   "api.timelineListArcs": {},
   "api.timelineProposalResolve": {
-    "proposalId": "bridge-sample",
-    "decision": "bridge-sample-2"
+    "proposalId": "bridge-id-a",
+    "decision": "bridge-id-b"
   },
   "api.timelineProposalsGenerate": {
-    "storyId": "bridge-sample"
+    "storyId": {
+      "bridge": true
+    }
   },
   "api.timelineProposalsList": {
-    "storyId": "bridge-sample"
+    "storyId": {
+      "bridge": true
+    }
   },
   "api.timelineRebuild": {},
   "api.timelineSaveSettings": {
-    "settings": "bridge-sample",
-    "storyId": "bridge-sample-2"
+    "settings": "bridge-id-a",
+    "storyId": "bridge-id-b"
   },
   "api.timelineUpdateArcColor": {
-    "arcId": "bridge-sample",
-    "color": "bridge-sample-2",
-    "colorIsCustom": "bridge-sample-2"
+    "arcId": "bridge-id-a",
+    "color": "bridge-id-b",
+    "colorIsCustom": "bridge-id-c"
   },
   "api.timelineUpdateScene": "bridge-sample",
   "api.timelineUpsert": "bridge-sample",
   "api.timelinesDeleteItem": "bridge-sample",
   "api.timelinesGetStore": {},
   "api.timelinesSetActive": {
-    "timelineId": "bridge-sample"
+    "timelineId": {
+      "bridge": true
+    }
   },
   "api.timelinesUpsert": "bridge-sample",
   "api.timelinesUpsertItem": "bridge-sample",
   "api.validatePath": {
-    "path": "/tmp/bridge-sample"
+    "path": {
+      "bridge": true
+    }
   },
   "api.vaultAccessSet": "bridge-sample",
   "api.vaultCreateDefaultMythos": "/tmp/bridge-sample",
@@ -1098,7 +1246,7 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
   "api.vaultImportRun": "/tmp/bridge-sample",
   "api.vaultImportScan": {
     "kind": "/tmp/bridge-sample",
-    "srcPath": "bridge-sample"
+    "srcPath": "bridge-id-b"
   },
   "api.vaultLocalFolderMove": "/tmp/bridge-sample",
   "api.vaultSeedApplyBoth": "/tmp/bridge-sample",
@@ -1109,25 +1257,35 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     "storyVaultToken": "bridge-token"
   },
   "api.vaultSurfaceBlastRadius": {
-    "mythosVaultRoot": "/tmp/bridge-sample"
+    "mythosVaultRoot": {
+      "bridge": true
+    }
   },
   "api.vaultSurfaceHide": "/tmp/bridge-sample",
   "api.vaultSurfaceMoveVaultsParent": {
-    "newParentPath": "/tmp/bridge-sample"
+    "newParentPath": {
+      "bridge": true
+    }
   },
   "api.vaultSurfaceRevealMythos": {
-    "mythosVaultRoot": "/tmp/bridge-sample"
+    "mythosVaultRoot": {
+      "bridge": true
+    }
   },
   "api.vaultSurfaceTrash": "/tmp/bridge-sample",
   "api.vaultSurfaceUnhide": {
-    "vaultRoot": "/tmp/bridge-sample"
+    "vaultRoot": {
+      "bridge": true
+    }
   },
   "api.versionGet": {
     "sceneId": "bridge-id-a",
     "ts": "bridge-id-b"
   },
   "api.versionList": {
-    "sceneId": "bridge-id-a"
+    "sceneId": {
+      "bridge": true
+    }
   },
   "api.versionRollback": {
     "sceneId": "bridge-id-a",
@@ -1151,37 +1309,43 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     "kind": "stt-binary"
   },
   "api.voiceSpeak": {
-    "text": "bridge-sample",
-    "voiceId": "bridge-sample-2"
+    "text": "bridge-id-a",
+    "voiceId": "bridge-id-b"
   },
   "api.voiceSpeakCancel": {
     "speakId": "bridge-id"
   },
   "api.voiceStart": {
-    "micDeviceId": "bridge-sample"
+    "micDeviceId": {
+      "bridge": true
+    }
   },
   "api.voiceStop": {
-    "sessionId": "bridge-sample"
+    "sessionId": {
+      "bridge": true
+    }
   },
   "api.voiceTranscribe": {
-    "audio": "bridge-sample",
-    "mimeType": "bridge-sample-2",
-    "language": "bridge-sample-2"
+    "audio": "bridge-id-a",
+    "mimeType": "bridge-id-b",
+    "language": "bridge-id-c"
   },
   "api.writeManifest": {
-    "manifest": "/tmp/bridge-sample"
+    "manifest": {
+      "bridge": true
+    }
   },
   "api.writeNotesVault": {
     "path": "/tmp/bridge-sample",
-    "content": "bridge-sample"
+    "content": "bridge-id-b"
   },
   "api.writeVault": {
     "path": "/tmp/bridge-sample",
-    "content": "bridge-sample"
+    "content": "bridge-id-b"
   },
   "api.writingAssistant": {
-    "manuscript": "bridge-sample",
-    "scenePath": "bridge-sample-2"
+    "manuscript": "bridge-id-a",
+    "scenePath": "bridge-id-b"
   },
   "api.writingAssistantCadenceChange": "bridge-sample",
   "api.writingAssistantScanNow": "bridge-sample",
@@ -1190,37 +1354,45 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
   "api.writingAssistantTipDecision": "bridge-sample",
   "api.writingModeSet": "bridge-sample",
   "api.writingScan": {
-    "sceneId": "bridge-sample",
-    "prose": "bridge-sample-2",
-    "scenePath": "bridge-sample-2"
+    "sceneId": "bridge-id-a",
+    "prose": "bridge-id-b",
+    "scenePath": "bridge-id-c"
   },
   "mythosIPC.archive": {
-    "manuscript": "bridge-sample",
-    "vaultPath": "bridge-sample-2"
+    "manuscript": "bridge-id-a",
+    "vaultPath": "bridge-id-b"
   },
   "mythosIPC.brainstormer": {
-    "topic": "bridge-sample",
-    "context": "bridge-sample-2"
+    "topic": "bridge-id-a",
+    "context": "bridge-id-b"
   },
   "mythosIPC.deleteVaultFile": {
-    "path": "/tmp/bridge-sample"
+    "path": {
+      "bridge": true
+    }
   },
   "mythosIPC.listVaultFiles": {
-    "root": "/tmp/bridge-sample"
+    "root": {
+      "bridge": true
+    }
   },
   "mythosIPC.readVaultFile": {
-    "path": "/tmp/bridge-sample"
+    "path": {
+      "bridge": true
+    }
   },
   "mythosIPC.writeManifest": {
-    "manifest": "/tmp/bridge-sample"
+    "manifest": {
+      "bridge": true
+    }
   },
   "mythosIPC.writeVaultFile": {
     "path": "/tmp/bridge-sample",
-    "content": "bridge-sample"
+    "content": "bridge-id-b"
   },
   "mythosIPC.writingAssistant": {
-    "manuscript": "bridge-sample",
-    "scenePath": "bridge-sample-2"
+    "manuscript": "bridge-id-a",
+    "scenePath": "bridge-id-b"
   }
 };
 
@@ -1241,6 +1413,7 @@ const SINGLE_ARG_INVOKE = new Set<string>([
   'api.vaultAccessGetState',
   'api.vaultMigrateMultiInner',
 ]);
+
 const ORDERED_IDS = [SAMPLE.idA, SAMPLE.idB, SAMPLE.idC, SAMPLE.idD, SAMPLE.idE, SAMPLE.idF] as const;
 
 function defaultArgsFor(row: ExposedRow, fn: (...args: unknown[]) => unknown): unknown[] {
@@ -1249,24 +1422,23 @@ function defaultArgsFor(row: ExposedRow, fn: (...args: unknown[]) => unknown): u
   const n = fn.length;
   if (n === 0) return [];
   if (row.channel.includes('voice:pickBinary')) return ['stt-binary'];
-  if (
-    row.channel.includes('version:') ||
-    row.channel.includes('drafts') ||
-    row.channel.includes('snapshot:')
-  ) {
-    return Array.from({ length: n }, (_, i) => ORDERED_IDS[i] ?? SAMPLE.str);
+  if (n === 1) {
+    const golden = BRIDGE_RECORDED_PAYLOADS[key];
+    if (typeof golden === 'object' && golden !== null && !Array.isArray(golden)) return [SAMPLE.obj];
+    if (golden === SAMPLE.path || (typeof golden === 'string' && golden.startsWith('/'))) return [SAMPLE.path];
+    return [SAMPLE.str];
   }
-  if (
+  const pathFirst =
     row.path.includes('Vault') ||
     row.path.includes('Path') ||
     row.path.endsWith('Folder') ||
     row.channel.startsWith('vault:') ||
     row.channel.startsWith('notesVault:') ||
-    row.channel.startsWith('notesThumb:')
-  ) {
-    return Array.from({ length: n }, (_, i) => (i === 0 ? SAMPLE.path : i === 1 ? SAMPLE.str : SAMPLE.str2));
-  }
-  return Array.from({ length: n }, (_, i) => (i === 0 ? SAMPLE.str : SAMPLE.str2));
+    row.channel.startsWith('notesThumb:');
+  return Array.from({ length: n }, (_, i) => {
+    if (pathFirst && i === 0) return SAMPLE.path;
+    return ORDERED_IDS[i] ?? SAMPLE.str;
+  });
 }
 
 function callKey(row: ExposedRow): string {
@@ -1313,6 +1485,119 @@ function assertNoRawIpcSurface(value: unknown, pathKey: string, ipcRendererRef: 
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
     assertNoRawIpcSurface(v, `${pathKey}.${k}`, ipcRendererRef);
   }
+}
+
+function assertListenerForwardsToCallback(
+  bridgeFn: (...args: unknown[]) => unknown,
+  ipcHandler: (...args: unknown[]) => void,
+  userCb: ReturnType<typeof vi.fn>,
+): void {
+  userCb.mockClear();
+  const src = Function.prototype.toString.call(bridgeFn);
+
+  if (/\bipcRenderer\.on\([^,]+,\s*cb\)/.test(src)) {
+    const fakeEvent = { sender: {} };
+    const payload = { path: SAMPLE.path };
+    ipcHandler(fakeEvent, payload);
+    expect(userCb).toHaveBeenCalledTimes(1);
+    expect(userCb).toHaveBeenCalledWith(fakeEvent, payload);
+    return;
+  }
+
+  if (/\bconst handler = \(\) => cb\(\)/.test(src)) {
+    ipcHandler();
+    expect(userCb).toHaveBeenCalledTimes(1);
+    expect(userCb).toHaveBeenCalledWith();
+    return;
+  }
+
+  const passthrough = {
+    current: 1,
+    total: 2,
+    lastAction: 'bridge-action',
+    streamId: SAMPLE.id,
+    token: 'bridge-token',
+    category: 'bridge-cat',
+    message: 'bridge-msg',
+    count: 3,
+    path: SAMPLE.path,
+    sessionId: SAMPLE.id,
+    text: 'bridge-text',
+    isFinal: true,
+    error: 'bridge-err',
+    speakId: SAMPLE.id,
+    chunk: SAMPLE.u8,
+    format: 'pcm' as const,
+    sampleRate: 44100,
+    agent: SAMPLE.str,
+    agentLabel: SAMPLE.str2,
+    reason: 'hourly_token_cap' as const,
+    state: 'checking' as const,
+    version: '1.0',
+    releaseNotes: null,
+    sceneId: SAMPLE.id,
+    scenePath: SAMPLE.path,
+    tips: ['tip'],
+    scannedAt: 't',
+    startedAt: 't',
+    occurredAt: 't',
+    vaultRoot: SAMPLE.path,
+    notesVaultRoot: SAMPLE.path,
+    mode: 'focus',
+    focusFlags: { f: true },
+    editConfig: { e: true },
+    proposals: [SAMPLE.obj],
+    panelId: SAMPLE.id,
+    docked: true,
+    bounds: { x: 0, y: 0, width: 100, height: 100 },
+    x: 0,
+    y: 0,
+    width: 100,
+    height: 100,
+    alwaysOnTop: false,
+    scope: 'scene',
+    items: [SAMPLE.obj],
+    tokenUsed: 1,
+    partial: false,
+    itemId: SAMPLE.id,
+    status: 'ok',
+    action: 'accept',
+    storySlug: 'bridge-slug',
+    requestId: SAMPLE.id,
+  };
+
+  let ipcArg: unknown;
+  let expected: unknown;
+
+  if (src.includes('cb(data.chunk)')) {
+    ipcArg = { chunk: 'bridge-chunk' };
+    expected = 'bridge-chunk';
+  } else if (src.includes('cb(data.requestId)')) {
+    ipcArg = { requestId: SAMPLE.id, category: 'x', message: 'y' };
+    expected = SAMPLE.id;
+  } else if (src.includes('cb(data.text)')) {
+    ipcArg = { text: 'bridge-text' };
+    expected = 'bridge-text';
+  } else if (src.includes('cb(data.panelId)')) {
+    ipcArg = { panelId: SAMPLE.id, docked: true, bounds: { x: 0, y: 0, width: 1, height: 1 } };
+    expected = SAMPLE.id;
+  } else if (src.includes('cb(data.storySlug)')) {
+    ipcArg = { storySlug: 'bridge-slug' };
+    expected = 'bridge-slug';
+  } else if (src.includes('cb(entries)')) {
+    ipcArg = [SAMPLE.obj];
+    expected = [SAMPLE.obj];
+  } else if (src.includes('cb(info)')) {
+    ipcArg = { reason: 'test', itemPath: SAMPLE.path };
+    expected = ipcArg;
+  } else {
+    ipcArg = passthrough;
+    expected = ipcArg;
+  }
+
+  ipcHandler(null, ipcArg);
+  expect(userCb).toHaveBeenCalledTimes(1);
+  expect(userCb).toHaveBeenCalledWith(expected);
 }
 
 describe('preload bridge', () => {
@@ -1403,14 +1688,16 @@ describe('preload bridge', () => {
       const fn = getAtPath(api, row.path);
       expect(typeof fn).toBe('function');
 
-      const cb = vi.fn<() => void>();
-      const unsub = (fn as (listener: () => void) => () => void)(cb);
+      const cb = vi.fn<(arg?: unknown) => void>();
+      const unsub = (fn as (listener: (arg?: unknown) => void) => () => void)(cb);
       expect(typeof unsub).toBe('function');
       expect(onMock).toHaveBeenCalledTimes(1);
       const onCall = firstIpcMockCall(onMock);
       expect(onCall[0]).toBe(row.channel);
-      const handler = onCall[1];
+      const handler = onCall[1] as (...args: unknown[]) => void;
       expect(typeof handler).toBe('function');
+
+      assertListenerForwardsToCallback(fn as (...args: unknown[]) => unknown, handler, cb);
 
       unsub();
       expect(removeListenerMock).toHaveBeenCalledTimes(1);
