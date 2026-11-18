@@ -2,13 +2,13 @@ import './main.handlers.harnessSetup.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { harnessPaths } from './main.handlers.harnessSetup.js';
 import {
   IPC_CHANNELS,
   cleanupTestTmp,
   invoke,
   makeTestTmp,
+  assertDirectoryWriteDenied,
   readBytesUnderVault,
   seedMythosVaultBundle,
   writeVaultSettingsFile,
@@ -75,13 +75,14 @@ describe('main.handlers vault:write / vault:read', () => {
   });
 
   it('vault:write refuses path traversal', async () => {
-    const outside = path.join(os.tmpdir(), `mythos-out-${Date.now()}.txt`);
+    const escapeName = `escape-traversal-${Date.now()}.md`;
+    const escapeAbs = path.join(bundle.storyVaultPath, '..', escapeName);
     const result = await invoke<{ error?: string }>(IPC_CHANNELS.VAULT_WRITE, {
-      path: `../${path.basename(outside)}`,
+      path: `../${escapeName}`,
       content: 'escaped',
     });
     expect(result.error).toBeTruthy();
-    expect(fs.existsSync(outside)).toBe(false);
+    expect(fs.existsSync(escapeAbs)).toBe(false);
   });
 
   it('vault:write refuses symlink leaf (red on revert)', async () => {
@@ -122,11 +123,11 @@ describe('main.handlers vault discovery / create / paths', () => {
     expect(result.writable).toBe(true);
   });
 
-  it('vault:validate-path reports non-writable parent', async () => {
-    if (process.platform === 'win32' || process.getuid?.() === 0) return;
+  it.skipIf(process.platform === 'win32')('vault:validate-path reports non-writable parent', async () => {
     const lockedParent = makeTestTmp('locked-parent');
     fs.chmodSync(lockedParent, 0o500);
     try {
+      assertDirectoryWriteDenied(lockedParent);
       const result = await invoke<{ writable: boolean }>(IPC_CHANNELS.VAULT_VALIDATE_PATH, {
         path: path.join(lockedParent, 'child'),
       });
@@ -338,22 +339,29 @@ describe('main.handlers vault:check-session-lock', () => {
 });
 
 describe('main.handlers vault:write read-only (must fail as non-root)', () => {
-  it('leaves bytes unchanged when target file is read-only', async () => {
-    if (process.platform === 'win32' || process.getuid?.() === 0) return;
-    const rel = 'notes/readonly.md';
-    const full = path.join(bundle.storyVaultPath, rel);
-    const parent = path.dirname(full);
-    fs.mkdirSync(parent, { recursive: true });
-    fs.writeFileSync(full, 'original');
-    fs.chmodSync(parent, 0o555);
-    try {
-      const result = await invoke<{ error?: string }>(IPC_CHANNELS.VAULT_WRITE, { path: rel, content: 'mutated' });
-      expect(result.error).toBeTruthy();
-      expect(fs.readFileSync(full, 'utf-8')).toBe('original');
-    } finally {
-      fs.chmodSync(parent, 0o755);
-    }
-  });
+  it.skipIf(process.platform === 'win32')(
+    'leaves bytes unchanged when target directory is read-only',
+    async () => {
+      const rel = 'notes/readonly.md';
+      const full = path.join(bundle.storyVaultPath, rel);
+      const parent = path.dirname(full);
+      fs.mkdirSync(parent, { recursive: true });
+      fs.writeFileSync(full, 'original');
+      fs.chmodSync(parent, 0o555);
+      try {
+        assertDirectoryWriteDenied(parent);
+        const result = await invoke<{ error?: string; bytes?: number }>(IPC_CHANNELS.VAULT_WRITE, {
+          path: rel,
+          content: 'mutated',
+        });
+        expect(result.error).toBeTruthy();
+        expect(result.bytes ?? 0).toBe(0);
+        expect(fs.readFileSync(full, 'utf-8')).toBe('original');
+      } finally {
+        fs.chmodSync(parent, 0o755);
+      }
+    },
+  );
 });
 
 describe('main.handlers missing vault root', () => {

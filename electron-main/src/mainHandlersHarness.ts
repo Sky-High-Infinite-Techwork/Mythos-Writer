@@ -142,3 +142,24 @@ export function manifestBytesExcludeProse(manifestPath: string, proseNeedle: str
   const bytes = fs.readFileSync(manifestPath, 'utf-8');
   return !bytes.includes(proseNeedle);
 }
+
+/** Probe that `dir` refuses a direct write (POSIX). Fails the test if root/chmod noop bypasses. */
+export function assertDirectoryWriteDenied(dir: string): void {
+  const probe = path.join(dir, `.mythos-ro-probe-${process.pid}-${Date.now()}`);
+  let denied = false;
+  try {
+    fs.writeFileSync(probe, 'probe');
+  } catch {
+    denied = true;
+  }
+  if (fs.existsSync(probe)) {
+    try {
+      fs.unlinkSync(probe);
+    } catch {
+      /* left for caller cleanup */
+    }
+  }
+  if (!denied) {
+    throw new Error(`expected write to be denied under ${dir} (probe write succeeded — chmod ineffective or running as root)`);
+  }
+}

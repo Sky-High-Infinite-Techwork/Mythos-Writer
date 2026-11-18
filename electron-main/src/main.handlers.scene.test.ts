@@ -8,6 +8,7 @@ import {
   cleanupTestTmp,
   invoke,
   makeTestTmp,
+  assertDirectoryWriteDenied,
   manifestBytesExcludeProse,
   manifestCachePath,
   readBytesUnderVault,
@@ -119,7 +120,8 @@ describe('main.handlers scene:*', () => {
   it('scene:save writes prose bytes, scene:get round-trips, manifest stays structure-only', async () => {
     await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
     const { sceneId, sceneRelPath } = storySceneFromManifest(bundle.storyVaultPath, bundle.mythosRoot);
-    const newProse = 'Harness save prose.\n\nSecond paragraph with UNIQUE_PROSE_MARKER_1907.';
+    const proseMarker = 'UNIQUE_PROSE_MARKER_1907';
+    const newProse = `Harness save prose.\n\nSecond paragraph with ${proseMarker}.`;
     const saved = await invoke<{ scene: { id: string; path: string } }>(IPC_CHANNELS.SCENE_SAVE, {
       sceneId,
       prose: newProse,
@@ -134,7 +136,7 @@ describe('main.handlers scene:*', () => {
 
     const cachePath = manifestCachePath(bundle.storyVaultPath);
     expect(fs.existsSync(cachePath)).toBe(true);
-    expect(manifestBytesExcludeProse(cachePath, newProse)).toBe(true);
+    expect(manifestBytesExcludeProse(cachePath, proseMarker)).toBe(true);
   });
 
   it('scene:save refuses unknown scene id without mutating disk', async () => {
@@ -172,42 +174,53 @@ describe('main.handlers scene:*', () => {
   it('scene:save rejects traversal via scene path in manifest (handler calls safePath)', async () => {
     await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
     const manifestPath = manifestCachePath(bundle.storyVaultPath);
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as {
+    const manifestBefore = fs.readFileSync(manifestPath);
+    const manifest = JSON.parse(manifestBefore.toString('utf-8')) as {
       stories: Array<{ chapters: Array<{ scenes: Array<{ id: string; path: string }> }> }>;
     };
     const evilScene = manifest.stories[0]!.chapters[0]!.scenes[0]!;
-    const originalPath = evilScene.path;
+    const originalSceneRel = evilScene.path;
+    const sceneBytesBefore = readBytesUnderVault(bundle.storyVaultPath, originalSceneRel);
+    const escapeAbs = path.join(bundle.storyVaultPath, '..', 'outside-escape.md');
     evilScene.path = '../outside-escape.md';
     fs.writeFileSync(manifestPath, JSON.stringify(manifest));
-    const result = await invoke<{ error?: string }>(IPC_CHANNELS.SCENE_SAVE, {
-      sceneId: evilScene.id,
-      prose: 'escape',
-    });
-    expect(result).toHaveProperty('error');
-    evilScene.path = originalPath;
+    try {
+      const result = await invoke<{ error?: string; scene?: unknown }>(IPC_CHANNELS.SCENE_SAVE, {
+        sceneId: evilScene.id,
+        prose: 'TRAVERSAL_ESCAPE_MARKER_1907',
+      });
+      expect(result.error).toBeTruthy();
+      expect(result.scene).toBeUndefined();
+      expect(readBytesUnderVault(bundle.storyVaultPath, originalSceneRel)).toEqual(sceneBytesBefore);
+      expect(fs.existsSync(escapeAbs)).toBe(false);
+    } finally {
+      fs.writeFileSync(manifestPath, manifestBefore);
+    }
   });
 });
 
 describe('main.handlers scene:* — read-only guard (must fail as non-root)', () => {
-  it('read-only scene file blocks save and leaves bytes unchanged', async () => {
-    if (process.platform === 'win32') return;
-    if (process.getuid?.() === 0) return;
-
-    await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
-    const { sceneId, sceneRelPath } = storySceneFromManifest(bundle.storyVaultPath, bundle.mythosRoot);
-    const full = path.join(bundle.storyVaultPath, sceneRelPath);
-    const before = fs.readFileSync(full);
-    const sceneDir = path.dirname(full);
-    fs.chmodSync(sceneDir, 0o555);
-    try {
-      const result = await invoke<{ error?: string; scene?: unknown }>(IPC_CHANNELS.SCENE_SAVE, {
-        sceneId,
-        prose: 'SHOULD NOT PERSIST ON READONLY',
-      });
-      expect(result).toHaveProperty('error');
-      expect(fs.readFileSync(full).equals(before)).toBe(true);
-    } finally {
-      fs.chmodSync(sceneDir, 0o755);
-    }
-  });
+  it.skipIf(process.platform === 'win32')(
+    'read-only scene file blocks save and leaves bytes unchanged',
+    async () => {
+      await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
+      const { sceneId, sceneRelPath } = storySceneFromManifest(bundle.storyVaultPath, bundle.mythosRoot);
+      const full = path.join(bundle.storyVaultPath, sceneRelPath);
+      const before = fs.readFileSync(full);
+      const sceneDir = path.dirname(full);
+      fs.chmodSync(sceneDir, 0o555);
+      try {
+        assertDirectoryWriteDenied(sceneDir);
+        const result = await invoke<{ error?: string; scene?: unknown }>(IPC_CHANNELS.SCENE_SAVE, {
+          sceneId,
+          prose: 'SHOULD NOT PERSIST ON READONLY',
+        });
+        expect(result.error).toBeTruthy();
+        expect(result.scene).toBeUndefined();
+        expect(fs.readFileSync(full).equals(before)).toBe(true);
+      } finally {
+        fs.chmodSync(sceneDir, 0o755);
+      }
+    },
+  );
 });

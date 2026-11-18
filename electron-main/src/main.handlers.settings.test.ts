@@ -78,7 +78,9 @@ describe('main.handlers settings:set', () => {
     const result = await invoke<{ saved: boolean }>(IPC_CHANNELS.SETTINGS_SET, { settings: next });
     expect(result.saved).toBe(true);
     const after = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
-    expect(after.waIdleDebounceSeconds).toBe(next.agents.writingAssistant.idleDebounceSeconds);
+    expect(after.agents.writingAssistant.scanIntervalSeconds).toBe(
+      next.agents.writingAssistant.scanIntervalSeconds,
+    );
   });
 
   it('settings:get returns masked settings without throwing', async () => {
