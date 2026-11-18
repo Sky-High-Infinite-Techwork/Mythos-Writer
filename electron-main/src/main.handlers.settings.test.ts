@@ -43,8 +43,17 @@ describe('main.handlers settings:set', () => {
 
   it('refuses invalid brainstorm agent baseUrl without persisting', async () => {
     const settingsPath = path.join(bundle.userData, 'app-settings.json');
-    const before = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
-    const prior = before.agents.brainstorm.provider?.baseUrl;
+    const beforeBytes = fs.readFileSync(settingsPath);
+    const before = JSON.parse(beforeBytes.toString('utf-8')) as AppSettings;
+    const baseProvider =
+      before.agents.brainstorm.provider ??
+      SETTINGS_DEFAULTS.agents.brainstorm.provider ?? {
+        kind: 'openai' as const,
+        model: 'gpt-4o',
+        apiKey: '',
+        baseUrl: 'https://api.openai.com/v1',
+      };
+    const prior = baseProvider.baseUrl;
     const poisoned: AppSettings = {
       ...before,
       agents: {
@@ -52,7 +61,9 @@ describe('main.handlers settings:set', () => {
         brainstorm: {
           ...before.agents.brainstorm,
           provider: {
-            ...before.agents.brainstorm.provider,
+            kind: baseProvider.kind,
+            model: baseProvider.model,
+            apiKey: baseProvider.apiKey,
             baseUrl: 'file:///etc/passwd',
           },
         },
@@ -63,8 +74,10 @@ describe('main.handlers settings:set', () => {
     });
     expect(result.saved).toBe(false);
     expect(result.error).toMatch(/agents\.brainstorm\.provider\.baseUrl/i);
-    const after = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
-    expect(after.agents.brainstorm.provider?.baseUrl).toBe(prior);
+    const afterBytes = fs.readFileSync(settingsPath);
+    expect(afterBytes.equals(beforeBytes)).toBe(true);
+    expect(afterBytes.toString('utf-8')).not.toContain('file:///etc/passwd');
+    expect(prior).toBeTruthy();
   });
 
   it('refuses invalid provider baseUrl and does not persist the hostile URL', async () => {
