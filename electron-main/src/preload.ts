@@ -218,9 +218,10 @@ contextBridge.exposeInMainWorld('api', {
   stopVaultWatch: () => ipcRenderer.invoke('vault:watch-stop', undefined),
 
   // Push-notification from main when a markdown file changes
-  onVaultFileChanged: (cb: (event: unknown, data: { path: string }) => void) => {
-    ipcRenderer.on('vault:file-changed', cb);
-    return () => ipcRenderer.removeListener('vault:file-changed', cb);
+  onVaultFileChanged: (cb: (data: { path: string }) => void) => {
+    const handler = (_: unknown, data: { path: string }) => cb(data);
+    ipcRenderer.on('vault:file-changed', handler);
+    return () => ipcRenderer.removeListener('vault:file-changed', handler);
   },
 
   // AI agents (stubs for Epic 5)

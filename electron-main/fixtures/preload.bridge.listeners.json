@@ -1,0 +1,5049 @@
+{
+  "api.jobs.onEvent": {
+    "channel": "jobs:event",
+    "kind": "noArg",
+    "ipcArgs": [
+      null,
+      {
+        "jobId": "bridge-id",
+        "event": "progress"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "jobId": "bridge-id",
+        "event": "progress"
+      }
+    ]
+  },
+  "api.onAiActivityTerminal": {
+    "channel": "ai-activity:terminal",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onAiActivityUpdate": {
+    "channel": "ai-activity:update",
+    "kind": "entries",
+    "ipcArgs": [
+      null,
+      [
+        {
+          "bridge": true
+        }
+      ]
+    ],
+    "userCbArgs": [
+      [
+        {
+          "bridge": true
+        }
+      ]
+    ]
+  },
+  "api.onArchiveContItemResolved": {
+    "channel": "archive:cont-item-resolved",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onArchiveContScanError": {
+    "channel": "archive:cont-scan-error",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onArchiveContScanResult": {
+    "channel": "archive:cont-scan-result",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onArchiveContScanStart": {
+    "channel": "archive:cont-scan-start",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onBrainstormChunk": {
+    "channel": "agent:brainstorm:chunk",
+    "kind": "chunk",
+    "ipcArgs": [
+      null,
+      {
+        "chunk": "lc-chunk"
+      }
+    ],
+    "userCbArgs": [
+      "lc-chunk"
+    ]
+  },
+  "api.onBrainstormError": {
+    "channel": "agent:brainstorm:error",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onBrainstormProposalQueued": {
+    "channel": "brainstorm:proposalQueued",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onBrainstormStreamStart": {
+    "channel": "agent:brainstorm:stream-start",
+    "kind": "requestId",
+    "ipcArgs": [
+      null,
+      {
+        "requestId": "bridge-id",
+        "category": "c",
+        "message": "m"
+      }
+    ],
+    "userCbArgs": [
+      "bridge-id"
+    ]
+  },
+  "api.onBudgetCapHit": {
+    "channel": "agent:budget-cap",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onFlushBeforeQuit": {
+    "channel": "app:flushBeforeQuit",
+    "kind": "noArg",
+    "ipcArgs": [],
+    "userCbArgs": []
+  },
+  "api.onNavHistoryBack": {
+    "channel": "nav-history:back",
+    "kind": "noArg",
+    "ipcArgs": [],
+    "userCbArgs": []
+  },
+  "api.onNavHistoryForward": {
+    "channel": "nav-history:forward",
+    "kind": "noArg",
+    "ipcArgs": [],
+    "userCbArgs": []
+  },
+  "api.onNavigatorManifestChanged": {
+    "channel": "navigator:manifest-changed",
+    "kind": "noArg",
+    "ipcArgs": [],
+    "userCbArgs": []
+  },
+  "api.onNavigatorSceneChanged": {
+    "channel": "navigator:scene-changed",
+    "kind": "noArg",
+    "ipcArgs": [
+      null,
+      {
+        "sceneId": "bridge-id"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "sceneId": "bridge-id"
+      }
+    ]
+  },
+  "api.onNavigatorSceneSynced": {
+    "channel": "navigator:scene-synced",
+    "kind": "noArg",
+    "ipcArgs": [
+      null,
+      {
+        "sceneId": "bridge-id"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "sceneId": "bridge-id"
+      }
+    ]
+  },
+  "api.onNotesBoardWriteRefused": {
+    "channel": "notesBoard:writeRefused",
+    "kind": "info",
+    "ipcArgs": [
+      null,
+      {
+        "reason": "lc",
+        "itemPath": "/tmp/bridge-sample"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "reason": "lc",
+        "itemPath": "/tmp/bridge-sample"
+      }
+    ]
+  },
+  "api.onNotesVaultRegistryChanged": {
+    "channel": "notesVaultRegistry:changed",
+    "kind": "noArg",
+    "ipcArgs": [],
+    "userCbArgs": []
+  },
+  "api.onObsidianImportProgress": {
+    "channel": "vault:obsidian:import:progress",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "current": 1,
+        "total": 3,
+        "lastAction": "lc-import"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "current": 1,
+        "total": 3,
+        "lastAction": "lc-import"
+      }
+    ]
+  },
+  "api.onPanelFloatBoundsChanged": {
+    "channel": "panel:float-bounds",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onPanelFloatClosed": {
+    "channel": "panel:float-closed",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onPanelFloatPinChanged": {
+    "channel": "panel:float-pin-changed",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onPanelPopoutClosed": {
+    "channel": "panel:popout-closed",
+    "kind": "panelId",
+    "ipcArgs": [
+      null,
+      {
+        "panelId": "bridge-id"
+      }
+    ],
+    "userCbArgs": [
+      "bridge-id"
+    ]
+  },
+  "api.onPartnerThreadChanged": {
+    "channel": "partner-thread:changed",
+    "kind": "noArg",
+    "ipcArgs": [],
+    "userCbArgs": []
+  },
+  "api.onProjectSwitched": {
+    "channel": "project:switched",
+    "kind": "noArg",
+    "ipcArgs": [
+      null,
+      {
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample-2"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample-2"
+      }
+    ]
+  },
+  "api.onRenameCascadeProgress": {
+    "channel": "notesVault:renameCascade:progress",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onSceneCrafterExternalEdit": {
+    "channel": "scene-crafter:external-edit",
+    "kind": "storySlug",
+    "ipcArgs": [
+      null,
+      {
+        "storySlug": "lc-slug"
+      }
+    ],
+    "userCbArgs": [
+      "lc-slug"
+    ]
+  },
+  "api.onStoryVaultRegistryChanged": {
+    "channel": "storyVaultRegistry:changed",
+    "kind": "noArg",
+    "ipcArgs": [],
+    "userCbArgs": []
+  },
+  "api.onStreamEnd": {
+    "channel": "stream:end",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onStreamError": {
+    "channel": "stream:error",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "category": "c",
+        "message": "m"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "category": "c",
+        "message": "m"
+      }
+    ]
+  },
+  "api.onStreamReasoning": {
+    "channel": "stream:reasoning",
+    "kind": "text",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id"
+      }
+    ]
+  },
+  "api.onStreamToken": {
+    "channel": "stream:token",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onSttResult": {
+    "channel": "stt:result",
+    "kind": "text",
+    "ipcArgs": [
+      null,
+      {
+        "text": "lc-text"
+      }
+    ],
+    "userCbArgs": [
+      "lc-text"
+    ]
+  },
+  "api.onUpdateStatus": {
+    "channel": "update:status",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onVaultCheckChunk": {
+    "channel": "agent:vault-check:chunk",
+    "kind": "chunk",
+    "ipcArgs": [
+      null,
+      {
+        "chunk": "lc-chunk"
+      }
+    ],
+    "userCbArgs": [
+      "lc-chunk"
+    ]
+  },
+  "api.onVaultCheckError": {
+    "channel": "agent:vault-check:error",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onVaultCheckStreamStart": {
+    "channel": "agent:vault-check:stream-start",
+    "kind": "requestId",
+    "ipcArgs": [
+      null,
+      {
+        "requestId": "bridge-id",
+        "category": "c",
+        "message": "m"
+      }
+    ],
+    "userCbArgs": [
+      "bridge-id"
+    ]
+  },
+  "api.onVaultFileChanged": {
+    "channel": "vault:file-changed",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "path": "/tmp/bridge-sample"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "path": "/tmp/bridge-sample"
+      }
+    ]
+  },
+  "api.onVaultGraphTopologyChanged": {
+    "channel": "vault:graph-topology-changed",
+    "kind": "noArg",
+    "ipcArgs": [],
+    "userCbArgs": []
+  },
+  "api.onVaultNotesAssetChanged": {
+    "channel": "vault:notes-asset-changed",
+    "kind": "noArg",
+    "ipcArgs": [
+      null,
+      {
+        "path": "/tmp/bridge-sample"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "path": "/tmp/bridge-sample"
+      }
+    ]
+  },
+  "api.onVaultNotesUpdated": {
+    "channel": "vault:notes-updated",
+    "kind": "noArg",
+    "ipcArgs": [
+      null,
+      {
+        "count": 2,
+        "path": "/tmp/bridge-sample"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "count": 2,
+        "path": "/tmp/bridge-sample"
+      }
+    ]
+  },
+  "api.onVaultsParentMoved": {
+    "channel": "vaultsParent:moved",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onVoiceError": {
+    "channel": "voice:error",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onVoiceSpeakChunk": {
+    "channel": "voice:speak:chunk",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onVoiceSpeakDone": {
+    "channel": "voice:speak:done",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onVoiceSpeakError": {
+    "channel": "voice:speak:error",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onVoiceTranscript": {
+    "channel": "voice:transcript",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onWritingAssistantChunk": {
+    "channel": "agent:writing-assistant:chunk",
+    "kind": "chunk",
+    "ipcArgs": [
+      null,
+      {
+        "chunk": "lc-chunk"
+      }
+    ],
+    "userCbArgs": [
+      "lc-chunk"
+    ]
+  },
+  "api.onWritingAssistantError": {
+    "channel": "agent:writing-assistant:error",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onWritingAssistantScanError": {
+    "channel": "writing-assistant:scan-error",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onWritingAssistantScanResult": {
+    "channel": "writing-assistant:scan-result",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onWritingAssistantScanStart": {
+    "channel": "writing-assistant:scan-start",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onWritingAssistantStreamStart": {
+    "channel": "agent:writing-assistant:stream-start",
+    "kind": "requestId",
+    "ipcArgs": [
+      null,
+      {
+        "requestId": "bridge-id",
+        "category": "c",
+        "message": "m"
+      }
+    ],
+    "userCbArgs": [
+      "bridge-id"
+    ]
+  },
+  "api.onWritingModeChanged": {
+    "channel": "writingMode:changed",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  },
+  "api.onWritingScanResult": {
+    "channel": "writing:scan:result",
+    "kind": "passthrough",
+    "ipcArgs": [
+      null,
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ],
+    "userCbArgs": [
+      {
+        "streamId": "bridge-id",
+        "token": "lc-token",
+        "requestId": "bridge-id",
+        "category": "lc-cat",
+        "message": "lc-msg",
+        "path": "/tmp/bridge-sample",
+        "count": 1,
+        "current": 1,
+        "total": 2,
+        "lastAction": "lc",
+        "proposals": [
+          {
+            "id": "p"
+          }
+        ],
+        "panelId": "bridge-id",
+        "docked": true,
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "alwaysOnTop": false,
+        "sceneId": "bridge-id",
+        "scenePath": "/tmp/bridge-sample",
+        "tips": [
+          "t"
+        ],
+        "scannedAt": "s",
+        "startedAt": "s",
+        "occurredAt": "s",
+        "error": "e",
+        "sessionId": "bridge-id",
+        "text": "lc-text",
+        "isFinal": true,
+        "speakId": "bridge-id",
+        "chunk": {
+          "0": 1,
+          "1": 2,
+          "2": 3
+        },
+        "format": "pcm",
+        "sampleRate": 44100,
+        "agent": "bridge-sample",
+        "agentLabel": "bridge-sample-2",
+        "reason": "hourly_token_cap",
+        "state": "checking",
+        "version": "1",
+        "releaseNotes": null,
+        "vaultRoot": "/tmp/bridge-sample",
+        "notesVaultRoot": "/tmp/bridge-sample",
+        "mode": "m",
+        "focusFlags": {},
+        "editConfig": {},
+        "scope": "sc",
+        "items": [
+          {
+            "bridge": true
+          }
+        ],
+        "tokenUsed": 1,
+        "partial": false,
+        "itemId": "bridge-id",
+        "status": "ok",
+        "action": "a",
+        "storySlug": "lc-slug",
+        "settings": {
+          "bridge": true
+        },
+        "stimulus": "x",
+        "itemPath": "/tmp/bridge-sample",
+        "reasonWrite": "lc"
+      }
+    ]
+  }
+}
