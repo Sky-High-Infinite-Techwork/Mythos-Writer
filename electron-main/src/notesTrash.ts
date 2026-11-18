@@ -529,3 +529,24 @@ export function resetNotesTrashForTests(): void {
   groups.clear();
   entryIndex.clear();
 }
+
+/** Test seams for path helpers that flush/restore depend on (mutation-hardening). */
+export const notesTrashPathSeams = {
+  splitVaultRelPath,
+  vaultRelJoin,
+  depth,
+} as const;
+
+/** Test seam for overlap / flush ordering helpers (mutation-hardening). */
+export const notesTrashGroupSeams = {
+  isAncestorOrSame,
+  groupDepth,
+  groupRoots,
+  overlapChains,
+} as const;
+
+/** Test seam for flush claim idempotence (mutation-hardening). */
+export const notesTrashFlushSeams = {
+  claimGroup,
+  flushClaimedGroups,
+} as const;
