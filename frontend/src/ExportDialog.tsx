@@ -31,6 +31,20 @@ interface Props {
 type ExportResult = { path: string | null; cancelled: boolean; bytes?: number; missingSceneIds?: string[] };
 interface ExportOptions { includeSynopsis: boolean; sceneSeparators: boolean }
 
+type ExportIpcResult = ExportResult | { error: string };
+
+function isExportIpcError(res: ExportIpcResult): res is { error: string } {
+  return typeof (res as { error?: unknown }).error === 'string';
+}
+
+/** Main-process export IPC resolves `{ error }` on failure; only `{ cancelled: true }` is dismissal. */
+function interpretExportIpcResult(res: ExportIpcResult): ExportResult {
+  if (isExportIpcError(res)) throw new Error(res.error);
+  if (res.cancelled === true) return res;
+  if (!res.path) throw new Error('Export failed.');
+  return res;
+}
+
 // ─── Persisted compile options (prototype S.sx.expSyn / expSep defaults) ───
 
 const OPTIONS_KEY = 'mythos-export-options-v1';
@@ -96,7 +110,7 @@ async function exportEpub(scope: ExportScope, stories: Story[], options: ExportO
   let totalBytes = 0;
 
   for (const storyId of storyIds) {
-    const result = await window.api.exportEpub(storyId, undefined, undefined, options);
+    const result = interpretExportIpcResult(await window.api.exportEpub(storyId, undefined, undefined, options));
     if (result.cancelled) return { path: exportedPaths.join('\n') || null, cancelled: true };
     if (result.path) { exportedPaths.push(result.path); totalBytes += result.bytes ?? 0; }
     if (result.missingSceneIds) missingSceneIds.push(...result.missingSceneIds);
@@ -237,12 +251,12 @@ export default function ExportDialog({ scope, stories, onClose, currentChapterId
     try {
       const api = window.api;
       let res: ExportResult;
-      if (format === 'markdown') res = await api.exportMarkdown(effectiveScope);
-      else if (format === 'plaintext') res = await api.exportPlaintext(effectiveScope);
-      else if (format === 'pdf') res = await api.exportPdf(effectiveScope, options);
+      if (format === 'markdown') res = interpretExportIpcResult(await api.exportMarkdown(effectiveScope));
+      else if (format === 'plaintext') res = interpretExportIpcResult(await api.exportPlaintext(effectiveScope));
+      else if (format === 'pdf') res = interpretExportIpcResult(await api.exportPdf(effectiveScope, options));
       else if (format === 'epub') res = await exportEpub(effectiveScope, stories, options);
-      else res = await api.exportDocx(undefined, effectiveScope, options);
-      if (res.cancelled || !res.path) {
+      else res = interpretExportIpcResult(await api.exportDocx(undefined, effectiveScope, options));
+      if (res.cancelled) {
         // Save dialog dismissed — back to the pick step, keep the modal open.
         setStep('pick');
         return;

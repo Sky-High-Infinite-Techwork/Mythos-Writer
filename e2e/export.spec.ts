@@ -601,12 +601,17 @@ test.describe('real markdown/plaintext export pipelines', () => {
     const lockedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-export-ro-'));
     try {
       fs.chmodSync(lockedDir, 0o555);
+      let probeWriteSucceeded = false;
       try {
         fs.writeFileSync(path.join(lockedDir, 'probe.txt'), 'nope');
-        expect(true, 'precondition: directory must not be writable (probe write succeeded)').toBe(false);
+        probeWriteSucceeded = true;
       } catch {
         /* probe correctly failed */
       }
+      expect(
+        probeWriteSucceeded,
+        'precondition: directory must not be writable (probe write succeeded)',
+      ).toBe(false);
 
       await realApp!.evaluate(({ dialog }, { dir }: { dir: string }) => {
         const nodePath = (process as unknown as {
