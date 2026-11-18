@@ -27,6 +27,8 @@ import { LIQUID_NEON_PRESETS, type LiquidNeonPresetKey } from './theme/presets';
 import { notifyMythosActiveVaultChanged } from './migration/MythosMigrationCenter';
 import { stripManifestContentForIpc } from './manifestIpc';
 import { BookSyncNotice, failedManifestRead, isLoadedManifest, manifestSaveOutcome, STORY_LIST_READ_FAILURE, type ManifestSaveOutcome } from './components/BookSyncNotice';
+import { SceneSaveNotice, type SceneSaveFailure } from './components/SceneSaveNotice';
+import { writeSceneVault } from './scenePersist';
 import {
   parseSceneNotes,
   serializeSceneNotes,
@@ -776,6 +778,7 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
 
   const { distractionFree, toggle: toggleDistractionFree } = useFocusMode();
   const [saveState, setSaveState] = useState<'idle' | 'saved'>('idle');
+  const [sceneSaveFailure, setSceneSaveFailure] = useState<SceneSaveFailure | null>(null);
 
   // ─── SKY-1686: Global right-sidebar state ───
   // undefined = settings not yet loaded (sidebar not rendered at all, no space taken).
@@ -3446,17 +3449,42 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
 
   // ─── Story/scene management ───
 
-  const persistSceneMarkdown = useCallback(async (scene: Scene) => {
-    try {
-      // SKY-11646: every caller fires this without awaiting, so on quit the
-      // write can still be in flight when the window closes. Track it as
-      // quit-critical — the flush-before-quit handshake drains it before
-      // acking, which is what keeps the last keystrokes on disk.
-      await trackQuitCriticalWrite(window.api.writeVault(scene.path, blocksToMarkdown(scene)));
-    } catch (e) {
-      console.error('Failed to write scene markdown:', e);
+  const persistSceneMarkdown = useCallback(async (scene: Scene): Promise<boolean> => {
+    const content = blocksToMarkdown(scene);
+    const write = () => writeSceneVault(
+      (path, body) => trackQuitCriticalWrite(window.api.writeVault(path, body)),
+      scene.path,
+      content,
+    );
+    // SKY-11646 / #1904: every caller fires this without awaiting, so on quit the
+    // write can still be in flight when the window closes. Track it as
+    // quit-critical — the flush-before-quit handshake drains it before
+    // acking, which is what keeps the last keystrokes on disk.
+    const ok = await write();
+    if (!ok) {
+      setSceneSaveFailure({ sceneId: scene.id, sceneTitle: scene.title });
+      // eslint-disable-next-line no-console
+      console.error('Failed to write scene markdown:', scene.path);
+      return false;
     }
+    setSceneSaveFailure((prev) => (prev?.sceneId === scene.id ? null : prev));
+    return true;
   }, []);
+
+  const retrySceneSave = useCallback(() => {
+    const failure = sceneSaveFailure;
+    if (!failure) return;
+    const latest = storiesRef.current;
+    for (const story of latest) {
+      for (const chapter of story.chapters) {
+        const scene = chapter.scenes.find((sc) => sc.id === failure.sceneId);
+        if (scene) {
+          void persistSceneMarkdown(scene);
+          return;
+        }
+      }
+    }
+  }, [sceneSaveFailure, persistSceneMarkdown]);
 
   /**
    * F1#9 / Shield / Probe: apply editor blocks to a CAPTURED story/scene id.
@@ -3504,7 +3532,19 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
         return editedStory.chapters.find((ch) => ch.id === targetChapterId) ?? prev;
       });
     }
-    persistSceneMarkdown(updatedScene);
+    void persistSceneMarkdown(updatedScene).then((saved) => {
+      if (!saved) return;
+      if (content.trim()) {
+        checkGettingStartedItem('write-scene');
+        setSeenEmptySceneHints((prev) => new Set(prev).add(sceneId));
+      }
+      window.api.snapshotSave?.(sceneId, content).catch(() => {});
+      if (saveIndicatorTimer.current) clearTimeout(saveIndicatorTimer.current);
+      saveIndicatorTimer.current = setTimeout(() => {
+        setSaveState('saved');
+        saveIndicatorTimer.current = setTimeout(() => setSaveState('idle'), 1500);
+      }, 1200);
+    });
     if (isProvisional && provisionalScene) {
       const committedTabs = storyDocTabs.map((t) =>
         t.id === provisionalScene.tabId ? { ...t, provisional: undefined } : t,
@@ -3513,16 +3553,6 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
       persistDocTabs({ story: { tabs: committedTabs, activeId: provisionalScene.tabId } });
       setProvisionalScene(null);
     }
-    if (content.trim()) {
-      checkGettingStartedItem('write-scene');
-      setSeenEmptySceneHints((prev) => new Set(prev).add(sceneId));
-    }
-    window.api.snapshotSave?.(sceneId, content).catch(() => {});
-    if (saveIndicatorTimer.current) clearTimeout(saveIndicatorTimer.current);
-    saveIndicatorTimer.current = setTimeout(() => {
-      setSaveState('saved');
-      saveIndicatorTimer.current = setTimeout(() => setSaveState('idle'), 1500);
-    }, 1200);
   }, [updateManifest, persistSceneMarkdown, checkGettingStartedItem, provisionalScene, storyDocTabs, persistDocTabs]);
 
   // SKY-1699: Pane 2 blocks change — bind pane2 ids at render so a deferred
@@ -6709,6 +6739,7 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
           §3). Panel border overlays keep the neon look. */}
       <UpdateBanner />
       <BookSyncNotice outcome={bookSave} />
+      <SceneSaveNotice failure={sceneSaveFailure} onRetry={retrySceneSave} />
       {/* PLAN-058 L2 (06:55): the title bar is full window width. The nav
           rail starts in the row below and must not cover the top bar.
           Document tabs stay in the main column under that bar. */}
