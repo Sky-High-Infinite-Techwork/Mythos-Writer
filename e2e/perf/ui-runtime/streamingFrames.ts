@@ -2,12 +2,12 @@
  * streamingFrames.ts — SKY-8217 metric 4 support: "No dropped frames with
  * agents live."
  *
- * Drives a REAL Writing Coach chat streaming session — the only thing mocked
- * is the `agent:writing-assistant` IPC handler in the Electron main process
- * (the Anthropic network boundary), exactly like e2e/writing-assistant.spec.ts
- * already does via its `installIpcMocks`. This module reuses that same
- * `agent:writing-assistant` / `agent:writing-assistant:chunk` channel
- * contract verbatim — it does not invent a new mock shape or IPC channel.
+ * Drives a REAL hub partner chat streaming session — the only thing mocked
+ * is the `agent:brainstorm` IPC handler in the Electron main process
+ * (the Anthropic network boundary). Partner send (`ahp-partner-chat-send`) goes
+ * through `invokeBrainstorm` → `agent:brainstorm`, matching
+ * `electron-main/src/main.ts` stream-start + chunk events on
+ * `agent:brainstorm:stream-start` / `agent:brainstorm:chunk`.
  *
  * This file only installs the mock, opens the chat panel, and sends a
  * prompt — it does NOT sample frames. The integration spec is expected to
@@ -50,10 +50,10 @@ export interface StreamingMockOptions {
 }
 
 /**
- * Installs ONLY the `agent:writing-assistant` chat-stream IPC mock in the
- * Electron main process — not the full Writing Assistant mock surface
- * (tips/beta-read/voice) that e2e/writing-assistant.spec.ts's
- * `installIpcMocks` sets up, since this harness only needs the chat stream.
+ * Installs the hub partner `agent:brainstorm` chat-stream IPC mock in the
+ * Electron main process — not the full writing-assistant / tips surface from
+ * `e2e/writing-assistant.spec.ts`'s `installIpcMocks`, since partner chat
+ * never calls `agent:writing-assistant`.
  *
  * Defaults (tokenCount=30, chatDelayMs=100) keep a streaming window open for
  * ~3 seconds, giving `sampleFrameDeltas` (animationFps.ts) room to capture a
@@ -72,16 +72,23 @@ export async function installMockChatStream(
       { ipcMain },
       args: { chatTokens: string[]; chatResponse: string; chatDelayMs: number },
     ) => {
-      try {
-        ipcMain.removeHandler('agent:writing-assistant');
-      } catch {
-        /* not yet registered */
-      }
-      ipcMain.handle('agent:writing-assistant', async (event) => {
+      const safeRemove = (channel: string) => {
+        try {
+          ipcMain.removeHandler(channel);
+        } catch {
+          /* not yet registered */
+        }
+      };
+      safeRemove('agent:brainstorm');
+      ipcMain.handle('agent:brainstorm', async (event) => {
+        const requestId = `mock-brainstorm-${Date.now()}`;
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('agent:brainstorm:stream-start', { requestId });
+        }
         for (const token of args.chatTokens) {
           await new Promise<void>((r) => setTimeout(r, args.chatDelayMs));
           if (!event.sender.isDestroyed()) {
-            event.sender.send('agent:writing-assistant:chunk', { chunk: token });
+            event.sender.send('agent:brainstorm:chunk', { chunk: token });
           }
         }
         return { text: args.chatResponse };
@@ -90,6 +97,9 @@ export async function installMockChatStream(
     { chatTokens, chatResponse, chatDelayMs },
   );
 }
+
+/** Full mocked response text for assertions (default installMockChatStream tokens). */
+export const DEFAULT_MOCK_CHAT_RESPONSE = generateLoremTokens(30).join('');
 
 /**
  * Opens the Writing Coach chat view in the agent hub panel.

@@ -254,8 +254,9 @@ for (const sceneCount of [50, 600]) {
       const budget = SAVE_MS_BUDGET[sceneCount];
       // eslint-disable-next-line no-console
       console.log(
-        `[perf] ${sceneCount} scenes — cold=${coldMs.toFixed(1)}ms repeat=${repeatMedianMs.toFixed(1)}ms ` +
-          `(budget cold<${budget.cold} repeat<${budget.repeat}) manifest=${(manifestBytes / 1024).toFixed(1)}KB`,
+        `[SKY-6198 perf] ${sceneCount} scenes × 8KB prose — manifest.json: ${(manifestBytes / 1024).toFixed(1)} KB; ` +
+          `cold save: ${coldMs.toFixed(1)}ms; repeat-save median (n=${REPS - 1}): ${repeatMedianMs.toFixed(1)}ms ` +
+          `(budget cold<${budget.cold} repeat<${budget.repeat})`,
       );
       expect(coldMs).toBeLessThan(budget.cold);
       expect(repeatMedianMs).toBeLessThan(budget.repeat);

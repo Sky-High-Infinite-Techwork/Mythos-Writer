@@ -351,18 +351,10 @@ test.describe.serial('#1774 Accent breathe', () => {
         layoutCount: after.LayoutCount - before.LayoutCount,
       };
     };
-    // A second sample in the same mode: each mode is judged by its better
-    // window (frames and style work alike), so a one-off stall (GC,
-    // compositor) in a single 4 s window can't decide the result; a per-tick
-    // cost shows up in both.
-    const meanStats = (a: FrameStats, b: FrameStats): FrameStats => ({
-      avgFps: (a.avgFps + b.avgFps) / 2,
-      p50Fps: (a.p50Fps + b.p50Fps) / 2,
-      p95Fps: (a.p95Fps + b.p95Fps) / 2,
-      droppedFramePct: (a.droppedFramePct + b.droppedFramePct) / 2,
-      sampleCount: Math.min(a.sampleCount, b.sampleCount),
-    });
-    const fmt = (s: FrameStats) =>
+    // Interleaved ON/OFF pairs: compare on1 to off1 and on2 to off2 directly
+    // (no cross-mode mean). Each pair absorbs shared-runner jank equally.
+    type FrameStatsNoDeltas = Omit<FrameStats, 'deltasMs'>;
+    const fmt = (s: FrameStatsNoDeltas) =>
       `avg=${s.avgFps.toFixed(1)} p50=${s.p50Fps.toFixed(1)} floor(p5)=${s.p95Fps.toFixed(1)} ` +
       `dropped=${s.droppedFramePct.toFixed(1)}% n=${s.sampleCount}`;
 
@@ -445,8 +437,6 @@ test.describe.serial('#1774 Accent breathe', () => {
     await removeProxy();
     await client.detach().catch(() => {});
     const ticks = 4000 / TICK_MS;
-    const on = on1;
-    const off = off1;
     const onRecalcMs = Math.min(on1.recalcStyleMs, on2.recalcStyleMs);
     const offRecalcMs = Math.min(off1.recalcStyleMs, off2.recalcStyleMs);
     const perTickRecalcMs = (onRecalcMs - offRecalcMs) / ticks;
@@ -454,36 +444,41 @@ test.describe.serial('#1774 Accent breathe', () => {
 
     // eslint-disable-next-line no-console
     console.log(
-      `[#1774 perf] ON  ${fmt(on.stats)} | 2nd ${fmt(on2.stats)} distinct--b1=${on.distinct}/${on2.distinct} ` +
-        `RecalcStyle=${on.recalcStyleMs.toFixed(1)}/${on2.recalcStyleMs.toFixed(1)}ms Layout=${on.layoutCount}\n` +
-        `[#1774 perf] OFF ${fmt(off.stats)} | 2nd ${fmt(off2.stats)} distinct--b1=${off.distinct}/${off2.distinct} ` +
-        `RecalcStyle=${off.recalcStyleMs.toFixed(1)}/${off2.recalcStyleMs.toFixed(1)}ms Layout=${off.layoutCount}\n` +
-        `[#1774 perf] delta RecalcStyle=${(onRecalcMs - offRecalcMs).toFixed(1)}ms (best windows) ` +
+      `[#1774 perf] ON  ${fmt(on1.stats)} | 2nd ${fmt(on2.stats)} distinct--b1=${on1.distinct}/${on2.distinct} ` +
+        `RecalcStyle=${on1.recalcStyleMs.toFixed(1)}/${on2.recalcStyleMs.toFixed(1)}ms Layout=${on1.layoutCount}\n` +
+      `[#1774 perf] OFF ${fmt(off1.stats)} | 2nd ${fmt(off2.stats)} distinct--b1=${off1.distinct}/${off2.distinct} ` +
+        `RecalcStyle=${off1.recalcStyleMs.toFixed(1)}/${off2.recalcStyleMs.toFixed(1)}ms Layout=${off1.layoutCount}\n` +
+      `[#1774 perf] delta RecalcStyle=${(onRecalcMs - offRecalcMs).toFixed(1)}ms (best windows) ` +
         `(${perTickRecalcMs.toFixed(2)}ms/tick over ${ticks} ticks, +${PROXY_N} proxy elements) ` +
-        `Layout=${on.layoutCount - off.layoutCount}\n` +
-        `[#1774 perf] baseline one root-token change=${perChangeRecalcMs.toFixed(2)}ms ` +
+        `Layout=${on1.layoutCount - off1.layoutCount}\n` +
+      `[#1774 perf] baseline one root-token change=${perChangeRecalcMs.toFixed(2)}ms ` +
         `ratio=${(perTickRecalcMs / perChangeRecalcMs).toFixed(2)} (max ${PER_TICK_RECALC_RATIO_MAX})`,
     );
 
     // The ON sample really breathed; the OFF sample really didn't.
-    expect(on.distinct).toBeGreaterThanOrEqual(10);
+    expect(on1.distinct).toBeGreaterThanOrEqual(10);
     expect(on2.distinct).toBeGreaterThanOrEqual(10);
-    expect(off.distinct).toBe(1);
+    expect(off1.distinct).toBe(1);
     expect(off2.distinct).toBe(1);
-    // Mean of interleaved ON windows within +2 points of the mean OFF windows
-    // (no best-of-N). Interleaving is what absorbs runner jank that hits only
-    // one side; the pre-fix per-tick transition restarts measured 5–9% ON vs
-    // 0% OFF in every window, which this still fails.
-    const onMean = meanStats(on1.stats, on2.stats);
-    const offMean = meanStats(off1.stats, off2.stats);
-    const dropDeltaPp = onMean.droppedFramePct - offMean.droppedFramePct;
+    // Paired interleaved windows within +2 pp dropped-frame delta and −3 fps floor.
+    // Interleaving absorbs runner jank; the pre-fix per-tick transition restarts
+    // measured 5–9% ON vs 0% OFF in every window, which this still fails.
+    const dropPair1Pp = on1.stats.droppedFramePct - off1.stats.droppedFramePct;
+    const dropPair2Pp = on2.stats.droppedFramePct - off2.stats.droppedFramePct;
+    const dropDeltaPp = Math.min(dropPair1Pp, dropPair2Pp);
+    const fpsPair1 = on1.stats.p95Fps - (off1.stats.p95Fps - 3);
+    const fpsPair2 = on2.stats.p95Fps - (off2.stats.p95Fps - 3);
+    const fpsPairMin = Math.min(fpsPair1, fpsPair2);
     // eslint-disable-next-line no-console
     console.log(
-      `[perf] accent-breathe onDropped=${onMean.droppedFramePct.toFixed(2)}% ` +
-        `offDropped=${offMean.droppedFramePct.toFixed(2)}% delta=${dropDeltaPp.toFixed(2)}pp`,
+      `[perf] accent-breathe dropΔ paired min=${dropDeltaPp.toFixed(2)}pp ` +
+        `(pair1=${dropPair1Pp.toFixed(2)} pair2=${dropPair2Pp.toFixed(2)}) ` +
+        `fpsFloorΔ min=${fpsPairMin.toFixed(2)}`,
     );
-    expect(onMean.droppedFramePct).toBeLessThanOrEqual(offMean.droppedFramePct + 2);
-    expect(onMean.p95Fps).toBeGreaterThanOrEqual(offMean.p95Fps - 3);
+    expect(dropPair1Pp).toBeLessThanOrEqual(2);
+    expect(dropPair2Pp).toBeLessThanOrEqual(2);
+    expect(on1.stats.p95Fps).toBeGreaterThanOrEqual(off1.stats.p95Fps - 3);
+    expect(on2.stats.p95Fps).toBeGreaterThanOrEqual(off2.stats.p95Fps - 3);
     // A tick costs about one root-token change: no extra whole-tree recalc.
     expect(perChangeRecalcMs).toBeGreaterThan(0);
     expect(perTickRecalcMs).toBeLessThanOrEqual(perChangeRecalcMs * PER_TICK_RECALC_RATIO_MAX);

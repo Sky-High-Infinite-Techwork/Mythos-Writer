@@ -36,6 +36,7 @@ import { measureKeystrokeToPaint } from './ui-runtime/keystrokePaint';
 import { measureIdleCpu } from './ui-runtime/idleCpu';
 import { sampleFrameDeltas, summarizeFrames } from './ui-runtime/animationFps';
 import {
+  DEFAULT_MOCK_CHAT_RESPONSE,
   installMockChatStream,
   openWritingCoachChat,
   sendPromptAndWaitForStreamStart,
@@ -266,6 +267,12 @@ test.describe('SKY-8217 metric 4 — dropped frames with agents live', () => {
 
     await installMockChatStream(app!, { tokenCount: 30, chatDelayMs: 100 });
     await sendPromptAndWaitForStreamStart(page, 'Give me feedback on this scene.');
+
+    await expect(page.getByTestId('ahp-partner-chat-error')).toHaveCount(0);
+    await expect(page.locator('.trp-bubble--agent').last()).toContainText(
+      DEFAULT_MOCK_CHAT_RESPONSE.trim().slice(0, 24),
+      { timeout: 15_000 },
+    );
 
     const streamingDeltas = await sampleFrameDeltas(page, 2500);
     const streamingStats = summarizeFrames(streamingDeltas);
