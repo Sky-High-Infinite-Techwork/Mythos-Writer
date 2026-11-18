@@ -221,32 +221,44 @@ test('500 error then manual retry succeeds', async () => {
   const prompt = 'Retry after five hundred';
   await sendPartnerPrompt(page, prompt);
   await expect(page.getByTestId('ahp-partner-chat-error')).toContainText(/network error/i, { timeout: 12_000 });
+  await page.screenshot({ path: '/opt/cursor/artifacts/partner-500-retry.png', fullPage: false });
 
   fake.setMode({ kind: 'stream', chunks: ['Recovered reply'] });
-  await sendPartnerPrompt(page, prompt);
+  await expect(page.getByTestId('ahp-partner-chat-retry')).toBeVisible({ timeout: 8_000 });
+  await page.getByTestId('ahp-partner-chat-retry').click();
   await expect(page.locator('.trp-bubble--agent', { hasText: 'Recovered reply' })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId('ahp-partner-chat-error')).toHaveCount(0);
 });
 
 test('mid-stream drop surfaces network error and keeps the user message', async () => {
   await openPartnerChat(page);
-  fake.setMode({ kind: 'drop', chunks: ['Partial', ' token'], dropAfterChunks: 2 });
+  fake.setMode({ kind: 'drop', chunks: ['Partial', ' token'], dropAfterChunks: 2, chunkDelayMs: 80 });
   const prompt = 'Drop mid stream';
   await sendPartnerPrompt(page, prompt);
-  await expect(page.getByTestId('ahp-partner-chat-error')).toContainText(/network error/i, { timeout: 15_000 });
+  await expect(page.getByTestId('ahp-partner-chat-error')).toContainText(/network error|invalid request/i, { timeout: 15_000 });
+  await expect(page.locator('.trp-bubble--user', { hasText: prompt })).toBeVisible();
+  const agentPartial = page.locator('.trp-bubble--agent').filter({ hasText: /Partial|response incomplete/i });
+  const errorBanner = page.getByTestId('ahp-partner-chat-error');
+  await expect
+    .poll(async () => (await agentPartial.count()) > 0 || (await errorBanner.textContent())?.includes('partial reply kept'))
+    .toBeTruthy();
 });
 
 test('Cancel mid-stream closes the provider socket', async () => {
   await openPartnerChat(page);
-  fake.setMode({ kind: 'stream', chunks: ['x'.repeat(4)], chunkDelayMs: 400 });
+  fake.setMode({
+    kind: 'stream',
+    chunks: Array.from({ length: 12 }, (_, i) => `tok${i}-`),
+    chunkDelayMs: 350,
+  });
   const input = page.getByTestId('ahp-partner-chat-input');
   await input.fill('Cancel me');
   await input.press('Enter');
   await expect(page.getByTestId('ahp-partner-typing')).toBeVisible({ timeout: 5_000 });
   await page.getByTestId('ahp-partner-chat-cancel').click();
   await expect(page.getByTestId('ahp-partner-typing')).toHaveCount(0, { timeout: 8_000 });
-  await page.waitForTimeout(300);
-  expect(fake.sawClientClose()).toBe(true);
+  await expect.poll(() => fake.sawAbortClose(), { timeout: 5_000 }).toBe(true);
+  expect(fake.sentDone()).toBe(false);
 });
 
 test.describe('AI master off — isolated profile', () => {

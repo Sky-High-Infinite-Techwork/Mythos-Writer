@@ -227,11 +227,10 @@ test('error state: failed provider response keeps the user message; resend recov
 
   await expect(page.getByTestId('ahp-partner-chat-error')).toBeVisible({ timeout: 12_000 });
   await expect(page.getByTestId('ahp-partner-chat-error')).toContainText(/network error/i);
+  await expect(page.locator('.trp-bubble--user', { hasText: prompt })).toBeVisible();
 
   fake.setMode({ kind: 'stream', chunks: ['Coach reply after retry.'] });
-  await expect(input).toBeEnabled({ timeout: 8_000 });
-  await input.fill(prompt);
-  await input.press('Enter');
+  await page.getByTestId('ahp-partner-chat-retry').click();
 
   await expect(page.locator('.trp-bubble--agent', { hasText: 'Coach reply after retry.' })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId('ahp-partner-chat-error')).toHaveCount(0);

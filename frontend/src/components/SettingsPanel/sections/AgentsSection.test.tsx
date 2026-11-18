@@ -3,7 +3,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import AgentsSection from './AgentsSection';
 import type { AgentOverrideState, ModelListStatus } from '../settingsPanelTypes';
-import { BETA_READER_DEFAULTS } from '../settingsPanelTypes';
+import { BETA_READER_DEFAULTS, DEFAULT_AGENT_OVERRIDE } from '../settingsPanelTypes';
+
+type SetAgentField = React.ComponentProps<typeof AgentsSection>['setAgentField'];
+type SetCategoryAutoApply = React.ComponentProps<typeof AgentsSection>['setCategoryAutoApply'];
+type SetCategoryAutoApplyThreshold = React.ComponentProps<typeof AgentsSection>['setCategoryAutoApplyThreshold'];
 
 const baseAgents = {
   writingAssistant: {
@@ -46,15 +50,18 @@ const baseAgents = {
 };
 
 const emptyOverrides: Record<'writingAssistant' | 'brainstorm' | 'archive' | 'betaReader', AgentOverrideState> = {
-  writingAssistant: { enabled: false, kind: 'anthropic', model: '', apiKey: '', baseUrl: '' },
-  brainstorm: { enabled: false, kind: 'anthropic', model: '', apiKey: '', baseUrl: '' },
-  archive: { enabled: false, kind: 'anthropic', model: '', apiKey: '', baseUrl: '' },
-  betaReader: { enabled: false, kind: 'anthropic', model: '', apiKey: '', baseUrl: '' },
+  writingAssistant: { ...DEFAULT_AGENT_OVERRIDE },
+  brainstorm: { ...DEFAULT_AGENT_OVERRIDE },
+  archive: { ...DEFAULT_AGENT_OVERRIDE },
+  betaReader: { ...DEFAULT_AGENT_OVERRIDE },
 };
+
+const noopCategoryAutoApply = vi.fn() as SetCategoryAutoApply;
+const noopCategoryThreshold = vi.fn() as SetCategoryAutoApplyThreshold;
 
 type RenderSectionOpts = Partial<{
   settings: AppSettings;
-  setAgentField: ReturnType<typeof vi.fn>;
+  setAgentField: SetAgentField;
   setSettings: ReturnType<typeof vi.fn>;
   providerKind: 'ollama' | 'anthropic';
   modelListStatus: ModelListStatus;
@@ -63,7 +70,7 @@ type RenderSectionOpts = Partial<{
 }>;
 
 async function renderSection(overrides?: RenderSectionOpts) {
-  const setAgentField = overrides?.setAgentField ?? vi.fn();
+  const setAgentField: SetAgentField = overrides?.setAgentField ?? vi.fn() as SetAgentField;
   const setSettings = overrides?.setSettings ?? vi.fn((fn: (p: AppSettings) => AppSettings) => fn);
   const settings: AppSettings = overrides?.settings ?? {
     apiKey: '',
@@ -95,8 +102,8 @@ async function renderSection(overrides?: RenderSectionOpts) {
         betaReader: '',
       }}
       setAgentField={setAgentField}
-      setCategoryAutoApply={vi.fn()}
-      setCategoryAutoApplyThreshold={vi.fn()}
+      setCategoryAutoApply={noopCategoryAutoApply}
+      setCategoryAutoApplyThreshold={noopCategoryThreshold}
       setAgentOverride={vi.fn()}
       onAgentTest={vi.fn()}
       micDevices={[{ deviceId: 'mic1', label: 'USB Mic' }]}
@@ -277,7 +284,14 @@ describe('AgentsSection', () => {
     await renderSection({
       agentOverrides: {
         ...emptyOverrides,
-        writingAssistant: { enabled: true, kind: 'anthropic', model: 'x', apiKey: 'k', baseUrl: '' },
+        writingAssistant: {
+          enabled: true,
+          kind: 'anthropic',
+          model: 'x',
+          apiKey: 'k',
+          apiKeyDirty: false,
+          baseUrl: '',
+        },
       },
     });
     expect(screen.queryByLabelText(/writing coach model/i)).not.toBeInTheDocument();
@@ -470,8 +484,8 @@ describe('AgentsSection', () => {
         agentTestStatus={{ writingAssistant: 'idle', brainstorm: 'idle', archive: 'idle', betaReader: 'idle' }}
         agentTestMsg={{ writingAssistant: '', brainstorm: '', archive: '', betaReader: '' }}
         setAgentField={vi.fn()}
-        setCategoryAutoApply={vi.fn()}
-        setCategoryAutoApplyThreshold={vi.fn()}
+        setCategoryAutoApply={noopCategoryAutoApply}
+        setCategoryAutoApplyThreshold={noopCategoryThreshold}
         setAgentOverride={vi.fn()}
         onAgentTest={vi.fn()}
         micDevices={[]}
@@ -506,8 +520,8 @@ describe('AgentsSection', () => {
         agentTestStatus={{ writingAssistant: 'idle', brainstorm: 'idle', archive: 'idle', betaReader: 'idle' }}
         agentTestMsg={{ writingAssistant: '', brainstorm: '', archive: '', betaReader: '' }}
         setAgentField={vi.fn()}
-        setCategoryAutoApply={vi.fn()}
-        setCategoryAutoApplyThreshold={vi.fn()}
+        setCategoryAutoApply={noopCategoryAutoApply}
+        setCategoryAutoApplyThreshold={noopCategoryThreshold}
         setAgentOverride={vi.fn()}
         onAgentTest={vi.fn()}
         micDevices={[]}
