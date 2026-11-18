@@ -380,25 +380,30 @@ function PartnerChatView({
     setPastOpen(false);
     pastToggleRef.current?.focus();
   }, []);
-  // FD-9 #3 — the session pill stays mounted while Past chats is closed
-  // (TC-8537-02). Escape is handled only inside this region. Capture-phase
-  // listener so Escape closes when focus sits on the session pill (Playwright /
-  // real keyboard) — React bubble-only onKeyDown missed CDP-delivered keys in CI.
+  const onPastChatsEscape = useCallback((event: React.KeyboardEvent) => {
+    if (!pastOpen || event.key !== 'Escape') return;
+    const target = event.target;
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+    event.preventDefault();
+    dismissPastChats();
+  }, [pastOpen, dismissPastChats]);
+  // FD-9 #3 — Escape closes only while focus is inside past-chats (not the editor).
+  // Window capture + activeElement covers Playwright CDP (FORCE_JAVASCRIPT_ACTIONS_TO_NODE24).
   useEffect(() => {
     if (!pastOpen) return;
     const root = pastChatsRef.current;
     if (!root) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      if (!root.contains(event.target as Node)) return;
-      const target = event.target;
-      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+      const active = document.activeElement;
+      if (!active || !root.contains(active)) return;
+      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
       event.preventDefault();
       event.stopPropagation();
       dismissPastChats();
     };
-    root.addEventListener('keydown', onKeyDown, true);
-    return () => root.removeEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [pastOpen, dismissPastChats]);
   // Tip cards always mounted (N4-A tips-only WA); chat stays on the partner thread.
   const [showWriterTips, setShowWriterTips] = useState(false);
@@ -425,6 +430,7 @@ function PartnerChatView({
               aria-expanded={pastOpen}
               aria-controls="ahp-past-chats-history"
               onClick={() => setPastOpen((o) => !o)}
+              onKeyDown={onPastChatsEscape}
               data-testid="ahp-past-chats-toggle"
             >
               <span>Past chats &amp; calls</span>
