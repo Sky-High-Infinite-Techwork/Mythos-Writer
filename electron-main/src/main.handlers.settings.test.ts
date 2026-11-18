@@ -131,6 +131,56 @@ describe('main.handlers settings:set', () => {
     expect(after.stt).toEqual(before.stt);
   });
 
+  it('refuses invalid archive agent baseUrl without persisting hostile URL', async () => {
+    const settingsPath = path.join(bundle.userData, 'app-settings.json');
+    const diskBefore = fs.readFileSync(settingsPath, 'utf-8');
+    const before = JSON.parse(diskBefore) as AppSettings;
+    const poisoned: AppSettings = {
+      ...before,
+      agents: {
+        ...before.agents,
+        archive: {
+          ...before.agents.archive,
+          provider: {
+            kind: before.agents.archive.provider?.kind ?? 'openai',
+            model: before.agents.archive.provider?.model ?? 'gpt-4o',
+            apiKey: before.agents.archive.provider?.apiKey ?? '',
+            baseUrl: 'http://169.254.169.254/latest/meta-data/archive',
+          },
+        },
+      },
+    };
+    const result = await invoke<{ saved: boolean; error?: string }>(IPC_CHANNELS.SETTINGS_SET, {
+      settings: poisoned,
+    });
+    expect(result.saved).toBe(false);
+    expect(result.error).toMatch(/agents\.archive\.provider\.baseUrl/i);
+    expect(fs.readFileSync(settingsPath, 'utf-8')).not.toContain('169.254.169.254');
+  });
+
+  it('settings:set persists archive continuity scheduler toggles', async () => {
+    const settingsPath = path.join(bundle.userData, 'app-settings.json');
+    const before = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
+    const next: AppSettings = {
+      ...before,
+      archiveContinuityEnabled: !before.archiveContinuityEnabled,
+      archiveScanInterval: (before.archiveScanInterval ?? 300) + 15,
+      agents: {
+        ...before.agents,
+        archive: {
+          ...before.agents.archive,
+          enabled: !before.agents.archive.enabled,
+        },
+      },
+    };
+    const result = await invoke<{ saved: boolean }>(IPC_CHANNELS.SETTINGS_SET, { settings: next });
+    expect(result.saved).toBe(true);
+    const after = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
+    expect(after.archiveContinuityEnabled).toBe(next.archiveContinuityEnabled);
+    expect(after.archiveScanInterval).toBe(next.archiveScanInterval);
+    expect(after.agents.archive.enabled).toBe(next.agents.archive.enabled);
+  });
+
   it('settings:set regenerates telemetry sessionId when disabling telemetry', async () => {
     const settingsPath = path.join(bundle.userData, 'app-settings.json');
     const before = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
@@ -150,6 +200,22 @@ describe('main.handlers settings:set', () => {
     expect(after.telemetry?.enabled).toBe(false);
     expect(after.telemetry?.sessionId).not.toBe('telemetry-session-1907-fixed');
     expect(fs.readFileSync(settingsPath, 'utf-8')).toContain(after.telemetry?.sessionId ?? '');
+  });
+
+  it('refuses invalid tts shape without persisting provider change', async () => {
+    const settingsPath = path.join(bundle.userData, 'app-settings.json');
+    const before = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
+    const poisoned = {
+      ...before,
+      tts: { enabled: true, provider: 'auto', localBinaryPath: 12345 },
+    } as unknown as AppSettings;
+    const result = await invoke<{ saved: boolean; error?: string }>(IPC_CHANNELS.SETTINGS_SET, {
+      settings: poisoned,
+    });
+    expect(result.saved).toBe(false);
+    expect(result.error).toBeTruthy();
+    const after = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
+    expect(after.tts).toEqual(before.tts);
   });
 
   it('settings:get returns masked settings without throwing', async () => {

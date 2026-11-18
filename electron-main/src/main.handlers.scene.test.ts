@@ -40,6 +40,14 @@ afterEach(() => {
 });
 
 describe('main.handlers scene:*', () => {
+  it('chapter:get returns null for an unknown chapter id', async () => {
+    await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
+    const got = await invoke<{ chapter: null | { id: string } }>(IPC_CHANNELS.CHAPTER_GET, {
+      chapterId: '00000000-0000-4000-8000-000000000099',
+    });
+    expect(got.chapter).toBeNull();
+  });
+
   it('scene:get returns null prose for unknown sceneId', async () => {
     await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
     const got = await invoke<{ scene: null; prose: string }>(IPC_CHANNELS.SCENE_GET, {
@@ -199,6 +207,57 @@ describe('main.handlers scene:*', () => {
     expect(result).toHaveProperty('error');
     const after = readBytesUnderVault(bundle.storyVaultPath, sceneRelPath);
     expect(after.equals(before)).toBe(true);
+  });
+
+  it('chapter:list, chapter:get, and chapter:save persist title bytes in manifest', async () => {
+    await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
+    const { storyId, chapterId } = storySceneFromManifest(bundle.storyVaultPath, bundle.mythosRoot);
+    const listed = await invoke<{ chapters: Array<{ id: string; title: string }> }>(IPC_CHANNELS.CHAPTER_LIST, {
+      storyId,
+    });
+    expect(listed.chapters.some((c) => c.id === chapterId)).toBe(true);
+    const got = await invoke<{ chapter: { id: string; title: string; order: number } | null }>(
+      IPC_CHANNELS.CHAPTER_GET,
+      { chapterId },
+    );
+    expect(got.chapter?.id).toBe(chapterId);
+    const manifestPath = manifestCachePath(bundle.storyVaultPath);
+    const title = 'Harness Chapter Title 1907';
+    const saved = await invoke<{ chapter: { title: string } }>(IPC_CHANNELS.CHAPTER_SAVE, {
+      chapterId,
+      title,
+      order: got.chapter!.order,
+    });
+    expect(saved.chapter.title).toBe(title);
+    expect(fs.readFileSync(manifestPath, 'utf-8')).toContain(title);
+  });
+
+  it('chapter:create adds a chapter directory and manifest entry', async () => {
+    await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
+    const { storyId } = storySceneFromManifest(bundle.storyVaultPath, bundle.mythosRoot);
+    const title = 'Harness Created Chapter 1907';
+    const created = await invoke<{ id: string; title: string; path: string }>(IPC_CHANNELS.CHAPTER_CREATE, {
+      storyId,
+      title,
+      order: 50,
+    });
+    expect(created.title).toBe(title);
+    expect(fs.existsSync(path.join(bundle.storyVaultPath, created.path))).toBe(true);
+    expect(fs.readFileSync(manifestCachePath(bundle.storyVaultPath), 'utf-8')).toContain(title);
+  });
+
+  it('scene:rename updates manifest title without changing scene prose file', async () => {
+    await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
+    const { sceneId, sceneRelPath } = storySceneFromManifest(bundle.storyVaultPath, bundle.mythosRoot);
+    const proseBefore = readBytesUnderVault(bundle.storyVaultPath, sceneRelPath);
+    const renamed = 'Renamed Scene Harness 1907';
+    const result = await invoke<{ scene: { title: string } }>(IPC_CHANNELS.SCENE_RENAME, {
+      sceneId,
+      title: renamed,
+    });
+    expect(result.scene.title).toBe(renamed);
+    expect(fs.readFileSync(manifestCachePath(bundle.storyVaultPath), 'utf-8')).toContain(renamed);
+    expect(readBytesUnderVault(bundle.storyVaultPath, sceneRelPath)).toEqual(proseBefore);
   });
 
   it('scene:create writes a new scene file and lists it', async () => {
