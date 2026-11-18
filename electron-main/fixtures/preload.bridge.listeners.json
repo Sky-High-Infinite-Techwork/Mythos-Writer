@@ -1402,25 +1402,33 @@
   "api.onFlushBeforeQuit": {
     "channel": "app:flushBeforeQuit",
     "kind": "noArg",
-    "ipcArgs": [],
+    "ipcArgs": [
+      null
+    ],
     "userCbArgs": []
   },
   "api.onNavHistoryBack": {
     "channel": "nav-history:back",
     "kind": "noArg",
-    "ipcArgs": [],
+    "ipcArgs": [
+      null
+    ],
     "userCbArgs": []
   },
   "api.onNavHistoryForward": {
     "channel": "nav-history:forward",
     "kind": "noArg",
-    "ipcArgs": [],
+    "ipcArgs": [
+      null
+    ],
     "userCbArgs": []
   },
   "api.onNavigatorManifestChanged": {
     "channel": "navigator:manifest-changed",
     "kind": "noArg",
-    "ipcArgs": [],
+    "ipcArgs": [
+      null
+    ],
     "userCbArgs": []
   },
   "api.onNavigatorSceneChanged": {
@@ -1473,7 +1481,9 @@
   "api.onNotesVaultRegistryChanged": {
     "channel": "notesVaultRegistry:changed",
     "kind": "noArg",
-    "ipcArgs": [],
+    "ipcArgs": [
+      null
+    ],
     "userCbArgs": []
   },
   "api.onObsidianImportProgress": {
@@ -2012,7 +2022,9 @@
   "api.onPartnerThreadChanged": {
     "channel": "partner-thread:changed",
     "kind": "noArg",
-    "ipcArgs": [],
+    "ipcArgs": [
+      null
+    ],
     "userCbArgs": []
   },
   "api.onProjectSwitched": {
@@ -2215,7 +2227,9 @@
   "api.onStoryVaultRegistryChanged": {
     "channel": "storyVaultRegistry:changed",
     "kind": "noArg",
-    "ipcArgs": [],
+    "ipcArgs": [
+      null
+    ],
     "userCbArgs": []
   },
   "api.onStreamEnd": {
@@ -2979,7 +2993,9 @@
   "api.onVaultGraphTopologyChanged": {
     "channel": "vault:graph-topology-changed",
     "kind": "noArg",
-    "ipcArgs": [],
+    "ipcArgs": [
+      null
+    ],
     "userCbArgs": []
   },
   "api.onVaultNotesAssetChanged": {
