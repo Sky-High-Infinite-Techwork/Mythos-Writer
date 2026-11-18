@@ -115,6 +115,22 @@ describe('main.handlers settings:set', () => {
     );
   });
 
+  it('refuses malformed stt payload without enabling bad stt flags', async () => {
+    const settingsPath = path.join(bundle.userData, 'app-settings.json');
+    const before = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
+    const poisoned = {
+      ...before,
+      stt: { enabled: 'yes', provider: 'auto' },
+    } as unknown as AppSettings;
+    const result = await invoke<{ saved: boolean; error?: string }>(IPC_CHANNELS.SETTINGS_SET, {
+      settings: poisoned,
+    });
+    expect(result.saved).toBe(false);
+    expect(result.error).toBeTruthy();
+    const after = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
+    expect(after.stt).toEqual(before.stt);
+  });
+
   it('settings:set regenerates telemetry sessionId when disabling telemetry', async () => {
     const settingsPath = path.join(bundle.userData, 'app-settings.json');
     const before = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;

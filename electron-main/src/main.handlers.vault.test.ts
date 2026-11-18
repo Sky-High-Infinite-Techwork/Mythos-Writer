@@ -181,6 +181,37 @@ describe('main.handlers vault discovery / create / paths', () => {
     expect(fs.existsSync(path.join(created.mythosVaultRoot, 'mythos.json'))).toBe(true);
   });
 
+  it('vault:createDefaultMythos with default seed writes demo story bytes', async () => {
+    const parent = makeTestTmp('create-default-demo');
+    const created = await invoke<{
+      created: boolean;
+      vaultRoot: string;
+      notesVaultRoot: string;
+      error?: string;
+    }>(IPC_CHANNELS.VAULT_CREATE_DEFAULT_MYTHOS, {
+      parentPath: parent,
+      vaultName: `DemoSeed-${Date.now()}`,
+      activate: false,
+      seedMode: 'default',
+    });
+    expect(created.created).toBe(true);
+    const storyRoot = created.vaultRoot;
+    const mdFiles: string[] = [];
+    const walk = (dir: string, rel = ''): void => {
+      for (const name of fs.readdirSync(dir)) {
+        const abs = path.join(dir, name);
+        const r = rel ? `${rel}/${name}` : name;
+        if (fs.statSync(abs).isDirectory()) walk(abs, r);
+        else if (name.endsWith('.md')) mdFiles.push(r);
+      }
+    };
+    walk(storyRoot);
+    expect(mdFiles.length).toBeGreaterThan(0);
+    const sample = mdFiles[0]!;
+    expect(readBytesUnderVault(storyRoot, sample).length).toBeGreaterThan(10);
+    expect(fs.readdirSync(created.notesVaultRoot).length).toBeGreaterThanOrEqual(0);
+  });
+
   it('vault:createDefaultMythos scaffolds story+notes roots on disk', async () => {
     const parent = makeTestTmp('create-default');
     const created = await invoke<{
@@ -215,6 +246,19 @@ describe('main.handlers vault discovery / create / paths', () => {
     };
     expect(settings.vaultRoot).toBe(created.storyVaultPath);
     expect(settings.notesVaultRoot).toBe(created.notesVaultPath);
+  });
+
+  it('vault:create-from-options refuses unknown mode', async () => {
+    const parent = makeTestTmp('from-options-bad-mode');
+    const created = await invoke<{ ok: boolean; error?: string }>(IPC_CHANNELS.VAULT_CREATE_FROM_OPTIONS, {
+      mode: 'not-a-real-mode' as 'blank',
+      destinationParent: parent,
+      name: 'BadMode',
+      activate: false,
+    });
+    expect(created.ok).toBe(false);
+    expect(created.error).toBeTruthy();
+    expect(fs.existsSync(path.join(parent, 'BadMode'))).toBe(false);
   });
 
   it('vault:create-from-options refuses relative destinationParent', async () => {
