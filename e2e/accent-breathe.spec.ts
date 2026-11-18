@@ -329,6 +329,20 @@ test.describe.serial('#1774 Accent breathe', () => {
     expect(await readState(page)).toBe('running');
   });
 
+  test('red-on-revert: pre-#1774 drop deltas fail ABBA min-over-pairs (+2 pp bar)', () => {
+    // Soak-era paired windows before #1774: every ON sample carried ~5–9pp extra
+    // drops vs its OFF; min(on1−off1, on2−off2) stays above the post-fix gate.
+    for (const window of [
+      { on1: 5.8, off1: 0.2, on2: 7.1, off2: 0.3 },
+      { on1: 6.5, off1: 0.0, on2: 5.2, off2: 0.4 },
+    ]) {
+      const dropPair1 = window.on1 - window.off1;
+      const dropPair2 = window.on2 - window.off2;
+      const dropDeltaPp = Math.min(dropPair1, dropPair2);
+      expect(dropDeltaPp).toBeGreaterThan(2);
+    }
+  });
+
   test('perf: Accent breathe holds frame rate (ON vs OFF, same run)', async () => {
     test.setTimeout(90_000);
     type Metrics = Record<string, number>;
@@ -439,7 +453,8 @@ test.describe.serial('#1774 Accent breathe', () => {
     const recalcPair2Ms = on2.recalcStyleMs - off2.recalcStyleMs;
     const onOffRecalcMs = Math.min(recalcPair1Ms, recalcPair2Ms);
     const perTickRecalcMs = onOffRecalcMs / ticks;
-    // Probe runs immediately after the second OFF window (off2); pair it to off2.
+    // Probe runs after off2; baseline is probe−off2 (pairs with on2−off2 when that
+    // wins min on−off, same as the ABBA layout).
     const perChangeRecalcMs = (probe.recalcStyleMs - off2.recalcStyleMs) / ticks;
 
     // eslint-disable-next-line no-console
@@ -448,11 +463,11 @@ test.describe.serial('#1774 Accent breathe', () => {
         `RecalcStyle=${on1.recalcStyleMs.toFixed(1)}/${on2.recalcStyleMs.toFixed(1)}ms Layout=${on1.layoutCount}\n` +
       `[#1774 perf] OFF ${fmt(off1.stats)} | 2nd ${fmt(off2.stats)} distinct--b1=${off1.distinct}/${off2.distinct} ` +
         `RecalcStyle=${off1.recalcStyleMs.toFixed(1)}/${off2.recalcStyleMs.toFixed(1)}ms Layout=${off1.layoutCount}\n` +
-      `[#1774 perf] delta RecalcStyle=${onOffRecalcMs.toFixed(1)}ms (best pair on−off) ` +
-        `(${perTickRecalcMs.toFixed(2)}ms/tick over ${ticks} ticks, +${PROXY_N} proxy elements) ` +
+      `[#1774 perf] delta RecalcStyle=${onOffRecalcMs.toFixed(1)}ms (min on1−off1, on2−off2) ` +
+        `(${perTickRecalcMs.toFixed(2)}ms/tick over ${ticks} ticks, +${PROXY_N} proxy) ` +
         `Layout=${on1.layoutCount - off1.layoutCount}\n` +
-      `[#1774 perf] baseline one root-token change=${perChangeRecalcMs.toFixed(2)}ms ` +
-        `ratio=${(perTickRecalcMs / perChangeRecalcMs).toFixed(2)} (max ${PER_TICK_RECALC_RATIO_MAX})`,
+      `[#1774 perf] baseline one root-token change=${perChangeRecalcMs.toFixed(2)}ms/tick ` +
+        `(probe vs off2) ratio=${(perTickRecalcMs / perChangeRecalcMs).toFixed(2)} (max ${PER_TICK_RECALC_RATIO_MAX})`,
     );
 
     // The ON sample really breathed; the OFF sample really didn't.
