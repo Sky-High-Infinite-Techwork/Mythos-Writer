@@ -469,10 +469,6 @@ jobs:
       - name: E2E — ExportDialog formats DOCX/EPUB/Markdown (SKY-2213)
         run: xvfb-run --auto-servernum npm run test:e2e:export
 
-      # TEMP PR #1922 gap-05 — one soak run; remove after linked green CI
-      - name: E2E — real export pipeline soak repeat-each=10 (temporary)
-        run: xvfb-run --auto-servernum npx playwright test e2e/export.spec.ts -g "real markdown/plaintext export pipelines" --repeat-each=10 --workers=1 --reporter=list
-
       - name: e2e visual-capture (MYT-531 §9.2/§9.3)
         run: xvfb-run --auto-servernum npm run test:e2e:visual-capture
 
