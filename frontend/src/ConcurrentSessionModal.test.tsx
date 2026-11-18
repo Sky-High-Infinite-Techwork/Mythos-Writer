@@ -11,13 +11,17 @@ const sampleLockfile: LockfileConflictInfo = {
 describe('ConcurrentSessionModal', () => {
   it('names the host holding the vault lock', () => {
     render(<ConcurrentSessionModal lockfileConflict={sampleLockfile} onContinue={vi.fn()} />);
-    expect(screen.getByText('other-machine.local')).toBeDefined();
-    expect(screen.getByText(/already open elsewhere/i)).toBeDefined();
+    expect(screen.getByText('other-machine.local')).toBeVisible();
+    expect(screen.getByText(/already open elsewhere/i)).toHaveTextContent(
+      'This vault is already open elsewhere',
+    );
   });
 
   it('raises the concurrent-session warning as an alert', () => {
     render(<ConcurrentSessionModal lockfileConflict={sampleLockfile} onContinue={vi.fn()} />);
-    expect(screen.getByRole('alert')).toBeDefined();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'This vault is already open elsewhere',
+    );
   });
 
   it('calls onContinue(false) when Continue is clicked without suppressing', () => {
@@ -37,9 +41,15 @@ describe('ConcurrentSessionModal', () => {
 
   it('labels the dialog and links its description for screen readers', () => {
     render(<ConcurrentSessionModal lockfileConflict={sampleLockfile} onContinue={vi.fn()} />);
-    const dialog = screen.getByRole('dialog');
-    expect(dialog.getAttribute('aria-labelledby')).toBeTruthy();
-    expect(dialog.getAttribute('aria-describedby')).toBeTruthy();
+    const dialog = screen.getByRole('dialog', { name: 'Another Session Is Open' });
+    const labelledBy = dialog.getAttribute('aria-labelledby');
+    const describedBy = dialog.getAttribute('aria-describedby');
+    expect(labelledBy).toEqual(expect.stringMatching(/.+/));
+    expect(describedBy).toEqual(expect.stringMatching(/.+/));
+    expect(document.getElementById(labelledBy!)).toHaveTextContent('Another Session Is Open');
+    expect(document.getElementById(describedBy!)).toHaveTextContent(
+      'This vault is already open elsewhere',
+    );
   });
 
   it('SKY-11804: carries no branded cloud-provider copy', () => {

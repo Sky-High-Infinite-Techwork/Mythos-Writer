@@ -5,8 +5,10 @@ import { EmptyState } from './EmptyState';
 describe('EmptyState', () => {
   it('renders icon, heading, and hint', () => {
     render(<EmptyState icon={<svg />} heading="No items yet" hint="Add one to get started." />);
-    expect(screen.getByRole('heading', { name: 'No items yet' })).toBeTruthy();
-    expect(screen.getByText('Add one to get started.')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'No items yet', level: 2 })).toBeVisible();
+    expect(screen.getByText('Add one to get started.')).toHaveTextContent(
+      'Add one to get started.',
+    );
   });
 
   it('omits the action button when none is given', () => {

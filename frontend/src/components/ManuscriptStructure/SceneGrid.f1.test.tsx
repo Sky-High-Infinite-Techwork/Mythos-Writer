@@ -63,8 +63,10 @@ describe('F1#3 SceneGrid empty parts + part drop', () => {
       onCreateChapterInPart: vi.fn(),
     });
 
-    expect(screen.getByTestId('msv-struct-part-header-pB')).toBeTruthy();
-    expect(screen.getByTestId('msv-struct-part-empty-pB')).toBeTruthy();
+    expect(screen.getByTestId('msv-struct-part-header-pB')).toHaveTextContent('Act Two');
+    expect(screen.getByTestId('msv-struct-part-empty-pB')).toHaveTextContent(
+      'No chapters yet.',
+    );
     expect(screen.getByTestId('msv-struct-add-chapter-pB')).toHaveTextContent('+ Add chapter');
   });
 
@@ -78,7 +80,7 @@ describe('F1#3 SceneGrid empty parts + part drop', () => {
     renderGrid(mkStory([partA, partB]), { onMoveChapterToPart: onMove });
 
     const chapterHeader = screen.getByText('Ch2').closest('.chapter-section__header');
-    expect(chapterHeader).toBeTruthy();
+    expect(chapterHeader).toHaveClass('chapter-section__header');
     const dt = { setData: vi.fn(), getData: () => 'ch2', effectAllowed: 'move' };
     fireEvent.dragStart(chapterHeader!, { dataTransfer: dt });
     const partHeader = screen.getByTestId('msv-struct-part-header-pB');
