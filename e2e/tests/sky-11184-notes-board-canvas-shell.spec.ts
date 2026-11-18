@@ -47,6 +47,12 @@ import {
 } from '@playwright/test';
 
 const MAIN_JS = path.resolve(__dirname, '../../out/main/main.js');
+
+test.beforeAll(() => {
+  if (!fs.existsSync(MAIN_JS)) {
+    throw new Error('needs npm run build:electron');
+  }
+});
 const SIDECAR = '.mythos-board.json';
 
 // ── Fixture helpers ─────────────────────────────────────────────────────────
@@ -493,7 +499,6 @@ test('SKY-11336: nested boards address correctly at depth 2 and persist there', 
 
 test('F1#5: boards nav width drag persists across SAME userData relaunch', async () => {
   test.setTimeout(120_000);
-  test.skip(!fs.existsSync(MAIN_JS), 'needs npm run build:electron');
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'f1-w-'));
   const vault = fs.mkdtempSync(path.join(os.tmpdir(), 'f1-w-v-'));
   const notes = fs.mkdtempSync(path.join(os.tmpdir(), 'f1-w-n-'));

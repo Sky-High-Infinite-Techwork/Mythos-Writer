@@ -72,7 +72,4 @@ test.describe('SKY-1362: Accessibility Fixes (WelcomeOverlay era)', () => {
     }
   });
 
-  test('F-12/F-14 wizard Back buttons: retired with OnboardingWizard', () => {
-    test.skip(true, 'F3#9: OnboardingWizard deleted; no step2-back/step3-back surfaces.');
-  });
 });

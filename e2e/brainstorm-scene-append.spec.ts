@@ -4,7 +4,7 @@
  * Real E2E for the Brainstorm → "Open in writing panel" scene-append path.
  *
  * Gap this closes: e2e/brainstorm-wave33.spec.ts (skipped entirely — see
- * test.skip(true, ...) at its top) stubbed the `scene:appendBrainstormNote`
+ * (formerly skipped at its top) stubbed the `scene:appendBrainstormNote`
  * IPC handler to return `{ appended: true }` in every OWP test, so the real
  * write path (electron-main/src/sceneAppendBrainstormNote.ts → db.ts's
  * upsertNote, which persists into <vaultRoot>/.mythos/state.db) was never

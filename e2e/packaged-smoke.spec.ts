@@ -65,8 +65,6 @@ function seedUserData(userData: string, vaultDir: string): void {
 }
 
 test.describe('pkg-e2e-linux', () => {
-  test.skip(!packagedExe, 'MYTHOS_PACKAGED_EXE is unset');
-
   let userData: string;
   let vaultDir: string;
   let electronApp: ElectronApplication | undefined;
@@ -74,6 +72,7 @@ test.describe('pkg-e2e-linux', () => {
   let clientCertListeners = -1;
 
   test.beforeAll(async () => {
+    expect(packagedExe, 'MYTHOS_PACKAGED_EXE is unset').toBeTruthy();
     userData = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-pkg-e2e-'));
     vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-pkg-vault-'));
     seedUserData(userData, vaultDir);

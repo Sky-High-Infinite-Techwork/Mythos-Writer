@@ -921,7 +921,7 @@ test.describe.serial('Suggestion Review comprehensive UI E2E (TC-S-06/07/08/09)'
   // covers those). This seeds and accepts its own suggestion so the audit log
   // has real rows to display.
   //
-  // Was quarantined (test.skip) while SKY-8762 was open: SuggestionDetailPane
+  // Was quarantined while SKY-8762 was open: SuggestionDetailPane
   // treated the auditList() response as a bare AuditEntry[], but the AUDIT_LIST
   // IPC handler resolves { entries: AuditEntry[] } — the .slice TypeError was
   // swallowed by .catch and the pane always showed "No audit entries yet.".

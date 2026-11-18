@@ -484,25 +484,6 @@ test('TC-V-06: Writing Assistant mute toggle renders in Electron', async () => {
   );
 });
 
-// ─── TC-V-07: TTS [Hear] button on suggestion cards (smoke) ──────────────────
-//
-// AC-V-07: "TTS [▶ Hear] button appears on each suggestion card; toggles to [⏸]
-// during playback; plays one card at a time."
-// Primary unit coverage: WritingAssistantPanel.test.tsx
-//
-// E2E smoke: verify the button's HTML contract is correct when a card is rendered.
-// Full behavioural toggle is tested in the unit spec.
-
-test.skip('TC-V-07: Hear button renders on WA suggestion card (requires LLM/seeded card — E2E WA setup pending)', async () => {
-  // Requires Writing Assistant surface to generate a suggestion card, which needs
-  // a real LLM call or a seeded mock. Leave as structural test pending E2E WA setup.
-  // Unit test WritingAssistantPanel.test.tsx > "AC-V-07: Hear button appears..." covers this.
-  const hearBtn = page.locator('.wa-hear-btn').first();
-  await expect(hearBtn).toBeVisible({ timeout: 8_000 });
-  await expect(hearBtn).toHaveAttribute('aria-label', 'Hear suggestion aloud');
-  await expect(hearBtn).toHaveAttribute('aria-pressed', 'false');
-});
-
 // ─── TC-V-08: Session mute toggle behaviour (smoke) ──────────────────────────
 //
 // AC-V-08: "Session mute toggle (🔇) suspends/resumes TTS audio without losing

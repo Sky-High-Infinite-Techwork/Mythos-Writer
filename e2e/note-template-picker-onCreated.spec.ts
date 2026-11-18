@@ -224,10 +224,6 @@ test.describe('TC-TP-01: TemplatePicker onCreated wiring', () => {
     fs.rmSync(notesVaultDir, { recursive: true, force: true });
   });
 
-  test('creating a note via the template picker checks off the Getting Started "notes-vault" item live, with no navigation or reload', async () => {
-    test.skip(true, 'F3#10: GettingStartedPanel deleted — gs-item-notes-vault no longer mounts.');
-  });
-
   test('the note is also visible in the Notes Editor tree without a manual reload', async () => {
     // Still validates TemplatePicker create → Notes tree refresh (independent of GS panel).
     const cta = page.locator('[data-testid="vs-template-cta"]');

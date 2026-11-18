@@ -442,7 +442,6 @@ test('FO-09: "Lore & Myth" can be renamed and moved', async () => {
   // SKY-9347: on native Windows this row never appeared within 30s of a fresh
   // launch even though FO-07 verified the dir on disk; root cause unconfirmed
   // (the failure artifact carried no screenshots — fixed alongside this gate).
-  test.fixme(process.platform === 'win32', 'SKY-9347: row absent after relaunch on Windows, cause TBD');
   await page.locator('[data-testid="vb-row-Lore & Myth"]').dblclick();
   const input = page.locator('.vb-rename-input');
   await expect(input).toBeVisible({ timeout: 5_000 });
