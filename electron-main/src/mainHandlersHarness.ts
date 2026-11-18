@@ -11,6 +11,7 @@ import { IPC_CHANNELS } from './ipc.js';
 import { sanitizeIpcError } from './ipcErrors.js';
 import { SETTINGS_DEFAULTS } from './appSettingsLoad.js';
 import { createMythosVault, type CreateMythosVaultResult } from './mythosFormat/createVault.js';
+import { closeDb } from './db.js';
 import { readSceneFile } from './vault.js';
 import { scanMythosStoryVault } from './mythosFormat/v2Manifest.js';
 import { resolveManifestPath } from './mythosFormat/mythosJson.js';
@@ -22,7 +23,12 @@ const { makeTestTmp, cleanupTestTmp } = require('../test-utils/tmpdir.mjs') as {
   cleanupTestTmp: () => void;
 };
 
-export { handlers, IPC_CHANNELS, makeTestTmp, cleanupTestTmp };
+export { handlers, IPC_CHANNELS, makeTestTmp, cleanupTestTmp, closeDb };
+
+/** Close SQLite before temp teardown — Windows notes-windows holds state.db open otherwise. */
+export function teardownHandlerHarnessSuite(): void {
+  closeDb();
+}
 
 /** Call handlers the way setupIpcMain does for map-based handlers (try/catch → sanitize). */
 export async function invoke<T = unknown>(channel: string, payload?: unknown): Promise<T> {

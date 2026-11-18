@@ -14,6 +14,7 @@ import {
   readBytesUnderVault,
   sceneProseOnDisk,
   seedMythosVaultBundle,
+  teardownHandlerHarnessSuite,
   storySceneFromManifest,
   writeAppSettingsFile,
   writeVaultSettingsFile,
@@ -34,6 +35,7 @@ afterEach(() => {
   } catch {
     /* no lock */
   }
+  teardownHandlerHarnessSuite();
   cleanupTestTmp();
 });
 

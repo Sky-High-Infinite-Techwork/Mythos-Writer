@@ -11,6 +11,7 @@ import {
   assertDirectoryWriteDenied,
   readBytesUnderVault,
   seedMythosVaultBundle,
+  teardownHandlerHarnessSuite,
   writeVaultSettingsFile,
 } from './mainHandlersHarness.js';
 import { generateRegistrationToken } from './registrationToken.js';
@@ -29,6 +30,7 @@ afterEach(() => {
   } catch {
     /* */
   }
+  teardownHandlerHarnessSuite();
   cleanupTestTmp();
 });
 

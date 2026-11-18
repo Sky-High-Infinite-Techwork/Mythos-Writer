@@ -8,6 +8,7 @@ import {
   cleanupTestTmp,
   invoke,
   seedMythosVaultBundle,
+  teardownHandlerHarnessSuite,
 } from './mainHandlersHarness.js';
 import { SETTINGS_DEFAULTS } from './appSettingsLoad.js';
 import type { AppSettings } from './ipc.js';
@@ -20,6 +21,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  teardownHandlerHarnessSuite();
   cleanupTestTmp();
 });
 
