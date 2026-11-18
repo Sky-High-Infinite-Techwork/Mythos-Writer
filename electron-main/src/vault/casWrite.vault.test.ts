@@ -68,13 +68,9 @@ import {
 } from './noFollowWrite.js';
 import { resetNoFollowHooksForTests, setNoFollowHooksForTests } from './noFollowWrite.testing.js';
 import { installNoFollowTestHooks } from './noFollowWrite.js';
-import { hardlinksWork, installVaultOsCapabilityProbes } from './vaultOsGuards.testing.js';
+import { hardlinksWork } from './vaultOsGuards.testing.js';
 
 const PLATFORM_MARK = Symbol.for('mythos.noFollowPlatform');
-
-beforeAll(() => {
-  installVaultOsCapabilityProbes();
-});
 
 describe('writeVaultFileCas', () => {
   let tmp: string;
@@ -227,7 +223,7 @@ describe('writeVaultFileCas', () => {
   },
   );
 
-  it.skipIf(() => !hardlinksWork)('F5 HARD_LINK when an outside hard link appears just before rename', () => {
+  it.skipIf(!hardlinksWork)('F5 HARD_LINK when an outside hard link appears just before rename', () => {
     fs.writeFileSync(path.join(root, 'stories', 's1', 'comments.json'), '{"link":1}');
     const seen = readVaultFileBounded(root, rel);
     const outsideDir = path.join(tmp, 'f5-outside');
@@ -307,7 +303,7 @@ describe('writeVaultFileCas', () => {
     expect(fs.readFileSync(path.join(root, 'stories', 's1', 'comments.json'), 'utf8')).toBe('{"created":true}');
   });
 
-  it.skipIf(() => !hardlinksWork)('refuses HARD_LINK when comments.json is hard-linked outside the vault', () => {
+  it.skipIf(!hardlinksWork)('refuses HARD_LINK when comments.json is hard-linked outside the vault', () => {
     const outsideDir = path.join(tmp, 'outside-link');
     fs.mkdirSync(outsideDir);
     const outside = path.join(outsideDir, 'outside.json');
@@ -592,7 +588,7 @@ describe('vaultWriteForIpc', () => {
     expect(fs.readFileSync(path.join(root, 'stories', 's1', 'comments.json'), 'utf8')).toBe(before);
   });
 
-  it.skipIf(() => !hardlinksWork)('refuses nlink>1 through IPC mapping', () => {
+  it.skipIf(!hardlinksWork)('refuses nlink>1 through IPC mapping', () => {
     const outsideDir = path.join(tmp, 'outside-ipc');
     fs.mkdirSync(outsideDir);
     const inside = path.join(root, 'stories', 's1', 'comments.json');
@@ -742,6 +738,15 @@ describe('vault:read / vault:write via setupIpcMain', () => {
       fs.writeFileSync(path.join(root, 'a.txt'), 'txt');
     }
 
+    function prepareStoryDotSegmentTraps(): void {
+      fs.mkdirSync(path.join(root, 'stories', '.mythos'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'stories', '.mythos', 'a.json'), '{"trap":1}');
+      fs.mkdirSync(path.join(root, 'stories', '.hidden'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'stories', '.hidden', 'a.md'), 'hidden-trap');
+    }
+
+    const storyDotGuardPaths = ['stories\\.mythos\\a.json', 'stories/.hidden/a.md'] as const;
+
     it.each(joinDeniedPaths)('vault:read rejects %s with Path not allowed', async (relPath) => {
       prepareTrapFiles();
       const reply = (await invokeRead({ path: relPath })) as { error?: string; content?: string };
@@ -777,6 +782,31 @@ describe('vault:read / vault:write via setupIpcMain', () => {
       expect(mutantReply.content).toBe('{"trap":1}');
       expect(mutantReply.error).toBeUndefined();
     });
+
+    it.each(storyDotGuardPaths)(
+      'vault:read rejects %s via assertStoryVaultIpcPathAllowed (backslash or nested dot)',
+      async (relPath) => {
+        prepareStoryDotSegmentTraps();
+        const reply = (await invokeRead({ path: relPath })) as { error?: string; content?: string };
+        expect(reply.error).toBe('Path not allowed.');
+        expect(reply.content).toBeUndefined();
+      },
+    );
+
+    it.each(storyDotGuardPaths)(
+      'vault:write rejects %s with zero bytes written (backslash or nested dot)',
+      async (relPath) => {
+        prepareStoryDotSegmentTraps();
+        const before = countVaultFiles();
+        const reply = (await invokeWrite({ path: relPath, content: '{"deny":1}' })) as {
+          bytes: number;
+          error?: string;
+        };
+        expect(reply.bytes).toBe(0);
+        expect(reply.error).toBe('Path not allowed.');
+        expect(countVaultFiles()).toBe(before);
+      },
+    );
 
     it('story vault write refuses dot-segment paths that notes may use (staging dir)', async () => {
       const stagedRel = `${BLANK_MODE_STAGING_DIR}/probe.md`;

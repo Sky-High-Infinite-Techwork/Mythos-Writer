@@ -7,53 +7,72 @@ import path from 'path';
 
 import { sanitizeIpcError } from '../ipcErrors.js';
 
-export let symlinksWork = true;
-export let hardlinksWork = true;
-
-export function installVaultOsCapabilityProbes(): void {
+function probeVaultOsCapabilities(): void {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-vault-os-probe-'));
   try {
+    let symlinkOk = true;
     try {
       fs.symlinkSync('target', path.join(dir, 'link'));
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'EPERM') symlinksWork = false;
+      if (code === 'EPERM') symlinkOk = false;
       else throw err;
     }
+    symlinksWork = symlinkOk;
+
+    let hardlinkOk = true;
     const a = path.join(dir, 'hard-a.txt');
     const b = path.join(dir, 'hard-b.txt');
     fs.writeFileSync(a, 'hardlink-probe');
     try {
       fs.linkSync(a, b);
-      hardlinksWork = fs.statSync(a).nlink >= 2;
+      hardlinkOk = fs.statSync(a).nlink >= 2;
     } catch {
-      hardlinksWork = false;
+      hardlinkOk = false;
     }
+    hardlinksWork = hardlinkOk;
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
-const READ_REFUSAL_MESSAGES = [
-  'Invalid input.',
-  'Path not allowed.',
-  'Permission denied.',
-  'Internal error.',
-] as const;
+/** Set at module load so `it.skipIf(!symlinksWork)` is a real boolean during collection. */
+export let symlinksWork = true;
+/** Set at module load so `it.skipIf(!hardlinksWork)` is a real boolean during collection. */
+export let hardlinksWork = true;
 
-/** Assert bounded read failed closed for the renderer (errno may differ on win32). */
-export function expectVaultReadRefused(err: unknown, channel = 'vault:read'): void {
+probeVaultOsCapabilities();
+
+export type VaultReadRefusalMessage = 'Invalid input.' | 'Path not allowed.' | 'Permission denied.';
+
+/** Assert bounded read failed closed for the renderer with an exact IPC message (never Internal error.). */
+export function expectVaultReadRefused(
+  err: unknown,
+  expected: VaultReadRefusalMessage,
+  channel = 'vault:read',
+): void {
   expect(err).toBeTruthy();
   const sanitized = sanitizeIpcError(channel, err).error;
   expect(sanitized).not.toBe('File not found.');
-  expect(READ_REFUSAL_MESSAGES).toContain(sanitized);
+  expect(sanitized).not.toBe('Internal error.');
+  expect(sanitized).toBe(expected);
 }
 
 /** Directory open: EISDIR on POSIX; EPERM/EACCES/EINVAL paths on native Windows. */
 export function expectVaultReadRefusedDirectory(err: unknown): void {
-  expectVaultReadRefused(err);
+  expect(err).toBeTruthy();
+  const sanitized = sanitizeIpcError('vault:read', err).error;
+  expect(sanitized).not.toBe('File not found.');
+  expect(sanitized).not.toBe('Internal error.');
   if (process.platform !== 'win32') {
     expect((err as NodeJS.ErrnoException).code).toBe('EISDIR');
-    expect(sanitizeIpcError('vault:read', err).error).toBe('Invalid input.');
+    expect(sanitized).toBe('Invalid input.');
+  } else {
+    const win32DirectoryRefusals: VaultReadRefusalMessage[] = [
+      'Invalid input.',
+      'Path not allowed.',
+      'Permission denied.',
+    ];
+    expect(win32DirectoryRefusals).toContain(sanitized);
   }
 }
