@@ -3,8 +3,9 @@
 // Loads preload.ts with mocked electron, captures window.api / window.mythosIPC, and
 // asserts every frozen exposeInMainWorld entry from ipcSurface.contract.freeze.json.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -334,11 +335,7 @@ function assertListenerForwardsFromTable(
   expect(spec, `missing listener fixture for ${key}`).toBeDefined();
   userCb.mockClear();
   const invokeArgs = spec!.ipcArgs.map((arg) => (arg === null ? FAKE_IPC_RENDERER_EVENT : arg));
-  if (invokeArgs.length === 0) {
-    ipcHandler();
-  } else {
-    ipcHandler(...invokeArgs);
-  }
+  ipcHandler(...invokeArgs);
   expect(userCb).toHaveBeenCalledTimes(1);
   expect(userCb).toHaveBeenCalledWith(...spec!.userCbArgs);
   for (const call of userCb.mock.calls) {
@@ -478,6 +475,13 @@ describe('preload bridge', () => {
   it('isPackaged is a boolean constant, not IPC', () => {
     expect((capturedWorlds.api as { isPackaged: boolean }).isPackaged).toBe(false);
   });
+
+  it('no-arg listener table rejects raw ipcRenderer.on(channel, cb) wiring (red-on-revert)', () => {
+    const key = 'api.onFlushBeforeQuit';
+    const cb = vi.fn<(arg?: unknown) => void>();
+    const rawUserCbOnChannel = cb as unknown as (...args: unknown[]) => void;
+    expect(() => assertListenerForwardsFromTable(key, rawUserCbOnChannel, cb)).toThrow();
+  });
 });
 
 describe.skipIf(!process.env.PRELOAD_BRIDGE_RECORD)('preload bridge recorder', () => {
@@ -512,13 +516,23 @@ describe.skipIf(!process.env.PRELOAD_BRIDGE_RECORD)('preload bridge recorder', (
   });
 });
 
-function writeMutatedPreloadToFixture(channelNeedle: string, channelReplacement: string): string {
+let mutatedPreloadPathForCleanup: string | undefined;
+
+function writeMutatedPreloadToTemp(channelNeedle: string, channelReplacement: string): string {
   const original = fs.readFileSync(path.join(SRC_DIR, 'preload.ts'), 'utf8');
   const mutated = original
-    .split(channelNeedle).join(channelReplacement)
-    .split("from './").join("from '../src/");
-  const outPath = path.join(FIXTURES_DIR, 'bridge-mutated-preload.ts');
+    .split(channelNeedle)
+    .join(channelReplacement)
+    .replace(/from '\.\/([^']+)'/g, (_match, rel: string) => {
+      const abs = path.join(SRC_DIR, rel).split(path.sep).join('/');
+      return `from '${abs}'`;
+    });
+  const outPath = path.join(
+    os.tmpdir(),
+    `mythos-bridge-mutated-preload-${process.pid}-${Date.now()}.ts`,
+  );
   fs.writeFileSync(outPath, mutated);
+  mutatedPreloadPathForCleanup = outPath;
   return outPath;
 }
 
@@ -552,16 +566,22 @@ async function assertReadVaultChannelContractUnderPreload(moduleHref: string): P
 }
 
 describe('preload bridge mutation sentinel', () => {
+  afterAll(() => {
+    if (mutatedPreloadPathForCleanup && fs.existsSync(mutatedPreloadPathForCleanup)) {
+      fs.unlinkSync(mutatedPreloadPathForCleanup);
+    }
+    const staleFixture = path.join(FIXTURES_DIR, 'bridge-mutated-preload.ts');
+    if (fs.existsSync(staleFixture)) {
+      fs.unlinkSync(staleFixture);
+    }
+  });
+
   it('loads mutated preload and fails the vault:read channel contract', async () => {
     const mutatedHref = pathToFileURL(
-      writeMutatedPreloadToFixture("'vault:read'", "'vault:read-MUTATION-1910'"),
+      writeMutatedPreloadToTemp("'vault:read'", "'vault:read-MUTATION-1910'"),
     ).href;
-    let failed = false;
-    try {
-      await assertReadVaultChannelContractUnderPreload(mutatedHref);
-    } catch {
-      failed = true;
-    }
-    expect(failed).toBe(true);
+    await expect(assertReadVaultChannelContractUnderPreload(mutatedHref)).rejects.toThrow(
+      /vault:read-MUTATION-1910/,
+    );
   });
 });
