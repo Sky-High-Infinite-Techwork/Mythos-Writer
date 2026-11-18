@@ -476,6 +476,12 @@ test.describe.serial('#1774 Accent breathe', () => {
     // 0% OFF in every window, which this still fails.
     const onMean = meanStats(on1.stats, on2.stats);
     const offMean = meanStats(off1.stats, off2.stats);
+    const dropDeltaPp = onMean.droppedFramePct - offMean.droppedFramePct;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[perf] accent-breathe onDropped=${onMean.droppedFramePct.toFixed(2)}% ` +
+        `offDropped=${offMean.droppedFramePct.toFixed(2)}% delta=${dropDeltaPp.toFixed(2)}pp`,
+    );
     expect(onMean.droppedFramePct).toBeLessThanOrEqual(offMean.droppedFramePct + 2);
     expect(onMean.p95Fps).toBeGreaterThanOrEqual(offMean.p95Fps - 3);
     // A tick costs about one root-token change: no extra whole-tree recalc.
