@@ -627,7 +627,7 @@ test.describe('real markdown/plaintext export pipelines', () => {
       const dialog = realPage.locator('[role="dialog"][aria-labelledby="export-dialog-title"]');
       await dialog.locator('input[type="radio"][value="markdown"]').click();
       const alertPromise = realPage.waitForEvent('dialog');
-      await dialog.getByRole('button', { name: /^Export/ }).click();
+      await dialog.getByRole('button', { name: /^Export/ }).click({ noWaitAfter: true });
       const alert = await alertPromise;
       expect(alert.message()).toMatch(/Export failed/i);
       await alert.accept();

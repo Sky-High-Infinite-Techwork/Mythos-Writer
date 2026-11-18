@@ -261,7 +261,9 @@ export default function ExportDialog({ scope, stories, onClose, currentChapterId
         setStep('pick');
         return;
       }
-      setDone({ path: res.path, bytes: res.bytes, missingSceneIds: res.missingSceneIds });
+      const exportedPath = res.path;
+      if (!exportedPath) throw new Error('Export failed.');
+      setDone({ path: exportedPath, bytes: res.bytes, missingSceneIds: res.missingSceneIds });
       setStep('done');
     } catch (err) {
       alert(`Export failed: ${(err as Error).message}`);
