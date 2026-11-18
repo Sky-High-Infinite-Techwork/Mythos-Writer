@@ -6394,7 +6394,32 @@ export const handlers: IpcHandlers = {
     {
       const current = loadVaultSettings();
       const remaining = pruneRecentProjectsForTrash(current.recentProjects ?? [], vaultPath, level);
-      saveVaultSettings({ recentProjects: remaining });
+      const settingsPatch: Parameters<typeof saveVaultSettings>[0] = { recentProjects: remaining };
+      const resolvedTrash = path.resolve(vaultPath);
+      const activeStory = current.vaultRoot ? path.resolve(current.vaultRoot) : null;
+      let activeTrashed = false;
+      if (level === 'mythos') {
+        activeTrashed =
+          activeStory !== null &&
+          (activeStory === resolvedTrash ||
+            activeStory.startsWith(resolvedTrash + path.sep) ||
+            mythosRootForStoryVault(activeStory) === resolvedTrash);
+      } else if (level === 'story') {
+        activeTrashed = activeStory === resolvedTrash;
+      } else if (level === 'notes' && current.notesVaultRoot) {
+        activeTrashed = path.resolve(current.notesVaultRoot) === resolvedTrash;
+      }
+      if (activeTrashed) {
+        const fallback = remaining[0];
+        if (fallback) {
+          settingsPatch.vaultRoot = fallback.vaultRoot;
+          settingsPatch.notesVaultRoot = fallback.notesVaultRoot;
+        } else {
+          settingsPatch.vaultRoot = undefined;
+          settingsPatch.notesVaultRoot = undefined;
+        }
+      }
+      saveVaultSettings(settingsPatch);
     }
 
     // SKY-11154: inner notes/story vaults also live in notes-vaults.json /

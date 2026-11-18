@@ -133,6 +133,8 @@ export default function VaultOverflowMenu({
         setHideOpen(false);
         onHidden?.();
       }
+    } catch {
+      // Leave the hide dialog open — same as hidden:false; avoids an unhandled rejection.
     } finally {
       setHideBusy(false);
     }

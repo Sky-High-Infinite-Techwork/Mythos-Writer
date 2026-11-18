@@ -109,6 +109,28 @@ describe('VaultOverflowMenu — hide', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
     expect(mockHide).not.toHaveBeenCalled();
   });
+
+  it('does not call onHidden when vaultSurfaceHide returns hidden:false', async () => {
+    mockHide.mockResolvedValueOnce({ hidden: false });
+    await mount();
+    openMenu();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Hide' }));
+    fireEvent.click(screen.getByTestId(`vault-hide-confirm-${SUFFIX}`));
+    await waitFor(() => expect(mockHide).toHaveBeenCalled());
+    expect(mockOnHidden).not.toHaveBeenCalled();
+    expect(screen.getByTestId(`vault-hide-dialog-${SUFFIX}`)).toBeInTheDocument();
+  });
+
+  it('vaultSurfaceHide throw leaves the hide dialog open and skips onHidden', async () => {
+    mockHide.mockRejectedValueOnce(new Error('hide IPC failed'));
+    await mount();
+    openMenu();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Hide' }));
+    fireEvent.click(screen.getByTestId(`vault-hide-confirm-${SUFFIX}`));
+    await waitFor(() => expect(mockHide).toHaveBeenCalled());
+    expect(screen.getByTestId(`vault-hide-dialog-${SUFFIX}`)).toBeInTheDocument();
+    expect(mockOnHidden).not.toHaveBeenCalled();
+  });
 });
 
 describe('VaultOverflowMenu — delete (inner / story / notes)', () => {
@@ -159,6 +181,18 @@ describe('VaultOverflowMenu — delete (mythos two-step)', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Move to Recycle Bin' }));
     expect(await screen.findByTestId(`vault-delete-dialog-1-${SUFFIX}`)).toBeInTheDocument();
   });
+
+  it('surfaces mythos-level trash failure after the second confirm', async () => {
+    mockTrash.mockResolvedValueOnce({ trashed: false, error: 'trash daemon offline' });
+    await mount({ level: 'mythos' });
+    openMenu();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Move to Recycle Bin' }));
+    fireEvent.click(await screen.findByTestId(`vault-delete-confirm-1-${SUFFIX}`));
+    fireEvent.click(screen.getByTestId(`vault-delete-confirm-2-${SUFFIX}`));
+    expect(await screen.findByTestId(`vault-delete-failed-${SUFFIX}`)).toBeInTheDocument();
+    expect(screen.getByText(/trash daemon offline/)).toBeInTheDocument();
+    expect(mockOnDeleted).not.toHaveBeenCalled();
+  });
 });
 
 describe('VaultOverflowMenu — trash / remove errors', () => {
@@ -200,4 +234,17 @@ describe('VaultOverflowMenu — trash / remove errors', () => {
     fireEvent.click(screen.getByTestId(`vault-remove-only-confirm-${SUFFIX}`));
     expect(await screen.findByTestId(`vault-delete-failed-${SUFFIX}`)).toBeInTheDocument();
   });
+
+  it('remove-only surfaces throw message in the failed dialog', async () => {
+    mockHide.mockRejectedValueOnce(new Error('remove blew up'));
+    await mount();
+    openMenu();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove from Mythos…' }));
+    fireEvent.click(screen.getByTestId(`vault-remove-only-confirm-${SUFFIX}`));
+    expect(await screen.findByTestId(`vault-delete-failed-${SUFFIX}`)).toBeInTheDocument();
+    expect(screen.getByText(/remove blew up/)).toBeInTheDocument();
+  });
 });
+
+// VaultOverflowMenu has no active/inactive props — current vs inactive vaults are
+// distinguished by parent sections (MythosVaultsSection / VaultLinkingColumns).

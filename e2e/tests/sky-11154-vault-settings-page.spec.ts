@@ -74,6 +74,14 @@ async function launchApp(userData: string): Promise<ElectronApplication> {
   });
 }
 
+async function closeApp(app: ElectronApplication | undefined): Promise<void> {
+  if (app) await app.close().catch(() => undefined);
+}
+
+function rmTempRoot(tempRoot: string | undefined): void {
+  if (tempRoot) fs.rmSync(tempRoot, { recursive: true, force: true });
+}
+
 async function openVaultFilesSettings(page: Page): Promise<void> {
   await expect(page.locator('.app-menu-bar')).toBeVisible({ timeout: 15_000 });
   await page.locator('.app-menu-gear-btn').click();
@@ -92,94 +100,111 @@ function makeFixture(slug: string) {
 
 test.describe('SKY-11154 vault cards — inner counts + inline rename (§4)', () => {
   test('AC-VS-01: a Mythos vault card shows its inner-vault counts', async () => {
-    const { tempRoot, userData, storyVault } = makeFixture('01');
-    const app = await launchApp(userData);
+    let tempRoot: string | undefined;
+    let app: ElectronApplication | undefined;
     try {
+      const fixture = makeFixture('01');
+      tempRoot = fixture.tempRoot;
+      app = await launchApp(fixture.userData);
       const page = await app.firstWindow();
       await openVaultFilesSettings(page);
       await expect(
         page.getByText(/\d+\s+notes vaults?\s*(&middot;|·)\s*\d+\s+story vaults?/i),
       ).toBeVisible({ timeout: 8_000 });
-      await expect(page.getByTestId(`mvs-card-${storyVault}`)).toBeVisible();
+      await expect(page.getByTestId(`mvs-card-${fixture.storyVault}`)).toBeVisible();
     } finally {
-      await app.close();
-      fs.rmSync(tempRoot, { recursive: true, force: true });
+      await closeApp(app);
+      rmTempRoot(tempRoot);
     }
   });
 
   test('AC-VS-02: double-clicking a Mythos vault name enables inline rename', async () => {
-    const { tempRoot, userData, storyVault } = makeFixture('02');
-    const app = await launchApp(userData);
+    let tempRoot: string | undefined;
+    let app: ElectronApplication | undefined;
     try {
+      const fixture = makeFixture('02');
+      tempRoot = fixture.tempRoot;
+      app = await launchApp(fixture.userData);
       const page = await app.firstWindow();
       await openVaultFilesSettings(page);
-      const card = page.getByTestId(`mvs-card-${storyVault}`);
+      const card = page.getByTestId(`mvs-card-${fixture.storyVault}`);
       await card.dblclick();
-      const renameInput = page.getByTestId(`mvs-rename-input-${storyVault}`);
+      const renameInput = page.getByTestId(`mvs-rename-input-${fixture.storyVault}`);
       await expect(renameInput).toBeVisible({ timeout: 5_000 });
     } finally {
-      await app.close();
-      fs.rmSync(tempRoot, { recursive: true, force: true });
+      await closeApp(app);
+      rmTempRoot(tempRoot);
     }
   });
 });
 
 test.describe('SKY-11154 — the ⋯ menu, identical at every level (§4a)', () => {
   test('AC-VS-03: each vault card exposes overflow with Hide and Move to Recycle Bin', async () => {
-    const { tempRoot, userData, storyVault } = makeFixture('03');
-    const app = await launchApp(userData);
+    let tempRoot: string | undefined;
+    let app: ElectronApplication | undefined;
     try {
+      const fixture = makeFixture('03');
+      tempRoot = fixture.tempRoot;
+      app = await launchApp(fixture.userData);
       const page = await app.firstWindow();
       await openVaultFilesSettings(page);
-      const card = page.getByTestId(`mvs-card-${storyVault}`);
-      const overflowBtn = card.getByTestId(`vault-overflow-btn-${storyVault}`);
-      await overflowBtn.click();
+      const card = page.getByTestId(`mvs-card-${fixture.storyVault}`);
+      await card.getByTestId(`vault-overflow-btn-${fixture.storyVault}`).click();
       await expect(page.getByRole('menuitem', { name: 'Hide' })).toBeVisible({ timeout: 3_000 });
       await expect(page.getByRole('menuitem', { name: 'Move to Recycle Bin' })).toBeVisible();
       await expect(card.locator('[aria-label="Delete" i]:not([role="menuitem"])')).toHaveCount(0);
     } finally {
-      await app.close();
-      fs.rmSync(tempRoot, { recursive: true, force: true });
+      await closeApp(app);
+      rmTempRoot(tempRoot);
     }
   });
 
   test('AC-VS-04: Delete confirm copy says "moved to the Recycle Bin"', async () => {
-    const { tempRoot, userData, storyVault } = makeFixture('04');
-    const app = await launchApp(userData);
+    let tempRoot: string | undefined;
+    let app: ElectronApplication | undefined;
     try {
+      const fixture = makeFixture('04');
+      tempRoot = fixture.tempRoot;
+      app = await launchApp(fixture.userData);
       const page = await app.firstWindow();
       await openVaultFilesSettings(page);
-      const card = page.getByTestId(`mvs-card-${storyVault}`);
-      await card.getByTestId(`vault-overflow-btn-${storyVault}`).click();
+      const card = page.getByTestId(`mvs-card-${fixture.storyVault}`);
+      await card.getByTestId(`vault-overflow-btn-${fixture.storyVault}`).click();
       await page.getByRole('menuitem', { name: 'Move to Recycle Bin' }).click();
       await expect(page.getByText(/moved to the recycle bin/i)).toBeVisible({ timeout: 5_000 });
     } finally {
-      await app.close();
-      fs.rmSync(tempRoot, { recursive: true, force: true });
+      await closeApp(app);
+      rmTempRoot(tempRoot);
     }
   });
 });
 
 test.describe('SKY-11154 — Hide + Show hidden (§4a)', () => {
   test('AC-VS-05: a "Show hidden" affordance is present on Vault & Files', async () => {
-    const { tempRoot, userData } = makeFixture('05');
-    const app = await launchApp(userData);
+    let tempRoot: string | undefined;
+    let app: ElectronApplication | undefined;
     try {
+      const fixture = makeFixture('05');
+      tempRoot = fixture.tempRoot;
+      app = await launchApp(fixture.userData);
       const page = await app.firstWindow();
       await openVaultFilesSettings(page);
       await expect(page.getByTestId('mvs-show-hidden-btn')).toBeVisible({ timeout: 5_000 });
     } finally {
-      await app.close();
-      fs.rmSync(tempRoot, { recursive: true, force: true });
+      await closeApp(app);
+      rmTempRoot(tempRoot);
     }
   });
 });
 
 test.describe('SKY-11154 — hard exclusions carried through (§5)', () => {
   test('AC-VS-06: no Dropbox-as-a-feature copy on Vault & Files', async () => {
-    const { tempRoot, userData } = makeFixture('06');
-    const app = await launchApp(userData);
+    let tempRoot: string | undefined;
+    let app: ElectronApplication | undefined;
     try {
+      const fixture = makeFixture('06');
+      tempRoot = fixture.tempRoot;
+      app = await launchApp(fixture.userData);
       const page = await app.firstWindow();
       await openVaultFilesSettings(page);
       await expect(page.getByText(/mythos cloud/i)).toHaveCount(0);
@@ -190,24 +215,27 @@ test.describe('SKY-11154 — hard exclusions carried through (§5)', () => {
         await expect(page.getByText(/dropbox/i)).toHaveCount(0);
       }
     } finally {
-      await app.close();
-      fs.rmSync(tempRoot, { recursive: true, force: true });
+      await closeApp(app);
+      rmTempRoot(tempRoot);
     }
   });
 });
 
 test.describe('SKY-11154 — dot-linking pairing (§2 / §4)', () => {
   test('AC-VS-07: dot-linking control exists between the Notes and Story columns', async () => {
-    const { tempRoot, userData } = makeFixture('07');
-    const app = await launchApp(userData);
+    let tempRoot: string | undefined;
+    let app: ElectronApplication | undefined;
     try {
+      const fixture = makeFixture('07');
+      tempRoot = fixture.tempRoot;
+      app = await launchApp(fixture.userData);
       const page = await app.firstWindow();
       await openVaultFilesSettings(page);
       await expect(page.locator('[data-testid^="pair-dot-notes-"]').first()).toBeVisible({ timeout: 8_000 });
       await expect(page.locator('[data-testid^="pair-dot-story-"]').first()).toBeVisible({ timeout: 8_000 });
     } finally {
-      await app.close();
-      fs.rmSync(tempRoot, { recursive: true, force: true });
+      await closeApp(app);
+      rmTempRoot(tempRoot);
     }
   });
 });

@@ -305,16 +305,15 @@ export function resolveDeletePaths(options: UninstallCleanOptions): {
     // Both vaults are under the default parent — delete the whole bundle at once.
     toDelete.push(vaultsParent);
   } else {
-    // One or both vaults are in custom locations.
+    // Custom roots are surfaced in `customPathsWarning` only — the in-app / NSIS
+    // copy promises they are not removed automatically (user deletes manually).
     if (storyUnderDefault) {
       toDelete.push(vaultsParent);
     } else {
-      toDelete.push(storyVaultRoot);
       customPathsWarning.push(storyVaultRoot);
     }
 
     if (!notesUnderDefault && notesVaultRoot !== storyVaultRoot) {
-      toDelete.push(notesVaultRoot);
       customPathsWarning.push(notesVaultRoot);
     } else if (notesUnderDefault && !toDelete.includes(vaultsParent)) {
       toDelete.push(vaultsParent);
