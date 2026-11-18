@@ -298,6 +298,8 @@ jobs:
           READ_TOKEN: ${{ github.token }}
           WRITE_TOKEN: ${{ steps.write.outputs.token }}
           CANARY_OUTCOME_PATH: canary-outcome-${{ matrix.index }}.json
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: node .github/scripts/unattended/dispatch/dispatch-cli.js canary-ref
       - name: Upload canary leg outcome
         if: always()
@@ -365,4 +367,6 @@ jobs:
           READ_TOKEN: ${{ github.token }}
           WRITE_TOKEN: ${{ steps.write.outputs.token }}
           CANARY_ARTIFACTS_DIR: canary-outcomes
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: node .github/scripts/unattended/dispatch/dispatch-cli.js canary-verify

@@ -166,7 +166,13 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
           found = true;
           break;
         }
-        if (!page.pageInfo?.hasNextPage) break;
+        if (!page.pageInfo || typeof page.pageInfo.hasNextPage !== 'boolean') {
+          return { ok: false, editors: [], error: 'editor_history_incomplete' };
+        }
+        if (!page.pageInfo.hasNextPage) break;
+        if (!page.pageInfo.endCursor) {
+          return { ok: false, editors: [], error: 'editor_history_incomplete' };
+        }
         commentAfter = page.pageInfo.endCursor;
       }
       if (!found) return { ok: false, editors: [], error: 'comment_not_found' };
@@ -205,6 +211,10 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
         if (!row || !row.userContentEdits) {
           return { ok: false, editors: [], error: 'graphql_parse' };
         }
+        const editPage = row.userContentEdits.pageInfo;
+        if (!editPage || typeof editPage.hasNextPage !== 'boolean') {
+          return { ok: false, editors: [], error: 'editor_history_incomplete' };
+        }
         for (const edit of row.userContentEdits.nodes || []) {
           if (!edit || !edit.editor || !edit.editor.login) {
             return { ok: false, editors: [], error: 'editor_redacted' };
@@ -214,11 +224,11 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
             __typename: edit.editor.__typename,
           });
         }
-        if (row.userContentEdits.pageInfo?.hasNextPage) {
-          if (!row.userContentEdits.pageInfo.endCursor) {
+        if (editPage.hasNextPage) {
+          if (!editPage.endCursor) {
             return { ok: false, editors: [], error: 'editor_history_incomplete' };
           }
-          editAfter = row.userContentEdits.pageInfo.endCursor;
+          editAfter = editPage.endCursor;
           continue;
         }
         return { ok: true, editors, complete: true };
@@ -281,30 +291,51 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
         variables: { repositoryId: nodeId, refUpdates },
       });
       const result = gh(['api', 'graphql', '--input', '-'], writeToken, body);
+      const parsed = parseGhJson(result.stdout);
       const errors = parseGraphqlErrors(result.stdout);
       const httpStatus = httpStatusFromGh(result.stderr, result.status);
       const statusCode = httpStatus ?? (result.status === 0 ? 201 : result.status);
-      if (result.status === 0 && (!errors || errors.length === 0)) {
-        return { ok: true, status: statusCode, ghStatus: result.status };
-      }
-      if (isRefExistsError(errors)) {
+      if (result.status !== 0) {
         return {
           ok: false,
-          status: 422,
+          fatal: true,
+          status: statusCode,
           ghStatus: result.status,
-          error: UPDATE_REFS_REF_EXISTS,
-          refExists: true,
+          error: result.stderr || result.stdout,
           errors,
         };
       }
-      return {
-        ok: false,
-        fatal: true,
-        status: statusCode,
-        ghStatus: result.status,
-        error: result.stderr || result.stdout,
-        errors,
-      };
+      if (errors && errors.length > 0) {
+        if (errors.length === 1 && isRefExistsError(errors)) {
+          return {
+            ok: false,
+            status: 422,
+            ghStatus: result.status,
+            error: UPDATE_REFS_REF_EXISTS,
+            refExists: true,
+            errors,
+          };
+        }
+        return {
+          ok: false,
+          fatal: true,
+          status: statusCode,
+          ghStatus: result.status,
+          error: result.stderr || result.stdout,
+          errors,
+        };
+      }
+      if (!parsed || parsed.data === undefined || parsed.data === null || parsed.data.updateRefs === undefined) {
+        return {
+          ok: false,
+          fatal: true,
+          status: statusCode,
+          ghStatus: result.status,
+          error: 'graphql_no_update_refs',
+          errors,
+        };
+      }
+      return { ok: true, status: statusCode, ghStatus: result.status, data: parsed.data.updateRefs };
     },
     async deleteRef({ ref, beforeOid }) {
       assertDispatchRef(ref);
@@ -317,12 +348,21 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
       const target = afterOid || sha;
       return write.updateRefs([refUpdateCreate(ref, target)]);
     },
-    async createLeaseCommit(message, parentSha) {
+    async createLeaseCommit(message, parentSha, options = {}) {
+      const { reReadSwitch, actWritesEnabled: writesEnabledFn } = options;
       if (!writeToken) return { ok: false, error: 'no_write_token' };
       if (!OID_HEX.test(parentSha || '')) return { ok: false, error: 'invalid_parent_sha' };
       const treeResult = gh(['api', `${base}/git/commits/${parentSha}`, '--jq', '.tree.sha'], readToken || writeToken);
       if (treeResult.status !== 0) return { ok: false, error: 'parent_tree' };
       const treeSha = treeResult.stdout.replace(/\r?\n$/, '');
+      if (typeof reReadSwitch === 'function') {
+        const sw = await reReadSwitch();
+        const enabled = writesEnabledFn
+          ? writesEnabledFn(sw)
+          : Boolean(sw && sw.ok && sw.enabled === true);
+        if (!sw || !sw.ok) return { ok: false, error: 'switch_read' };
+        if (!enabled) return { ok: false, error: 'switch_off' };
+      }
       const commit = gh(
         [
           'api', '-X', 'POST', `${base}/git/commits`,

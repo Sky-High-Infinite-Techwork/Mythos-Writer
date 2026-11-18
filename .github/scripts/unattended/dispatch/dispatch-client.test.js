@@ -62,7 +62,9 @@ test('updateRefs sends JSON body with afterOid refUpdates', async () => {
   const calls = [];
   const gh = (args, token, input) => {
     calls.push({ args, token, input });
-    if (args.includes('graphql')) return { status: 0, stdout: '{}' };
+    if (args.includes('graphql')) {
+      return { status: 0, stdout: JSON.stringify({ data: { updateRefs: { clientMutationId: null } } }) };
+    }
     return { status: 0, stdout: '"R_x"\n' };
   };
   const { write } = createDispatchClients({ readToken: 'read', writeToken: 'write_tok', gh });
@@ -78,6 +80,37 @@ test('updateRefs sends JSON body with afterOid refUpdates', async () => {
   assert.equal(Array.isArray(body.variables.refUpdates), true);
   assert.equal(body.variables.refUpdates[0].afterOid, sha);
   assert.equal(body.variables.refUpdates[0].beforeOid, '0000000000000000000000000000000000000000');
+});
+
+test('updateRefs fails closed on empty success body', async () => {
+  const gh = (args) => {
+    if (args.includes('graphql')) return { status: 0, stdout: '{}' };
+    return { status: 0, stdout: '"R_x"\n' };
+  };
+  const { write } = createDispatchClients({ readToken: 'r', writeToken: 'w', gh });
+  const result = await write.updateRefs([refUpdateCreate('refs/mythos/dispatch/lane-02', 'b'.repeat(40))]);
+  assert.equal(result.fatal, true);
+  assert.equal(result.error, 'graphql_no_update_refs');
+});
+
+test('createLeaseCommit aborts when switch flips after parent tree fetch', async () => {
+  let calls = 0;
+  const gh = (args) => {
+    const flat = args.map((a) => String(a));
+    if (flat.some((a) => a.includes('/git/commits/') && flat.includes('.tree.sha'))) {
+      return { status: 0, stdout: 't'.repeat(40) + '\n' };
+    }
+    if (flat.includes('-X') && flat.some((a) => a.includes('/git/commits'))) {
+      return { status: 0, stdout: JSON.stringify({ sha: 'c'.repeat(40) }) };
+    }
+    return { status: 0, stdout: '"R_x"\n' };
+  };
+  const { write } = createDispatchClients({ readToken: 'r', writeToken: 'w', gh });
+  const created = await write.createLeaseCommit('msg', 'a'.repeat(40), {
+    reReadSwitch: async () => ({ ok: true, enabled: false }),
+  });
+  assert.equal(created.ok, false);
+  assert.equal(created.error, 'switch_off');
 });
 
 test('refExists is exact message only; other graphql errors are fatal', async () => {
@@ -249,7 +282,7 @@ test('issueCommentContentEdits holds on redacted editor', async () => {
                 nodes: [{
                   databaseId: 7,
                   userContentEdits: {
-                    pageInfo: { hasNextPage: false },
+                    pageInfo: { hasNextPage: false, endCursor: null },
                     nodes: [{ editor: null }],
                   },
                 }],

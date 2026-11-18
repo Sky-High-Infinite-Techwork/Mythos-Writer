@@ -112,7 +112,7 @@ The **mock** proves CAS-shaped **two-ref** `updateRefs` pair creates (lane + cla
 
 **Unit:** Parallel `Promise.all` of 20 attempts on **one** slot → exactly **one** success, **19** `Reference already exists`, **0** fatal errors.
 
-**Live canary (`mythos-dispatch.yml`, `MODE=act`, switches on):** six parallel jobs race on `refs/mythos/dispatch/canary/scratch-shared`; exactly one `canary_win`, the rest record `Reference already exists` — this proves **single-ref create** atomicity only. The **two-ref claim pair** is proven by the mock, not the live canary. `canary-verify` CAS-deletes the scratch ref when its SHA matches `MAIN_SHA`.
+**Live canary (`mythos-dispatch.yml`, `MODE=act`, switches on):** six parallel jobs race on `refs/mythos/dispatch/canary/scratch-{runId}-{runAttempt}` for that workflow run; exactly one `canary_win`, the rest record `Reference already exists` — this proves **single-ref create** atomicity only. The **two-ref claim pair** is proven by the mock, not the live canary. `canary-verify` scores all six leg artifacts for the same run/attempt, then CAS-deletes only that run’s scratch ref when its SHA matches `MAIN_SHA`.
 
 ## Global lane cap across jobs
 

@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 
-const { REPO, CANARY_SCRATCH_SHARED_REF } = require('./constants');
+const { REPO, canaryScratchRef } = require('./constants');
 const { OID_HEX, UPDATE_REFS_REF_EXISTS } = require('./refs-graphql');
 const { createDispatchClients } = require('./dispatch-client');
 const { runDispatchPlan } = require('./dispatch-run');
@@ -11,10 +11,29 @@ const { readDispatchSwitches, actWritesEnabled } = require('./switch');
 const { activeClaimsFromRefs } = require('./dispatch-helpers');
 const { runCanaryVerify } = require('./canary-verify');
 
+function parseGithubRunIds() {
+  const runId = Number.parseInt(process.env.GITHUB_RUN_ID || '', 10);
+  const runAttempt = Number.parseInt(process.env.GITHUB_RUN_ATTEMPT || '1', 10);
+  if (!Number.isInteger(runId) || runId < 1) return { ok: false, reason: 'bad_run_id' };
+  if (!Number.isInteger(runAttempt) || runAttempt < 1) return { ok: false, reason: 'bad_run_attempt' };
+  return { ok: true, runId, runAttempt, scratchRef: canaryScratchRef(runId, runAttempt) };
+}
+
 function writeCanaryOutcome(payload) {
   const target = process.env.CANARY_OUTCOME_PATH;
   if (!target) return;
-  fs.writeFileSync(target, `${JSON.stringify(payload)}\n`, 'utf8');
+  const ids = parseGithubRunIds();
+  if (!ids.ok) return;
+  fs.writeFileSync(
+    target,
+    `${JSON.stringify({
+      runId: ids.runId,
+      runAttempt: ids.runAttempt,
+      scratchRef: ids.scratchRef,
+      ...payload,
+    })}\n`,
+    'utf8',
+  );
 }
 
 async function main() {
@@ -37,6 +56,10 @@ async function main() {
 
   if (command === 'sweep') {
     const switches = await reReadSwitch();
+    if (!switches.ok) {
+      console.error('sweep: switch read failed');
+      return 1;
+    }
     if (!actWritesEnabled(switches)) {
       console.log('sweep: inert');
       return 0;
@@ -71,7 +94,9 @@ async function main() {
       writeCanaryOutcome({ kind: 'canary_abort', index, reason: 'switch_flipped' });
       return 0;
     }
-    const ref = CANARY_SCRATCH_SHARED_REF;
+    const runId = process.env.GITHUB_RUN_ID || '0';
+    const runAttempt = process.env.GITHUB_RUN_ATTEMPT || '1';
+    const ref = canaryScratchRef(runId, runAttempt);
     const result = await client.createRef({ ref, sha });
     if (result.ok) {
       console.log(JSON.stringify({ kind: 'canary_win', index, status: 201 }));
@@ -97,6 +122,8 @@ async function main() {
       reReadSwitch,
       mainSha: process.env.MAIN_SHA || '',
       artifactsDir: process.env.CANARY_ARTIFACTS_DIR || '',
+      runId: process.env.GITHUB_RUN_ID || '0',
+      runAttempt: process.env.GITHUB_RUN_ATTEMPT || '1',
     });
   }
 

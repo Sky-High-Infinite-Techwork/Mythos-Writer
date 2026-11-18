@@ -49,7 +49,20 @@ function doneRef(issueNumber, sliceIndex) {
   return `${DISPATCH_REF_PREFIX}/done/${issueNumber}-${sliceIndex}`;
 }
 
+/** @deprecated use canaryScratchRef(runId, runAttempt) */
 const CANARY_SCRATCH_SHARED_REF = `${DISPATCH_REF_PREFIX}/canary/scratch-shared`;
+
+function canaryScratchRef(runId, runAttempt) {
+  const rid = Number.parseInt(String(runId ?? ''), 10);
+  const att = Number.parseInt(String(runAttempt ?? ''), 10);
+  if (!Number.isInteger(rid) || rid < 1) {
+    throw new Error('canaryScratchRef: invalid runId');
+  }
+  if (!Number.isInteger(att) || att < 1) {
+    throw new Error('canaryScratchRef: invalid runAttempt');
+  }
+  return `${DISPATCH_REF_PREFIX}/canary/scratch-${rid}-${att}`;
+}
 
 const PROTECTED_ROOT_PREFIXES = ['.github/', '.git', '.github', '.git/'];
 
@@ -126,6 +139,7 @@ module.exports = {
   attemptsRef,
   doneRef,
   CANARY_SCRATCH_SHARED_REF,
+  canaryScratchRef,
   protectedLiteralPrefix,
   sha256Hex,
   leaseMessage,

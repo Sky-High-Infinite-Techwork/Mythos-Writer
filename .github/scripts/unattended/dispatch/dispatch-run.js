@@ -251,7 +251,10 @@ async function runDispatchPlan(env) {
     let leaseSha = env.LEASE_COMMIT_SHA;
     if (!leaseSha && env.MAIN_SHA && client.createLeaseCommit) {
       const message = formatLeaseMessage(leasePayload);
-      const created = await client.createLeaseCommit(message, env.MAIN_SHA);
+      const created = await client.createLeaseCommit(message, env.MAIN_SHA, {
+        reReadSwitch,
+        actWritesEnabled: actWritesEnabled,
+      });
       if (!created.ok) {
         console.error('dispatch: lease commit failed');
         return 1;
@@ -265,7 +268,10 @@ async function runDispatchPlan(env) {
 
     const mintLeaseSha = async (message) => {
       if (!client.createLeaseCommit || !env.MAIN_SHA) return null;
-      const created = await client.createLeaseCommit(message, env.MAIN_SHA);
+      const created = await client.createLeaseCommit(message, env.MAIN_SHA, {
+        reReadSwitch,
+        actWritesEnabled: actWritesEnabled,
+      });
       return created.ok ? created.sha : null;
     };
 

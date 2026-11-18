@@ -177,7 +177,7 @@ function createMockRefClient(options = {}) {
       return updateRefs([refUpdateRenew(ref, afterOid, beforeOid)]);
     },
     async issueCommentContentEdits() {
-      return { ok: true, editors: [] };
+      return { ok: true, complete: true, editors: [] };
     },
     async renewRefPair({ laneRef, claimRef, afterOid, beforeOid }) {
       return updateRefs([
@@ -185,7 +185,13 @@ function createMockRefClient(options = {}) {
         refUpdateRenew(claimRef, afterOid, beforeOid),
       ]);
     },
-    async createLeaseCommit(message) {
+    async createLeaseCommit(message, _parentSha, options = {}) {
+      const { reReadSwitch } = options || {};
+      if (typeof reReadSwitch === 'function') {
+        const sw = await reReadSwitch();
+        if (!sw.ok) return { ok: false, error: 'switch_read' };
+        if (!sw.enabled) return { ok: false, error: 'switch_off' };
+      }
       leaseSeq += 1;
       const sha = `f${String(leaseSeq).padStart(39, '0')}`.slice(0, 40);
       commitMessages.set(sha, message);

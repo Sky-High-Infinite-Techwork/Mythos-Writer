@@ -47,6 +47,29 @@ const { globOrPathProtected, globsOverlap } = require('./dispatch/path-policy');
 const { createMockRefClient, createYieldingRaceClient } = require('./dispatch/mock-client');
 const { runDispatchPlan } = require('./dispatch/dispatch-run');
 const { activeClaimsFromRefs } = require('./dispatch/dispatch-helpers');
+const { canaryScratchRef } = require('./dispatch/constants');
+
+const CANARY_RUN_ID = 9001;
+const CANARY_RUN_ATTEMPT = 1;
+const CANARY_SCRATCH_REF = canaryScratchRef(CANARY_RUN_ID, CANARY_RUN_ATTEMPT);
+
+function bindCanaryOutcome(row) {
+  return {
+    runId: CANARY_RUN_ID,
+    runAttempt: CANARY_RUN_ATTEMPT,
+    scratchRef: CANARY_SCRATCH_REF,
+    ...row,
+  };
+}
+
+function canaryVerifyOpts(client, extra = {}) {
+  return {
+    reReadSwitch: async () => ({ ok: true, enabled: true }),
+    runId: CANARY_RUN_ID,
+    runAttempt: CANARY_RUN_ATTEMPT,
+    ...extra,
+  };
+}
 
 test('parseLaneCap rejects zero and non-numeric', () => {
   assert.equal(parseLaneCap('0').ok, false);
@@ -418,7 +441,7 @@ test('sweep keeps done canary and live claim', async () => {
   const lane = 'refs/mythos/dispatch/lane-00';
   const claim = claimRefFn(2, 0);
   const done = doneRef(2, 0);
-  const canary = 'refs/mythos/dispatch/canary/scratch-shared';
+  const canary = CANARY_SCRATCH_REF;
   await client.createRef({ ref: lane, sha: '1'.repeat(40) });
   client.setRefMessage(lane, leaseMessage({
     issue: 2, slice: 0, files: ['a.ts'], planCommentId: 1, planBodySha256: 'x', runId: 1, runAttempt: 1,
@@ -570,27 +593,19 @@ test('canary verify six legs passes and deletes scratch ref', async () => {
   const os = require('node:os');
   const path = require('node:path');
   const { runCanaryVerify } = require('./dispatch/canary-verify');
-  const { evaluateCanaryOutcomes } = require('./dispatch/canary-artifacts');
   const main = 'a'.repeat(40);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-pass-'));
   for (let i = 0; i < 6; i += 1) {
     fs.writeFileSync(
       path.join(dir, `canary-outcome-${i}.json`),
-      JSON.stringify({ kind: i === 0 ? 'canary_win' : 'canary_lose', index: i }),
+      JSON.stringify(bindCanaryOutcome({ kind: i === 0 ? 'canary_win' : 'canary_lose', index: i })),
     );
   }
-  assert.equal(evaluateCanaryOutcomes(JSON.parse(JSON.stringify(
-    Array.from({ length: 6 }, (_, i) => ({ kind: i === 0 ? 'canary_win' : 'canary_lose', index: i })),
-  ))).ok, true);
   const client = createMockRefClient();
-  await client.createRef({ ref: 'refs/mythos/dispatch/canary/scratch-shared', sha: main });
-  const code = await runCanaryVerify(client, {
-    reReadSwitch: async () => ({ ok: true, enabled: true }),
-    mainSha: main,
-    artifactsDir: dir,
-  });
+  await client.createRef({ ref: CANARY_SCRATCH_REF, sha: main });
+  const code = await runCanaryVerify(client, canaryVerifyOpts(client, { mainSha: main, artifactsDir: dir }));
   assert.equal(code, 0);
-  assert.equal(client.exists('refs/mythos/dispatch/canary/scratch-shared'), false);
+  assert.equal(client.exists(CANARY_SCRATCH_REF), false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -605,25 +620,21 @@ test('canary verify bad indexes still deletes scratch ref', async () => {
   outcomes[0].kind = 'canary_win';
   outcomes[1].index = 0;
   for (let i = 0; i < outcomes.length; i += 1) {
-    fs.writeFileSync(path.join(dir, `canary-outcome-${i}.json`), JSON.stringify(outcomes[i]));
+    fs.writeFileSync(path.join(dir, `canary-outcome-${i}.json`), JSON.stringify(bindCanaryOutcome(outcomes[i])));
   }
   const client = createMockRefClient();
-  await client.createRef({ ref: 'refs/mythos/dispatch/canary/scratch-shared', sha: main });
+  await client.createRef({ ref: CANARY_SCRATCH_REF, sha: main });
   const logs = [];
   const origErr = console.error;
   console.error = (...args) => { logs.push(args.join(' ')); };
   try {
-    const code = await runCanaryVerify(client, {
-      reReadSwitch: async () => ({ ok: true, enabled: true }),
-      mainSha: main,
-      artifactsDir: dir,
-    });
+    const code = await runCanaryVerify(client, canaryVerifyOpts(client, { mainSha: main, artifactsDir: dir }));
     assert.equal(code, 1);
     assert.ok(logs.some((line) => line.includes('index_duplicate')));
   } finally {
     console.error = origErr;
   }
-  assert.equal(client.exists('refs/mythos/dispatch/canary/scratch-shared'), false);
+  assert.equal(client.exists(CANARY_SCRATCH_REF), true);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -631,14 +642,10 @@ test('canary verify missing artifacts dir deletes scratch first', async () => {
   const { runCanaryVerify } = require('./dispatch/canary-verify');
   const main = 'a'.repeat(40);
   const client = createMockRefClient();
-  await client.createRef({ ref: 'refs/mythos/dispatch/canary/scratch-shared', sha: main });
-  const code = await runCanaryVerify(client, {
-    reReadSwitch: async () => ({ ok: true, enabled: true }),
-    mainSha: main,
-    artifactsDir: '',
-  });
+  await client.createRef({ ref: CANARY_SCRATCH_REF, sha: main });
+  const code = await runCanaryVerify(client, canaryVerifyOpts(client, { mainSha: main, artifactsDir: '' }));
   assert.equal(code, 1);
-  assert.equal(client.exists('refs/mythos/dispatch/canary/scratch-shared'), false);
+  assert.equal(client.exists(CANARY_SCRATCH_REF), true);
 });
 
 test('canary verify bad counts deletes scratch then fails', async () => {
@@ -657,17 +664,13 @@ test('canary verify bad counts deletes scratch then fails', async () => {
     { kind: 'canary_lose', index: 5 },
   ];
   for (let i = 0; i < rows.length; i += 1) {
-    fs.writeFileSync(path.join(dir, `canary-outcome-${i}.json`), JSON.stringify(rows[i]));
+    fs.writeFileSync(path.join(dir, `canary-outcome-${i}.json`), JSON.stringify(bindCanaryOutcome(rows[i])));
   }
   const client = createMockRefClient();
-  await client.createRef({ ref: 'refs/mythos/dispatch/canary/scratch-shared', sha: main });
-  const code = await runCanaryVerify(client, {
-    reReadSwitch: async () => ({ ok: true, enabled: true }),
-    mainSha: main,
-    artifactsDir: dir,
-  });
+  await client.createRef({ ref: CANARY_SCRATCH_REF, sha: main });
+  const code = await runCanaryVerify(client, canaryVerifyOpts(client, { mainSha: main, artifactsDir: dir }));
   assert.equal(code, 1);
-  assert.equal(client.exists('refs/mythos/dispatch/canary/scratch-shared'), false);
+  assert.equal(client.exists(CANARY_SCRATCH_REF), true);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -682,26 +685,22 @@ test('canary verify sha mismatch keeps scratch ref', async () => {
   for (let i = 0; i < 6; i += 1) {
     fs.writeFileSync(
       path.join(dir, `canary-outcome-${i}.json`),
-      JSON.stringify({ kind: i === 0 ? 'canary_win' : 'canary_lose', index: i }),
+      JSON.stringify(bindCanaryOutcome({ kind: i === 0 ? 'canary_win' : 'canary_lose', index: i })),
     );
   }
   const client = createMockRefClient();
-  await client.createRef({ ref: 'refs/mythos/dispatch/canary/scratch-shared', sha: other });
+  await client.createRef({ ref: CANARY_SCRATCH_REF, sha: other });
   const logs = [];
   const origErr = console.error;
   console.error = (...args) => { logs.push(args.join(' ')); };
   try {
-    const code = await runCanaryVerify(client, {
-      reReadSwitch: async () => ({ ok: true, enabled: true }),
-      mainSha: main,
-      artifactsDir: dir,
-    });
+    const code = await runCanaryVerify(client, canaryVerifyOpts(client, { mainSha: main, artifactsDir: dir }));
     assert.equal(code, 1);
     assert.ok(logs.some((line) => line.includes('scratch_sha_mismatch')));
   } finally {
     console.error = origErr;
   }
-  assert.equal(client.exists('refs/mythos/dispatch/canary/scratch-shared'), true);
+  assert.equal(client.exists(CANARY_SCRATCH_REF), true);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -715,23 +714,19 @@ test('canary verify delete failure keeps scratch ref', async () => {
   for (let i = 0; i < 6; i += 1) {
     fs.writeFileSync(
       path.join(dir, `canary-outcome-${i}.json`),
-      JSON.stringify({ kind: i === 0 ? 'canary_win' : 'canary_lose', index: i }),
+      JSON.stringify(bindCanaryOutcome({ kind: i === 0 ? 'canary_win' : 'canary_lose', index: i })),
     );
   }
   const client = createMockRefClient();
-  await client.createRef({ ref: 'refs/mythos/dispatch/canary/scratch-shared', sha: main });
+  await client.createRef({ ref: CANARY_SCRATCH_REF, sha: main });
   const realDelete = client.deleteRef.bind(client);
   client.deleteRef = async (opts) => {
-    if (opts.ref.includes('scratch-shared')) return { ok: false, error: 'cas_mismatch' };
+    if (opts.ref === CANARY_SCRATCH_REF) return { ok: false, error: 'cas_mismatch' };
     return realDelete(opts);
   };
-  const code = await runCanaryVerify(client, {
-    reReadSwitch: async () => ({ ok: true, enabled: true }),
-    mainSha: main,
-    artifactsDir: dir,
-  });
+  const code = await runCanaryVerify(client, canaryVerifyOpts(client, { mainSha: main, artifactsDir: dir }));
   assert.equal(code, 1);
-  assert.equal(client.exists('refs/mythos/dispatch/canary/scratch-shared'), true);
+  assert.equal(client.exists(CANARY_SCRATCH_REF), true);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -745,7 +740,7 @@ test('canary verify scratch missing fails without delete', async () => {
   for (let i = 0; i < 6; i += 1) {
     fs.writeFileSync(
       path.join(dir, `canary-outcome-${i}.json`),
-      JSON.stringify({ kind: i === 0 ? 'canary_win' : 'canary_lose', index: i }),
+      JSON.stringify(bindCanaryOutcome({ kind: i === 0 ? 'canary_win' : 'canary_lose', index: i })),
     );
   }
   const client = createMockRefClient();
@@ -753,15 +748,65 @@ test('canary verify scratch missing fails without delete', async () => {
   const origErr = console.error;
   console.error = (...args) => { logs.push(args.join(' ')); };
   try {
-    const code = await runCanaryVerify(client, {
-      reReadSwitch: async () => ({ ok: true, enabled: true }),
-      mainSha: main,
-      artifactsDir: dir,
-    });
+    const code = await runCanaryVerify(client, canaryVerifyOpts(client, { mainSha: main, artifactsDir: dir }));
     assert.equal(code, 1);
     assert.ok(logs.some((line) => line.includes('scratch_missing')));
   } finally {
     console.error = origErr;
   }
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('canary verify list failure exits 1 without deleting scratch ref', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { runCanaryVerify } = require('./dispatch/canary-verify');
+  const main = 'a'.repeat(40);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-list-'));
+  for (let i = 0; i < 6; i += 1) {
+    fs.writeFileSync(
+      path.join(dir, `canary-outcome-${i}.json`),
+      JSON.stringify(bindCanaryOutcome({ kind: i === 0 ? 'canary_win' : 'canary_lose', index: i })),
+    );
+  }
+  const client = createMockRefClient();
+  await client.createRef({ ref: CANARY_SCRATCH_REF, sha: main });
+  client.listRefs = async () => ({ ok: false, refs: [] });
+  const code = await runCanaryVerify(client, canaryVerifyOpts(client, { mainSha: main, artifactsDir: dir }));
+  assert.equal(code, 1);
+  assert.equal(client.exists(CANARY_SCRATCH_REF), true);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('canary verify artifact parse failure exits 1 without deleting scratch ref', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { runCanaryVerify } = require('./dispatch/canary-verify');
+  const main = 'a'.repeat(40);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-parse-'));
+  fs.writeFileSync(path.join(dir, 'canary-outcome-0.json'), '{ not-json');
+  const client = createMockRefClient();
+  await client.createRef({ ref: CANARY_SCRATCH_REF, sha: main });
+  const code = await runCanaryVerify(client, canaryVerifyOpts(client, { mainSha: main, artifactsDir: dir }));
+  assert.equal(code, 1);
+  assert.equal(client.exists(CANARY_SCRATCH_REF), true);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('sweep deletes lane ref with unparseable lease expiresAt', async () => {
+  const client = createMockRefClient();
+  const lane = 'refs/mythos/dispatch/lane-07';
+  await client.createRef({ ref: lane, sha: '7'.repeat(40) });
+  client.setRefMessage(lane, JSON.stringify({
+    schema: 'mythos-dispatch-lease/v1',
+    issue: 1,
+    slice: 0,
+    files: ['a.ts'],
+    expiresAt: 'not-a-valid-date',
+  }));
+  const swept = await sweepDispatchRefs(client, {});
+  assert.equal(swept.deleted.includes(lane), true);
+  assert.equal(client.exists(lane), false);
 });

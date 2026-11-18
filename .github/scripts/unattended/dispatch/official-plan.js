@@ -132,6 +132,9 @@ async function verifyPlanCommentEditors(client, issueNumber, official) {
   if (edits.complete !== true) {
     return { hold: true, reason: 'editor_history_incomplete' };
   }
+  if (!Array.isArray(edits.editors) || edits.editors.length === 0) {
+    return { hold: true, reason: 'editor_history_incomplete' };
+  }
   for (const editor of edits.editors || []) {
     const login = canonicalAuthorLogin(editor);
     if (!OFFICIAL_PLAN_AUTHORS.has(login)) {

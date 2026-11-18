@@ -8,7 +8,7 @@ const { createMockRefClient } = require('./mock-client');
 const { runDispatchPlan } = require('./dispatch-run');
 const { sweepDispatchRefs } = require('./claim');
 const { recordDispatchAttempt } = require('./slice-progress');
-const { attemptsRef, claimRef, leaseMessage } = require('./constants');
+const { attemptsRef, claimRef, leaseMessage, canaryScratchRef } = require('./constants');
 const { attemptsMessage } = require('./slice-progress');
 const { readDispatchSwitches } = require('./switch');
 const { runCanaryVerify } = require('./canary-verify');
@@ -19,7 +19,27 @@ const { activeClaimsFromRefs } = require('./dispatch-helpers');
 const { refUpdateCreate, refUpdateDelete, refUpdateRenew } = require('./refs-graphql');
 
 const MAIN = 'a'.repeat(40);
+const CANARY_RUN_ID = 4242;
+const CANARY_RUN_ATTEMPT = 1;
+const CANARY_SCRATCH_REF = canaryScratchRef(CANARY_RUN_ID, CANARY_RUN_ATTEMPT);
 const gradePassOk = () => ({ ok: true, marker: {} });
+
+function bindCanaryArtifact(row) {
+  return {
+    runId: CANARY_RUN_ID,
+    runAttempt: CANARY_RUN_ATTEMPT,
+    scratchRef: CANARY_SCRATCH_REF,
+    ...row,
+  };
+}
+
+function assertNoLaneOrClaimWrites(client) {
+  assert.equal(client.updateLog.length, 0);
+  for (const ref of client.refs.keys()) {
+    assert.doesNotMatch(ref, /\/lane-\d{2}$/);
+    assert.doesNotMatch(ref, /\/claim\/\d+-\d+$/);
+  }
+}
 
 function actEnv(client, extra = {}) {
   return {
@@ -278,49 +298,240 @@ test('tryCreateRefPair fatal auth error is not ref_exists', async () => {
 
 test('canary verify returns 1 when switch off after scratch match', async () => {
   const client = createMockRefClient();
-  await client.createRef({ ref: require('./constants').CANARY_SCRATCH_SHARED_REF, sha: MAIN });
   const dir = require('node:fs').mkdtempSync(`${require('node:os').tmpdir()}/canary-`);
   for (let i = 0; i < 6; i += 1) {
     require('node:fs').writeFileSync(
       `${dir}/canary-outcome-${i}.json`,
-      JSON.stringify({ kind: i === 0 ? 'canary_win' : 'canary_lose', index: i }),
+      JSON.stringify(bindCanaryArtifact({ kind: i === 0 ? 'canary_win' : 'canary_lose', index: i })),
     );
   }
+  await client.createRef({ ref: CANARY_SCRATCH_REF, sha: MAIN });
   let calls = 0;
   const code = await runCanaryVerify(client, {
     reReadSwitch: async () => {
       calls += 1;
-      return { ok: true, enabled: calls < 2 };
+      return { ok: true, enabled: calls === 1 };
     },
     mainSha: MAIN,
     artifactsDir: dir,
+    runId: CANARY_RUN_ID,
+    runAttempt: CANARY_RUN_ATTEMPT,
   });
   assert.equal(code, 1);
+  assert.equal(client.exists(CANARY_SCRATCH_REF), true);
   require('node:fs').rmSync(dir, { recursive: true, force: true });
 });
 
 test('canary verify returns 1 when initial switch read fails', async () => {
   const client = createMockRefClient();
-  await client.createRef({ ref: require('./constants').CANARY_SCRATCH_SHARED_REF, sha: MAIN });
+  await client.createRef({ ref: CANARY_SCRATCH_REF, sha: MAIN });
   const code = await runCanaryVerify(client, {
     reReadSwitch: async () => ({ ok: false, enabled: false }),
     mainSha: MAIN,
     artifactsDir: require('node:fs').mkdtempSync(`${require('node:os').tmpdir()}/canary-`),
+    runId: CANARY_RUN_ID,
+    runAttempt: CANARY_RUN_ATTEMPT,
   });
   assert.equal(code, 1);
-  assert.equal(client.exists(require('./constants').CANARY_SCRATCH_SHARED_REF), true);
+  assert.equal(client.exists(CANARY_SCRATCH_REF), true);
 });
 
 test('canary verify returns 1 when writes disabled before scratch check', async () => {
   const client = createMockRefClient();
-  await client.createRef({ ref: require('./constants').CANARY_SCRATCH_SHARED_REF, sha: MAIN });
+  await client.createRef({ ref: CANARY_SCRATCH_REF, sha: MAIN });
   const code = await runCanaryVerify(client, {
     reReadSwitch: async () => ({ ok: true, enabled: false }),
     mainSha: MAIN,
     artifactsDir: require('node:fs').mkdtempSync(`${require('node:os').tmpdir()}/canary-`),
+    runId: CANARY_RUN_ID,
+    runAttempt: CANARY_RUN_ATTEMPT,
   });
   assert.equal(code, 1);
-  assert.equal(client.exists(require('./constants').CANARY_SCRATCH_SHARED_REF), true);
+  assert.equal(client.exists(CANARY_SCRATCH_REF), true);
+});
+
+test('canary verify returns 1 when list fails after outcomes score', async () => {
+  const fs = require('node:fs');
+  const client = createMockRefClient();
+  await client.createRef({ ref: CANARY_SCRATCH_REF, sha: MAIN });
+  const dir = fs.mkdtempSync(`${require('node:os').tmpdir()}/canary-gate-list-`);
+  for (let i = 0; i < 6; i += 1) {
+    fs.writeFileSync(
+      `${dir}/canary-outcome-${i}.json`,
+      JSON.stringify(bindCanaryArtifact({ kind: i === 0 ? 'canary_win' : 'canary_lose', index: i })),
+    );
+  }
+  client.listRefs = async () => ({ ok: false, refs: [] });
+  const code = await runCanaryVerify(client, {
+    reReadSwitch: async () => ({ ok: true, enabled: true }),
+    mainSha: MAIN,
+    artifactsDir: dir,
+    runId: CANARY_RUN_ID,
+    runAttempt: CANARY_RUN_ATTEMPT,
+  });
+  assert.equal(code, 1);
+  assert.equal(client.exists(CANARY_SCRATCH_REF), true);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('act with graded plan holds untrusted editor and writes no claim refs', async () => {
+  const client = createMockRefClient();
+  client.issueComments = async () => ({
+    ok: true,
+    comments: [{
+      id: '99',
+      databaseId: 99,
+      author: { login: 'SkyyPlayz' },
+      body: '## Files\n- a.ts',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-02T00:00:00Z',
+    }],
+  });
+  client.issueCommentContentEdits = async () => ({
+    ok: true,
+    complete: true,
+    editors: [{ login: 'evil', __typename: 'User' }],
+  });
+  client.getIssue = async () => ({ ok: true, issue: { state: 'open' } });
+  const code = await runDispatchPlan(actEnv(client));
+  assert.equal(code, 0);
+  assertNoLaneOrClaimWrites(client);
+});
+
+test('act with graded plan holds protected path and writes no claim refs', async () => {
+  const client = createMockRefClient();
+  client.issueComments = async () => ({
+    ok: true,
+    comments: [{
+      id: '99',
+      databaseId: 99,
+      author: { login: 'SkyyPlayz' },
+      body: '## Files\n- a.ts\n- .github/workflows/x.yml',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    }],
+  });
+  client.getIssue = async () => ({ ok: true, issue: { state: 'open' } });
+  const code = await runDispatchPlan(actEnv(client));
+  assert.equal(code, 0);
+  assertNoLaneOrClaimWrites(client);
+});
+
+test('act skips closed issue without ref writes', async () => {
+  const client = createMockRefClient();
+  client.issueComments = async () => ({
+    ok: true,
+    comments: [{
+      id: '99',
+      databaseId: 99,
+      author: { login: 'SkyyPlayz' },
+      body: '## Files\n- a.ts',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    }],
+  });
+  client.getIssue = async () => ({ ok: true, issue: { state: 'closed' } });
+  const logs = [];
+  const orig = console.log;
+  console.log = (...a) => logs.push(a.join(' '));
+  try {
+    const code = await runDispatchPlan(actEnv(client, {
+      readRepoVariableFn: async (_r, _t, n) => {
+        if (n === 'MYTHOS_BUILD_ORDER_ISSUES') return { ok: true, value: '99' };
+        if (n === 'MYTHOS_DISPATCH_LANE_CAP') return { ok: true, value: '5' };
+        return { ok: true, value: null };
+      },
+    }));
+    assert.equal(code, 0);
+    assert.ok(logs.some((l) => l.includes('issue_not_open')));
+  } finally {
+    console.log = orig;
+  }
+  assertNoLaneOrClaimWrites(client);
+});
+
+test('act moves past closed issue to claim the next build-order issue', async () => {
+  const client = createMockRefClient();
+  client.issueComments = async ({ issue }) => ({
+    ok: true,
+    comments: [{
+      id: String(issue),
+      databaseId: issue,
+      author: { login: 'SkyyPlayz' },
+      body: '## Files\n- a.ts',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    }],
+  });
+  client.getIssue = async ({ issue }) => ({
+    ok: true,
+    issue: issue === 99 ? { state: 'closed' } : { state: 'open' },
+  });
+  const logs = [];
+  const orig = console.log;
+  console.log = (...a) => logs.push(a.join(' '));
+  try {
+    const code = await runDispatchPlan(actEnv(client, {
+      readRepoVariableFn: async (_r, _t, n) => {
+        if (n === 'MYTHOS_BUILD_ORDER_ISSUES') return { ok: true, value: '99,1' };
+        if (n === 'MYTHOS_DISPATCH_LANE_CAP') return { ok: true, value: '5' };
+        return { ok: true, value: null };
+      },
+    }));
+    assert.equal(code, 0);
+    assert.ok(logs.some((l) => l.includes('issue_not_open') && l.includes('"issue":99')));
+    assert.ok(logs.some((l) => l.includes('dispatch_claimed') && l.includes('"issue":1')));
+  } finally {
+    console.log = orig;
+  }
+  assert.equal(client.exists(claimRef(1, 0)), true);
+});
+
+test('act skips pull request issue with zero writes', async () => {
+  const client = createMockRefClient();
+  client.issueComments = async () => ({
+    ok: true,
+    comments: [{
+      id: '7',
+      databaseId: 7,
+      author: { login: 'SkyyPlayz' },
+      body: '## Files\n- a.ts',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    }],
+  });
+  client.getIssue = async () => ({ ok: true, issue: { state: 'open', pull_request: {} } });
+  const logs = [];
+  const orig = console.log;
+  console.log = (...a) => logs.push(a.join(' '));
+  try {
+    const code = await runDispatchPlan(actEnv(client));
+    assert.equal(code, 0);
+    assert.ok(logs.some((l) => l.includes('issue_is_pr')));
+  } finally {
+    console.log = orig;
+  }
+  assertNoLaneOrClaimWrites(client);
+});
+
+test('verifyPlanCommentEditors holds on empty attributable edit history', async () => {
+  const client = createMockRefClient();
+  client.issueCommentContentEdits = async () => ({
+    ok: true,
+    complete: true,
+    editors: [],
+  });
+  const official = findOfficialPlan([{
+    id: '1',
+    databaseId: 1,
+    author: { login: 'SkyyPlayz' },
+    body: '## Files\n- a.ts',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-02T00:00:00Z',
+  }]);
+  const hold = await verifyPlanCommentEditors(client, 1, official);
+  assert.equal(hold.hold, true);
+  assert.equal(hold.reason, 'editor_history_incomplete');
 });
 
 test('verifyPlanCommentEditors holds on editor_fetch_failed', async () => {
@@ -454,7 +665,7 @@ test('fake gh e2e dry-run act claim and encoded ref paths', { timeout: 15000 }, 
           if (row.afterOid === zero) store.delete(row.name);
           else store.set(row.name, row.afterOid);
         }
-        return { status: 0, stdout: '{}' };
+        return { status: 0, stdout: JSON.stringify({ data: { updateRefs: { clientMutationId: null } } }) };
       }
       return { status: 0, stdout: '{}' };
     }
@@ -520,7 +731,7 @@ test('fake gh e2e dry-run act claim and encoded ref paths', { timeout: 15000 }, 
   assert.equal(dry, 0);
   const act = await runDispatchPlan(actEnv(client));
   assert.equal(act, 0);
-  const scratch = require('./constants').CANARY_SCRATCH_SHARED_REF;
+  const scratch = CANARY_SCRATCH_REF;
   const win = await client.createRef({ ref: scratch, sha: MAIN });
   assert.equal(win.ok, true);
   const lose = await client.createRef({ ref: scratch, sha: MAIN });
