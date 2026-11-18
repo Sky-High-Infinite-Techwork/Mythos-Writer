@@ -101,7 +101,7 @@ async function openTemplateSettings(pg: Page): Promise<void> {
   await expect(pg.locator('.app-menu-bar')).toBeVisible({ timeout: 15_000 });
   await pg.locator('.app-menu-gear-btn').click();
   await pg.getByRole('tab', { name: 'Vault & Files' }).click();
-  await expect(pg.getByRole('heading', { name: /^vault paths$/i })).toBeVisible({ timeout: 5_000 });
+  await expect(pg.getByRole('heading', { name: /^templates$/i })).toBeVisible({ timeout: 5_000 });
 }
 
 function templateItem(pg: Page, id: string) {

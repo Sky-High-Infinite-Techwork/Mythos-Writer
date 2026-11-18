@@ -253,12 +253,15 @@ async function openTimeline(page: Page): Promise<void> {
     await expect(backdrop).toHaveCount(0);
   }
 
-  const timelineBtn = page.locator('[data-testid="story-subview-timeline"]');
+  // SKY-9019/M5: Timeline is a nav-rail destination (not a story sub-view tab).
+  const timelineBtn = page.locator('nav[aria-label="Main navigation"] button[aria-label="Timeline"]');
   await expect(timelineBtn).toBeVisible({ timeout: 6_000 });
   await timelineBtn.click();
 
   await expect(page.locator('[data-testid="timeline-root"]')).toBeVisible({ timeout: 8_000 });
   await expect(page.locator('[data-testid="timeline-right-panel"]')).toBeVisible({ timeout: 8_000 });
+  await page.locator('[data-testid="view-mode-progress"]').click();
+  await expect(page.locator('[data-testid="timeline-axis-view"]')).toBeVisible({ timeout: 8_000 });
 }
 
 function readTimelinesStore(vaultDir: string): { events: Array<{ id: string; name: string; source?: string }> } {

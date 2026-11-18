@@ -22,7 +22,7 @@ import {
   type ElectronApplication,
   type Page,
 } from '@playwright/test';
-import { clickBrainstormMode, expectBrainstormModeVisible } from '../helpers/brainstormChrome';
+import { brainstormPanel, clickBrainstormMode, expectBrainstormModeVisible } from '../helpers/brainstormChrome';
 
 const MAIN_JS = path.resolve(__dirname, '../../out/main/main.js');
 
@@ -117,12 +117,15 @@ test('SKY-9876: AI off — Agent Chat gone, Board + Idea Collections stay manual
     // Board renders as the only page — no dead single-option segmented control.
     await expect(page.locator('[data-testid="bsc-mode-chat"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="bsc-mode-board"]')).toHaveCount(0);
-    await expect(page.locator('.pc-header-title', { hasText: 'Brainstorm Center' })).toBeVisible();
+    await expect(
+      brainstormPanel(page).locator('.pc-header-title'),
+      'AI off lands on the manual Idea Board page',
+    ).toContainText('Idea Board');
 
     // Every AI-bearing affordance is gone, cleanly (no dead band).
-    await expect(page.locator('.brainstorm-input')).toHaveCount(0);
-    await expect(page.locator('[data-testid="bs-board-side"]')).toHaveCount(0);
-    await expect(page.locator('.preset-selector-chip')).toHaveCount(0);
+    await expect(brainstormPanel(page).locator('.brainstorm-input')).toHaveCount(0);
+    await expect(brainstormPanel(page).getByTestId('bs-board-side-ai-off')).toBeVisible();
+    await expect(brainstormPanel(page).locator('.preset-selector-chip')).toHaveCount(0);
 
     // Idea Collections + canvas remain fully manual: seven collections with
     // live counts, and placing a starter idea onto the board still works by
