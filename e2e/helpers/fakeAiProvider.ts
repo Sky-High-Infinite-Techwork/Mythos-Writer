@@ -24,6 +24,7 @@ export type FakeAiDropMode = {
   kind: 'drop';
   chunks: string[];
   dropAfterChunks: number;
+  chunkDelayMs?: number;
 };
 
 export type FakeAiMode = FakeAiStreamMode | FakeAiHttpMode | FakeAiDropMode;
@@ -33,7 +34,10 @@ export interface FakeAiProvider {
   baseUrl: string;
   hits: () => number;
   requestHosts: () => string[];
-  sawClientClose: () => boolean;
+  /** True when the HTTP response closed before the stream finished (client abort). */
+  sawAbortClose: () => boolean;
+  /** Whether a terminal `[DONE]` SSE line was written. */
+  sentDone: () => boolean;
   setMode: (mode: FakeAiMode) => void;
   close: () => Promise<void>;
 }
@@ -67,7 +71,8 @@ export function startFakeAiProvider(initialMode: FakeAiMode = {
   let mode: FakeAiMode = initialMode;
   let hits = 0;
   const hosts: string[] = [];
-  let clientClosed = false;
+  let abortClose = false;
+  let doneSent = false;
 
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
@@ -80,8 +85,8 @@ export function startFakeAiProvider(initialMode: FakeAiMode = {
         return;
       }
 
-      req.on('close', () => {
-        clientClosed = true;
+      res.on('close', () => {
+        if (!res.writableFinished) abortClose = true;
       });
 
       hits += 1;
@@ -103,7 +108,7 @@ export function startFakeAiProvider(initialMode: FakeAiMode = {
 
           if (mode.kind === 'stream') {
             for (const chunk of mode.chunks) {
-              if (clientClosed) return;
+              if (abortClose) return;
               writeSse(res, chunk);
               if (mode.chunkDelayMs && mode.chunkDelayMs > 0) {
                 await delay(mode.chunkDelayMs);
@@ -111,6 +116,7 @@ export function startFakeAiProvider(initialMode: FakeAiMode = {
             }
             if (!res.writableEnded) {
               res.write('data: [DONE]\n\n');
+              doneSent = true;
               res.end();
             }
             return;
@@ -119,9 +125,12 @@ export function startFakeAiProvider(initialMode: FakeAiMode = {
           // drop mode
           let sent = 0;
           for (const chunk of mode.chunks) {
-            if (clientClosed) return;
+            if (abortClose) return;
             writeSse(res, chunk);
             sent += 1;
+            if (mode.chunkDelayMs && mode.chunkDelayMs > 0) {
+              await delay(mode.chunkDelayMs);
+            }
             if (sent >= mode.dropAfterChunks) {
               res.destroy();
               return;
@@ -142,8 +151,13 @@ export function startFakeAiProvider(initialMode: FakeAiMode = {
         baseUrl: `http://127.0.0.1:${port}/v1`,
         hits: () => hits,
         requestHosts: () => [...hosts],
-        sawClientClose: () => clientClosed,
-        setMode: (next) => { mode = next; clientClosed = false; },
+        sawAbortClose: () => abortClose,
+        sentDone: () => doneSent,
+        setMode: (next) => {
+          mode = next;
+          abortClose = false;
+          doneSent = false;
+        },
         close: () => new Promise<void>((r) => server.close(() => r())),
       });
     });

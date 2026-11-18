@@ -194,6 +194,28 @@ describe('useMiniAgentChat N4 cancel/stall main abort', () => {
     expect(api.cancelAiActivity).toHaveBeenCalledWith('req-slow');
   });
 
+  it('Retry resends the last failed prompt without retyping', async () => {
+    installApi();
+    const invoke = vi.fn()
+      .mockRejectedValueOnce(new Error('Network error — check your connection and try again.'))
+      .mockResolvedValueOnce('Second try worked.');
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    await act(async () => { await result.current.send('same prompt'); });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(result.current.error).toMatch(/network error/i);
+    expect(result.current.canRetry).toBe(true);
+
+    await act(async () => { result.current.retryLast(); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke.mock.calls[0]?.[0]).toBe('same prompt');
+    expect(invoke.mock.calls[1]?.[0]).toBe('same prompt');
+    expect(result.current.error).toBeNull();
+  });
+
   it('Critic N2: history sent to invoke strips raw Full Analysis card JSON', async () => {
     const api = installApi();
     const card = encodeCoachCard({
