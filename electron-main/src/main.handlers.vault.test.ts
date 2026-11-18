@@ -217,6 +217,17 @@ describe('main.handlers vault discovery / create / paths', () => {
     expect(settings.notesVaultRoot).toBe(created.notesVaultPath);
   });
 
+  it('vault:create-from-options refuses relative destinationParent', async () => {
+    const created = await invoke<{ ok: boolean; error?: string }>(IPC_CHANNELS.VAULT_CREATE_FROM_OPTIONS, {
+      mode: 'blank',
+      destinationParent: 'relative/parent',
+      name: 'BadParent',
+      activate: false,
+    });
+    expect(created.ok).toBe(false);
+    expect(created.error).toMatch(/absolute/i);
+  });
+
   it('vault:create-from-options with blank mode writes mythos bundle', async () => {
     const parent = makeTestTmp('from-options');
     const created = await invoke<{ ok: boolean; storyVaultPath?: string; notesVaultPath?: string; error?: string }>(

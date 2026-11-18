@@ -172,6 +172,22 @@ describe('main.handlers scene:*', () => {
     expect(afterSecond).toContain('harness1907');
   });
 
+  it('scene:save syncs @-mention entity links on disk saves', async () => {
+    await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
+    const { sceneId, sceneRelPath } = storySceneFromManifest(bundle.storyVaultPath, bundle.mythosRoot);
+    const mentionId = 'ent_harness1907';
+    const proseWithMention = `Opening with mention. [Elara](entity://${mentionId}) continues here.`;
+    const saved = await invoke<{ error?: string }>(IPC_CHANNELS.SCENE_SAVE, {
+      sceneId,
+      prose: proseWithMention,
+      intent: 'save',
+    });
+    expect(saved.error).toBeUndefined();
+    const md = readBytesUnderVault(bundle.storyVaultPath, sceneRelPath).toString('utf-8');
+    expect(md).toContain(proseWithMention);
+    expect(md).toContain(`entity://${mentionId}`);
+  });
+
   it('scene:save refuses unknown scene id without mutating disk', async () => {
     await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
     const { sceneRelPath } = storySceneFromManifest(bundle.storyVaultPath, bundle.mythosRoot);

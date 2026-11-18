@@ -115,6 +115,27 @@ describe('main.handlers settings:set', () => {
     );
   });
 
+  it('settings:set regenerates telemetry sessionId when disabling telemetry', async () => {
+    const settingsPath = path.join(bundle.userData, 'app-settings.json');
+    const before = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
+    const armed: AppSettings = {
+      ...before,
+      telemetry: { enabled: true, sessionId: 'telemetry-session-1907-fixed' },
+    };
+    const armedResult = await invoke<{ saved: boolean }>(IPC_CHANNELS.SETTINGS_SET, { settings: armed });
+    expect(armedResult.saved).toBe(true);
+    const disabled: AppSettings = {
+      ...JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings,
+      telemetry: { enabled: false, sessionId: 'telemetry-session-1907-fixed' },
+    };
+    const result = await invoke<{ saved: boolean }>(IPC_CHANNELS.SETTINGS_SET, { settings: disabled });
+    expect(result.saved).toBe(true);
+    const after = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
+    expect(after.telemetry?.enabled).toBe(false);
+    expect(after.telemetry?.sessionId).not.toBe('telemetry-session-1907-fixed');
+    expect(fs.readFileSync(settingsPath, 'utf-8')).toContain(after.telemetry?.sessionId ?? '');
+  });
+
   it('settings:get returns masked settings without throwing', async () => {
     const got = await invoke<AppSettings & { legacyVaultDetected?: boolean }>(IPC_CHANNELS.SETTINGS_GET);
     expect(got.theme).toBeTruthy();
