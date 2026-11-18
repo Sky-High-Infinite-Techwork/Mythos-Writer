@@ -154,7 +154,7 @@
     "test:e2e:board-vault-mutations": "playwright test e2e/tests/sky-11187-board-vault-mutations.spec.ts --reporter=list",
     "test:e2e:board-search-links-minimap": "playwright test e2e/tests/sky-11191-board-search-links-minimap.spec.ts --reporter=list",
     "test:e2e:sky214-entity-screenshots": "playwright test e2e/tests/sky214-entity-screenshots.spec.ts --reporter=list,html",
-    "test:e2e:scene-save-perf": "playwright test e2e/accent-breathe.spec.ts -g \"perf: Accent breathe holds frame rate\" --repeat-each=10 --retries=0 --reporter=list,html && playwright test e2e/scene-save-perf.spec.ts e2e/perf/ui-runtime.spec.ts --reporter=list,html",
+    "test:e2e:scene-save-perf": "playwright test e2e/scene-save-perf.spec.ts e2e/perf/ui-runtime.spec.ts --reporter=list,html",
     "test:e2e:brainstorm-scene-append": "playwright test e2e/brainstorm-scene-append.spec.ts --reporter=list,html",
     "test:e2e:m18-notes-right-panel": "playwright test e2e/tests/m18-notes-right-panel.spec.ts --reporter=list,html",
     "test:e2e:m19-scene-crafter-prose-invariant": "playwright test e2e/tests/m19-scene-crafter-prose-invariant.spec.ts --reporter=list,html",
