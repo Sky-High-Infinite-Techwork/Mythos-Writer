@@ -213,7 +213,72 @@ describe('useMiniAgentChat N4 cancel/stall main abort', () => {
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(invoke.mock.calls[0]?.[0]).toBe('same prompt');
     expect(invoke.mock.calls[1]?.[0]).toBe('same prompt');
+    const retryHistory = invoke.mock.calls[1]?.[1] as { role: string; content: string }[];
+    expect(retryHistory.filter((h) => h.role === 'user' && h.content === 'same prompt')).toHaveLength(0);
+    expect(result.current.messages.filter((m) => m.role === 'user' && m.text === 'same prompt')).toHaveLength(1);
     expect(result.current.error).toBeNull();
+  });
+
+  it('retry after partial stream keeps one user bubble and omits failed tail from invoke history', async () => {
+    const api = installApi();
+    let failFirst: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<string>((_, reject) => {
+            failFirst = () => reject(new Error('stream ended early'));
+          }),
+      )
+      .mockResolvedValueOnce('Done on retry.');
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('partial probe'); });
+    await act(async () => { await Promise.resolve(); });
+    act(() => { api.fireStreamStart('req-partial'); });
+    act(() => { api.fireChunk('Part one'); });
+    await act(async () => {
+      failFirst();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.canRetry).toBe(true);
+    expect(result.current.messages.filter((m) => m.role === 'user' && m.text === 'partial probe')).toHaveLength(1);
+    expect(result.current.messages.some((m) => m.text.includes('response incomplete'))).toBe(true);
+
+    await act(async () => { result.current.retryLast(); await Promise.resolve(); await Promise.resolve(); });
+
+    const retryHistory = invoke.mock.calls.at(-1)?.[1] as { role: string; content: string }[];
+    expect(retryHistory.filter((h) => h.content.includes('partial probe'))).toHaveLength(0);
+    expect(retryHistory.some((h) => h.content.includes('response incomplete'))).toBe(false);
+    expect(result.current.messages.filter((m) => m.role === 'user' && m.text === 'partial probe')).toHaveLength(1);
+  });
+
+  it('Cancel then retry keeps canRetry and resends without duplicating the user turn', async () => {
+    const api = installApi();
+    let resolveInvoke: (v: string) => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(
+        () => new Promise<string>((resolve) => { resolveInvoke = resolve; }),
+      )
+      .mockResolvedValueOnce('After cancel retry.');
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('cancel me'); });
+    await act(async () => { await Promise.resolve(); });
+    act(() => { api.fireStreamStart('req-cancel'); });
+    act(() => { result.current.cancel(); });
+
+    expect(result.current.canRetry).toBe(true);
+    expect(result.current.messages.filter((m) => m.role === 'user' && m.text === 'cancel me')).toHaveLength(0);
+
+    await act(async () => { result.current.retryLast(); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(result.current.messages.filter((m) => m.role === 'user' && m.text === 'cancel me')).toHaveLength(1);
+    expect(result.current.error).toBeNull();
+    void resolveInvoke;
   });
 
   it('Critic N2: history sent to invoke strips raw Full Analysis card JSON', async () => {

@@ -233,6 +233,7 @@ test('error state: failed provider response keeps the user message; resend recov
   await page.getByTestId('ahp-partner-chat-retry').click();
 
   await expect(page.locator('.trp-bubble--agent', { hasText: 'Coach reply after retry.' })).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.trp-bubble--user', { hasText: prompt })).toHaveCount(1);
   await expect(page.getByTestId('ahp-partner-chat-error')).toHaveCount(0);
 });
 

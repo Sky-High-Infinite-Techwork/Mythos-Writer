@@ -215,13 +215,13 @@ test('429 rate limit shows once without automatic retry loop', async () => {
   expect(fake.hits()).toBe(before + 1);
 });
 
-test('500 error then manual retry succeeds', async () => {
+test('500 error then manual retry succeeds', async ({}, testInfo) => {
   await openPartnerChat(page);
   fake.setMode({ kind: 'http', status: 500, body: 'internal error' });
   const prompt = 'Retry after five hundred';
   await sendPartnerPrompt(page, prompt);
   await expect(page.getByTestId('ahp-partner-chat-error')).toContainText(/network error/i, { timeout: 12_000 });
-  await page.screenshot({ path: '/opt/cursor/artifacts/partner-500-retry.png', fullPage: false });
+  await page.screenshot({ path: testInfo.outputPath('partner-500-retry.png'), fullPage: false });
 
   fake.setMode({ kind: 'stream', chunks: ['Recovered reply'] });
   await expect(page.getByTestId('ahp-partner-chat-retry')).toBeVisible({ timeout: 8_000 });

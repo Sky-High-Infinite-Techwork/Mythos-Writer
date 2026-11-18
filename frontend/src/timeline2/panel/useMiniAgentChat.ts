@@ -55,6 +55,32 @@ export const STALL_WARNING_MS = 20_000;
 /** Hard timeout — abort the provider stream in MAIN. */
 export const HARD_TIMEOUT_MS = 90_000;
 
+const RESPONSE_INCOMPLETE_SUFFIX = '(response incomplete)';
+
+type FailedExchange = {
+  prompt: string;
+  /** User turn from the failed attempt is already in the session feed. */
+  userInFeed: boolean;
+};
+
+/** Drop the failed exchange tail so retry invoke(history, prompt) does not duplicate the user turn. */
+function turnsForModelHistory(turns: AgentSessionTurn[], retryPrompt: string | null): AgentSessionTurn[] {
+  let work = turns;
+  if (!retryPrompt) {
+    return work.slice(-MAX_HISTORY_TURNS);
+  }
+  const trimmed = [...work];
+  const last = trimmed.at(-1);
+  if (last?.role === 'agent' && last.text.includes(RESPONSE_INCOMPLETE_SUFFIX)) {
+    trimmed.pop();
+  }
+  const lastUser = trimmed.at(-1);
+  if (lastUser?.role === 'user' && lastUser.text === retryPrompt) {
+    trimmed.pop();
+  }
+  return trimmed.slice(-MAX_HISTORY_TURNS);
+}
+
 function getEffectiveTimerMs(fallback: number, key: 'stallWarningMs' | 'hardTimeoutMs'): number {
   const override = (window as unknown as { __MYTHOS_E2E_TIMERS__?: Partial<Record<string, number>> })
     .__MYTHOS_E2E_TIMERS__?.[key];
@@ -78,6 +104,7 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
   const mainRequestIdRef = useRef<string | null>(null);
   const streamAccumRef = useRef('');
   const lastFailedPromptRef = useRef<string | null>(null);
+  const lastFailedExchangeRef = useRef<FailedExchange | null>(null);
   const generationGenRef = useRef(0);
   const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -140,6 +167,7 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
     generationGenRef.current += 1;
     resetInFlight();
     lastFailedPromptRef.current = cancelledPrompt;
+    lastFailedExchangeRef.current = { prompt: cancelledPrompt, userInFeed: false };
     setCanRetry(true);
     setError('Generation cancelled. You can retry now.');
   }, [pendingPrompt, resetInFlight]);
@@ -147,6 +175,8 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
   const send = useCallback(async (prompt: string) => {
     const trimmed = prompt.trim();
     if (!trimmed || pendingPrompt !== null) return;
+    const failedExchange = lastFailedExchangeRef.current;
+    const isRetryOfFailed = failedExchange?.prompt === trimmed;
     setError(null);
     setCanRetry(false);
     setStalled(false);
@@ -194,12 +224,14 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
     // belong to the session they were asked from.
     const originSessionId = store.activeSessionId ?? undefined;
     // Critic N2: never send raw card JSON / markers as model history.
-    const history = (store.activeSession?.turns ?? [])
-      .slice(-MAX_HISTORY_TURNS)
-      .map((t) => ({
-        role: t.role === 'agent' ? ('assistant' as const) : ('user' as const),
-        content: historyContentForModel(t, { sessionAgent: store.activeSession?.agent }),
-      }));
+    const historySource = turnsForModelHistory(
+      store.activeSession?.turns ?? [],
+      isRetryOfFailed ? trimmed : null,
+    );
+    const history = historySource.map((t) => ({
+      role: t.role === 'agent' ? ('assistant' as const) : ('user' as const),
+      content: historyContentForModel(t, { sessionAgent: store.activeSession?.agent }),
+    }));
 
     try {
       const result = await invoke(trimmed, history);
@@ -230,7 +262,9 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
         agentTurn.text = neutralizeLeadingCoachCardMarker(agentTurn.text);
       }
       const lastTurn = store.activeSession?.turns.at(-1);
-      const userAlreadyInFeed = lastTurn?.role === 'user' && lastTurn.text === trimmed;
+      const userAlreadyInFeed =
+        (isRetryOfFailed && failedExchange?.userInFeed)
+        || (lastTurn?.role === 'user' && lastTurn.text === trimmed);
       await store.appendTurns(
         userAlreadyInFeed
           ? [agentTurn]
@@ -241,6 +275,7 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
         originSessionId,
       );
       lastFailedPromptRef.current = null;
+      lastFailedExchangeRef.current = null;
       streamAccumRef.current = '';
     } catch (err) {
       if (generationGenRef.current !== gen) return;
@@ -265,8 +300,12 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
           // Feed stays usable even if vault persist fails.
         }
       }
+      const userInFeed =
+        (lastExisting?.role === 'user' && lastExisting.text === trimmed)
+        || failedTurns.some((t) => t.role === 'user' && t.text === trimmed);
       streamAccumRef.current = '';
       lastFailedPromptRef.current = trimmed;
+      lastFailedExchangeRef.current = { prompt: trimmed, userInFeed };
       setCanRetry(true);
       const base = msg || 'Agent unavailable — check your provider settings.';
       setError(partial ? `${base} (partial reply kept above)` : base);
