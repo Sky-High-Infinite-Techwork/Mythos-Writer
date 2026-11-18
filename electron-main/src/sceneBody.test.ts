@@ -12,11 +12,45 @@ import {
   serializeBlockSegment,
   unwrapBlockSegment,
   SEGMENT_SEPARATOR,
+  sceneBodyWhitespaceSeams,
+  sceneBodyMarkerSeams,
   type SerializableBlock,
 } from './sceneBody.js';
 import type { BlockEntry } from './ipc.js';
 
 const BLOCK_TYPES: BlockEntry['type'][] = ['prose', 'heading', 'dialogue', 'action', 'description', 'note'];
+
+describe('sceneBody marker seams', () => {
+  it('HEADING_PREFIX_RE accepts 1–6 hashes only when followed by space or end', () => {
+    const re = sceneBodyMarkerSeams.HEADING_PREFIX_RE;
+    expect(re.test('# Title')).toBe(true);
+    expect(re.test('######')).toBe(true);
+    expect(re.test('#######')).toBe(false);
+    expect(re.test('Title')).toBe(false);
+    expect(re.test('##NoSpace')).toBe(false);
+    expect(re.test('#\n')).toBe(true);
+  });
+});
+
+describe('sceneBody whitespace seams', () => {
+  it('matches Node-style whitespace for space, tab, LF, and CR only', () => {
+    const { isWhitespaceChar, isAllWhitespace, leadingWsLen, trailingWsLen } = sceneBodyWhitespaceSeams;
+    expect(isWhitespaceChar(32)).toBe(true);
+    expect(isWhitespaceChar(9)).toBe(true);
+    expect(isWhitespaceChar(10)).toBe(true);
+    expect(isWhitespaceChar(13)).toBe(true);
+    expect(isWhitespaceChar(65)).toBe(false);
+    expect(isAllWhitespace(' \t\r\n')).toBe(true);
+    expect(isAllWhitespace(' x ')).toBe(false);
+    const padded = ' \tHi\t ';
+    expect(leadingWsLen(padded)).toBe(2);
+    expect(trailingWsLen(padded)).toBe(2);
+    expect(leadingWsLen('')).toBe(0);
+    expect(trailingWsLen('')).toBe(0);
+    expect(trailingWsLen('no-trail')).toBe(0);
+    expect(leadingWsLen('no-lead')).toBe(0);
+  });
+});
 
 function b(type: BlockEntry['type'], content: string, order: number): SerializableBlock {
   return { type, content, order };
@@ -155,6 +189,29 @@ describe('computeSceneBodyLayout — boundaries match the built body without bui
     expect(computeSceneBodyLayout([b('prose', '  ', 0)])).toEqual({ segments: [], totalLength: 0 });
   });
 
+  it('segment length arithmetic matches serializeBlockSegment for every marker type', () => {
+    const cases: SerializableBlock[] = [
+      b('heading', 'Title', 0),
+      b('heading', '## Already', 1),
+      b('dialogue', 'Hi', 2),
+      b('action', 'Act', 3),
+      b('description', 'x', 4),
+      b('note', 'n', 5),
+      b('prose', '  prose  ', 6),
+    ];
+    const body = blocksToMarkdownBody(cases);
+    const layout = computeSceneBodyLayout(cases);
+    expect(layout.totalLength).toBe(body.length);
+    for (const seg of layout.segments) {
+      const slice = body.slice(seg.offset, seg.offset + seg.length);
+      const unwrapped = unwrapBlockSegment(cases[seg.index].type, slice);
+      expect(unwrapped).not.toBeNull();
+      expect(serializeBlockSegment({ ...cases[seg.index], content: unwrapped as string, order: cases[seg.index].order })).toBe(
+        slice,
+      );
+    }
+  });
+
   it('property: layout slices always equal the built body segments, for arbitrary block lists', () => {
     const arbBlock = fc.record({
       type: fc.constantFrom(...BLOCK_TYPES),
@@ -178,7 +235,7 @@ describe('computeSceneBodyLayout — boundaries match the built body without bui
           prevEnd = seg.offset + seg.length;
         }
       }),
-      { numRuns: 200 }
+      { numRuns: 400 }
     );
   });
 });
@@ -202,10 +259,17 @@ describe('unwrapBlockSegment — exact inverse of serializeBlockSegment', () => 
 
   it('returns null when a segment lacks the markers its type is always written with (external edit signal)', () => {
     expect(unwrapBlockSegment('heading', 'no hash run')).toBeNull();
+    expect(unwrapBlockSegment('heading', '#no-space-hash')).toBeNull();
     expect(unwrapBlockSegment('dialogue', 'no quote marker')).toBeNull();
+    expect(unwrapBlockSegment('dialogue', '>')).toBeNull();
     expect(unwrapBlockSegment('action', '**unterminated')).toBeNull();
+    expect(unwrapBlockSegment('action', 'not**wrapped**')).toBeNull();
     expect(unwrapBlockSegment('description', 'unstarred')).toBeNull();
+    expect(unwrapBlockSegment('description', '*')).toBeNull();
     expect(unwrapBlockSegment('note', '<!-- unterminated')).toBeNull();
+    expect(unwrapBlockSegment('note', '<!-- short')).toBeNull();
+    expect(unwrapBlockSegment('note', '<!-- x -->')).toBe('x');
+    expect(unwrapBlockSegment('description', '*a*')).toBe('a');
   });
 
   it('unwrap(wrap(content)) === content for every type with marker-free interior content', () => {
@@ -215,5 +279,47 @@ describe('unwrapBlockSegment — exact inverse of serializeBlockSegment', () => 
       expect(seg).not.toBeNull();
       expect(unwrapBlockSegment(type, seg as string)).toBe(content);
     }
+  });
+
+  it('serializes a lone heading hash run when it already looks like markdown', () => {
+    expect(serializeBlockSegment(b('heading', '######', 0))).toBe('######');
+    expect(unwrapBlockSegment('heading', '######')).toBe('######');
+  });
+
+  it('action unwrap requires both opening and closing ** markers (segment length ≥ 4)', () => {
+    expect(unwrapBlockSegment('action', '**x')).toBeNull();
+    expect(unwrapBlockSegment('action', '**')).toBeNull();
+    expect(unwrapBlockSegment('action', '**xy')).toBeNull();
+    expect(unwrapBlockSegment('action', '**ok**')).toBe('ok');
+    expect(unwrapBlockSegment('action', '****')).toBe('');
+  });
+
+  it('treats tab and CR as whitespace for trim and skip decisions', () => {
+    const body = blocksToMarkdownBody([
+      b('prose', '\tVisible\t', 0),
+      b('dialogue', 'Middle\r', 1),
+      b('prose', '  ', 2),
+    ]);
+    expect(body).toBe('Visible\t\n\n> Middle');
+    expect(serializeBlockSegment(b('prose', '\u00a0\u00a0', 0))).toBe('\u00a0\u00a0');
+  });
+
+  it('strips a leading UTF-8 BOM with the body-level trim and keeps CRLF inside prose', () => {
+    const bom = '\uFEFF';
+    const withCrlf = `${bom}Line one.\r\n\r\nLine two.`;
+    const blocks = [b('prose', withCrlf, 0)];
+    const body = blocksToMarkdownBody(blocks);
+    const layout = computeSceneBodyLayout(blocks);
+    expect(body).toContain('\r\n');
+    expect(body.startsWith('Line one.')).toBe(true);
+    const slice = body.slice(layout.segments[0]!.offset, layout.segments[0]!.offset + layout.segments[0]!.length);
+    expect(slice).toBe(body);
+  });
+
+  it('returns an empty layout when every block is whitespace-only', () => {
+    expect(computeSceneBodyLayout([b('heading', '   ', 0), b('action', '\t', 1)])).toEqual({
+      segments: [],
+      totalLength: 0,
+    });
   });
 });

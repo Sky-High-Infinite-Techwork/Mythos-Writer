@@ -8,6 +8,8 @@ import os from 'os';
 import path from 'path';
 import { rewriteWikiLinksForRename } from '@mythos-writer/shared/wikiLinkRename';
 import { writeVaultFileAtomic } from './vault.js';
+import { symlinkSkipLine } from './vault/writeErrors.js';
+import { VaultWriteRefusedError } from './vault/noFollowWrite.js';
 import {
   applyVaultTransaction,
   undoVaultTransaction,
@@ -54,6 +56,99 @@ afterEach(() => {
 });
 
 describe('vaultTransaction', () => {
+  it('refuses undo immediately when the undo slot was reset', () => {
+    writeNote('Jasper Thorne.md', 'x');
+    applyVaultTransaction({
+      notesRoot,
+      storyRoot,
+      fromPath: 'Jasper.md',
+      toPath: 'Jasper Thorne.md',
+      oldStem: 'Jasper',
+      newStem: 'Jasper Thorne',
+      changes: [],
+    });
+    _resetVaultTransactionState();
+    const refused = undoVaultTransaction({ notesRoot, storyRoot });
+    expect(refused.response.undone).toBe(false);
+    expect(refused.response.reason).toBe('Nothing to undo.');
+  });
+  it('surfaces rollback failures when restore after a mid-cascade error also fails', () => {
+    writeNote('Jasper Thorne.md', 'j');
+    writeNote('Allies.md', 'a');
+    writeNote('B.md', 'b');
+    let calls = 0;
+    const flaky: VaultWriter = (r, rel, content) => {
+      calls += 1;
+      if (calls === 2) throw new Error('write boom');
+      if (calls === 3) throw new Error('rollback also failed');
+      writeVaultFileAtomic(r, rel, content);
+    };
+    expect(() =>
+      applyVaultTransaction({
+        notesRoot,
+        storyRoot,
+        fromPath: 'Jasper.md',
+        toPath: 'Jasper Thorne.md',
+        oldStem: 'Jasper',
+        newStem: 'Jasper Thorne',
+        changes: [
+          {
+            side: 'notes',
+            kind: 'note',
+            relPath: 'Allies.md',
+            newContent: 'a2',
+            linkCount: 0,
+            mode: 'update-display',
+          },
+          {
+            side: 'notes',
+            kind: 'note',
+            relPath: 'B.md',
+            newContent: 'b2',
+            linkCount: 0,
+            mode: 'update-display',
+          },
+        ],
+        writeFile: flaky,
+      }),
+    ).toThrow(/could not be restored/);
+  });
+
+  it('reports rename cascade progress while applying', () => {
+    writeNote('Jasper Thorne.md', 'body');
+    writeNote('Allies.md', 'a');
+    writeNote('B.md', 'b');
+    const progress: number[] = [];
+    applyVaultTransaction({
+      notesRoot,
+      storyRoot,
+      fromPath: 'Jasper.md',
+      toPath: 'Jasper Thorne.md',
+      oldStem: 'Jasper',
+      newStem: 'Jasper Thorne',
+      changes: [
+        {
+          side: 'notes',
+          kind: 'note',
+          relPath: 'Allies.md',
+          newContent: 'a2',
+          linkCount: 0,
+          mode: 'update-display',
+        },
+        {
+          side: 'notes',
+          kind: 'note',
+          relPath: 'B.md',
+          newContent: 'b2',
+          linkCount: 0,
+          mode: 'update-display',
+        },
+      ],
+      onProgress: (p) => progress.push(p.current),
+    });
+    expect(progress).toEqual([1, 2]);
+  });
+
   it('snapshots every file before any write', () => {
     const alliesOriginal = 'See [[Jasper]] for details.';
     const sceneOriginal = 'Then [[Jasper]] arrived.';
@@ -161,6 +256,32 @@ describe('vaultTransaction', () => {
     expect(readNote('Allies.md')).toBe('See [[Jasper]] for details.');
     expect(readNote('Enemies.md')).toBe('Feared by [[Jasper|Jay]].');
     expect(readScene('Manuscript/01/scene-1.md')).toBe('Then [[Jasper]] arrived.');
+  });
+
+  it('omits skippedSymlinks from the response when every file restored cleanly', () => {
+    writeNote('Jasper Thorne.md', 'self-v1\n');
+    applyVaultTransaction({
+      notesRoot,
+      storyRoot,
+      fromPath: 'Jasper.md',
+      toPath: 'Jasper Thorne.md',
+      oldStem: 'Jasper',
+      newStem: 'Jasper Thorne',
+      changes: [
+        {
+          side: 'notes',
+          kind: 'note',
+          relPath: 'Jasper Thorne.md',
+          newContent: 'self-v2\n',
+          linkCount: 1,
+          mode: 'update-display',
+        },
+      ],
+    });
+    const undo = undoVaultTransaction({ notesRoot, storyRoot });
+    expect(undo.response.undone).toBe(true);
+    expect(undo.response.skippedSymlinks).toBeUndefined();
+    expect(bytesEqual(notesRoot, 'Jasper.md', 'self-v1\n')).toBe(true);
   });
 
   it('undo restores exact pre-write bytes', () => {
@@ -324,6 +445,261 @@ describe('vaultTransaction', () => {
     } finally {
       fs.rmSync(otherNotes, { recursive: true, force: true });
     }
+  });
+
+  it('refuses undo when the story vault root no longer matches the transaction', () => {
+    writeNote('Jasper Thorne.md', 'body');
+    writeNote('Allies.md', 'before');
+    applyVaultTransaction({
+      notesRoot,
+      storyRoot,
+      fromPath: 'Jasper.md',
+      toPath: 'Jasper Thorne.md',
+      oldStem: 'Jasper',
+      newStem: 'Jasper Thorne',
+      changes: [
+        {
+          side: 'notes',
+          kind: 'note',
+          relPath: 'Allies.md',
+          newContent: 'after',
+          linkCount: 0,
+          mode: 'update-display',
+        },
+      ],
+    });
+
+    const otherStory = fs.mkdtempSync(path.join(os.tmpdir(), 'vault-tx-other-story-'));
+    try {
+      const refused = undoVaultTransaction({ notesRoot, storyRoot: otherStory });
+      expect(refused.response.undone).toBe(false);
+      expect(refused.response.reason).toBe('The project has changed since the rename.');
+      expect(readNote('Allies.md')).toBe('after');
+      expect(fs.existsSync(path.join(notesRoot, 'Jasper Thorne.md'))).toBe(true);
+    } finally {
+      fs.rmSync(otherStory, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses undo when the renamed note was deleted after the cascade', () => {
+    writeNote('Jasper Thorne.md', 'note');
+    writeNote('Allies.md', '[[Jasper]]');
+    applyVaultTransaction({
+      notesRoot,
+      storyRoot,
+      fromPath: 'Jasper.md',
+      toPath: 'Jasper Thorne.md',
+      oldStem: 'Jasper',
+      newStem: 'Jasper Thorne',
+      changes: [
+        {
+          side: 'notes',
+          kind: 'note',
+          relPath: 'Allies.md',
+          newContent: '[[Jasper Thorne]]',
+          linkCount: 1,
+          mode: 'update-display',
+        },
+      ],
+    });
+    fs.rmSync(path.join(notesRoot, 'Jasper Thorne.md'));
+
+    const refused = undoVaultTransaction({ notesRoot, storyRoot });
+    expect(refused.response.undone).toBe(false);
+    expect(refused.response.reason).toBe('The renamed note has been moved or deleted.');
+    expect(readNote('Allies.md')).toBe('[[Jasper Thorne]]');
+  });
+
+  it('refuses undo when a note already occupies the original path', () => {
+    writeNote('Jasper Thorne.md', 'new');
+    writeNote('Jasper.md', 'blocker');
+    writeNote('Allies.md', 'x');
+    applyVaultTransaction({
+      notesRoot,
+      storyRoot,
+      fromPath: 'Jasper.md',
+      toPath: 'Jasper Thorne.md',
+      oldStem: 'Jasper',
+      newStem: 'Jasper Thorne',
+      changes: [
+        {
+          side: 'notes',
+          kind: 'note',
+          relPath: 'Allies.md',
+          newContent: 'y',
+          linkCount: 0,
+          mode: 'update-display',
+        },
+      ],
+    });
+
+    const refused = undoVaultTransaction({ notesRoot, storyRoot });
+    expect(refused.response.undone).toBe(false);
+    expect(refused.response.reason).toBe('A note now exists under the original name.');
+    expect(readNote('Jasper.md')).toBe('blocker');
+    expect(fs.existsSync(path.join(notesRoot, 'Jasper Thorne.md'))).toBe(true);
+  });
+
+  it('lists symlinked files as skippedSymlinks instead of following them on undo', () => {
+    let symlinksWork = true;
+    try {
+      const probe = fs.mkdtempSync(path.join(os.tmpdir(), 'symlink-probe-'));
+      fs.symlinkSync('t', path.join(probe, 'l'));
+      fs.rmSync(probe, { recursive: true, force: true });
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EPERM' || code === 'ENOTSUP') symlinksWork = false;
+      else throw err;
+    }
+    if (!symlinksWork) return;
+
+    writeNote('Jasper Thorne.md', 'body');
+    writeNote('Allies.md', 'See [[Jasper]]');
+    applyVaultTransaction({
+      notesRoot,
+      storyRoot,
+      fromPath: 'Jasper.md',
+      toPath: 'Jasper Thorne.md',
+      oldStem: 'Jasper',
+      newStem: 'Jasper Thorne',
+      changes: [
+        {
+          side: 'notes',
+          kind: 'note',
+          relPath: 'Allies.md',
+          newContent: 'See [[Jasper Thorne]]',
+          linkCount: 1,
+          mode: 'update-display',
+        },
+      ],
+    });
+
+    const realBody = readNote('Allies.md');
+    const backing = path.join(notesRoot, 'allies-backing.md');
+    fs.writeFileSync(backing, realBody, 'utf-8');
+    fs.rmSync(path.join(notesRoot, 'Allies.md'));
+    fs.symlinkSync(backing, path.join(notesRoot, 'Allies.md'));
+
+    const undo = undoVaultTransaction({ notesRoot, storyRoot });
+    expect(undo.response.undone).toBe(true);
+    expect(undo.response.skippedSymlinks).toEqual([symlinkSkipLine('Allies.md')]);
+    expect(fs.readFileSync(backing, 'utf-8')).toBe('See [[Jasper Thorne]]');
+    expect(fs.existsSync(path.join(notesRoot, 'Jasper.md'))).toBe(true);
+    expect(undo.response.filesRestored).toBe(0);
+    expect(undo.response.filesSkipped).toBe(1);
+  });
+
+  it('undo span-reverts a board sidecar ref after a later manual edit (kind: board)', () => {
+    const sidecarDir = path.join(notesRoot, 'Worldbuilding');
+    fs.mkdirSync(sidecarDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sidecarDir, '.mythos-board.json'),
+      JSON.stringify({
+        version: 2,
+        id: 'board-1',
+        updated: new Date(0).toISOString(),
+        layout: {},
+        colors: {},
+        furniture: [{ id: 'x1', k: 'column', x: 0, y: 0, items: [{ t: 'J', ref: 'Jasper.md' }] }],
+        view: { zoom: 100, panX: 0, panY: 0 },
+      }),
+      'utf-8',
+    );
+    writeNote('Jasper Thorne.md', 'body');
+    const updated = JSON.stringify({
+      version: 2,
+      id: 'board-1',
+      updated: new Date(0).toISOString(),
+      layout: {},
+      colors: {},
+      furniture: [{ id: 'x1', k: 'column', x: 0, y: 0, items: [{ t: 'J', ref: 'Jasper Thorne.md' }] }],
+      view: { zoom: 100, panX: 0, panY: 0 },
+    });
+    applyVaultTransaction({
+      notesRoot,
+      storyRoot,
+      fromPath: 'Jasper.md',
+      toPath: 'Jasper Thorne.md',
+      oldStem: 'Jasper',
+      newStem: 'Jasper Thorne',
+      changes: [
+        {
+          side: 'notes',
+          kind: 'board',
+          relPath: 'Worldbuilding/.mythos-board.json',
+          newContent: updated,
+          linkCount: 1,
+          mode: 'update-display',
+        },
+      ],
+    });
+
+    const edited = JSON.stringify({
+      version: 2,
+      id: 'board-1',
+      updated: new Date(0).toISOString(),
+      layout: {},
+      colors: {},
+      furniture: [{ id: 'x1', k: 'column', x: 0, y: 0, items: [{ t: 'J', ref: 'Jasper Thorne.md', edited: true }] }],
+      view: { zoom: 100, panX: 0, panY: 0 },
+    });
+    fs.writeFileSync(path.join(sidecarDir, '.mythos-board.json'), edited, 'utf-8');
+
+    const undo = undoVaultTransaction({ notesRoot, storyRoot });
+    expect(undo.response.undone).toBe(true);
+    const parsed = JSON.parse(fs.readFileSync(path.join(sidecarDir, '.mythos-board.json'), 'utf-8')) as {
+      furniture: Array<{ items?: Array<{ ref?: string }> }>;
+    };
+    expect(parsed.furniture[0]!.items![0]!.ref).toBe('Jasper.md');
+    expect(JSON.parse(fs.readFileSync(path.join(sidecarDir, '.mythos-board.json'), 'utf-8')).furniture[0]).toMatchObject({
+      items: [{ ref: 'Jasper.md', edited: true }],
+    });
+  });
+
+  it('records a write refusal during undo as a conflict without following a symlink target', () => {
+    let symlinksWork = true;
+    try {
+      const probe = fs.mkdtempSync(path.join(os.tmpdir(), 'symlink-probe-'));
+      fs.symlinkSync('t', path.join(probe, 'l'));
+      fs.rmSync(probe, { recursive: true, force: true });
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EPERM' || code === 'ENOTSUP') symlinksWork = false;
+      else throw err;
+    }
+    if (!symlinksWork) return;
+
+    writeNote('Jasper Thorne.md', 'body');
+    writeNote('Allies.md', '[[Jasper]]');
+    applyVaultTransaction({
+      notesRoot,
+      storyRoot,
+      fromPath: 'Jasper.md',
+      toPath: 'Jasper Thorne.md',
+      oldStem: 'Jasper',
+      newStem: 'Jasper Thorne',
+      changes: [
+        {
+          side: 'notes',
+          kind: 'note',
+          relPath: 'Allies.md',
+          newContent: '[[Jasper Thorne]]',
+          linkCount: 1,
+          mode: 'update-display',
+        },
+      ],
+    });
+
+    const undo = undoVaultTransaction({
+      notesRoot,
+      storyRoot,
+      writeFile: () => {
+        throw new VaultWriteRefusedError('LEAF_LINK', 'Allies.md');
+      },
+    });
+    expect(undo.response.undone).toBe(true);
+    expect(undo.conflicts).toContainEqual({ side: 'notes', relPath: 'Allies.md' });
+    expect(undo.response.skippedSymlinks).toEqual([symlinkSkipLine('Allies.md')]);
   });
 
   it('rolls back the rename and does not recreate a file deleted after planning', () => {

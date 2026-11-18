@@ -203,3 +203,15 @@ export function unwrapBlockSegment(type: BlockEntry['type'], segment: string): s
       return segment;
   }
 }
+
+/** Test seam for whitespace scanning used in layout + serialization (mutation-hardening). */
+export const sceneBodyWhitespaceSeams = {
+  isWhitespaceChar,
+  isAllWhitespace,
+  leadingWsLen,
+  trailingWsLen,
+} as const;
+
+export const sceneBodyMarkerSeams = {
+  HEADING_PREFIX_RE,
+} as const;
