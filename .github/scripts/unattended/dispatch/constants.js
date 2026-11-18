@@ -49,9 +49,6 @@ function doneRef(issueNumber, sliceIndex) {
   return `${DISPATCH_REF_PREFIX}/done/${issueNumber}-${sliceIndex}`;
 }
 
-/** @deprecated use canaryScratchRef(runId, runAttempt) */
-const CANARY_SCRATCH_SHARED_REF = `${DISPATCH_REF_PREFIX}/canary/scratch-shared`;
-
 function canaryScratchRef(runId, runAttempt) {
   const rid = Number.parseInt(String(runId ?? ''), 10);
   const att = Number.parseInt(String(runAttempt ?? ''), 10);
@@ -138,7 +135,6 @@ module.exports = {
   claimRef,
   attemptsRef,
   doneRef,
-  CANARY_SCRATCH_SHARED_REF,
   canaryScratchRef,
   protectedLiteralPrefix,
   sha256Hex,

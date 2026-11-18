@@ -93,6 +93,71 @@ test('updateRefs fails closed on empty success body', async () => {
   assert.equal(result.error, 'graphql_no_update_refs');
 });
 
+test('updateRefs aborts when switches fail after repository node lookup', async () => {
+  let gqlCalls = 0;
+  const gh = (args) => {
+    if (args.includes('graphql')) {
+      gqlCalls += 1;
+      return { status: 0, stdout: JSON.stringify({ data: { updateRefs: { clientMutationId: null } } }) };
+    }
+    return { status: 0, stdout: '"R_x"\n' };
+  };
+  const { write } = createDispatchClients({
+    readToken: 'r',
+    writeToken: 'w',
+    gh,
+    reReadSwitch: async () => ({ ok: false, enabled: false }),
+  });
+  const result = await write.updateRefs([refUpdateCreate('refs/mythos/dispatch/lane-00', 'a'.repeat(40))]);
+  assert.equal(result.ok, false);
+  assert.equal(result.fatal, true);
+  assert.equal(result.error, 'switch_read');
+  assert.equal(gqlCalls, 0);
+});
+
+test('updateRefs aborts when switches off after repository node lookup', async () => {
+  let gqlCalls = 0;
+  const gh = (args) => {
+    if (args.includes('graphql')) {
+      gqlCalls += 1;
+      return { status: 0, stdout: JSON.stringify({ data: { updateRefs: { clientMutationId: null } } }) };
+    }
+    return { status: 0, stdout: '"R_x"\n' };
+  };
+  const { write } = createDispatchClients({
+    readToken: 'r',
+    writeToken: 'w',
+    gh,
+    reReadSwitch: async () => ({ ok: true, enabled: false }),
+  });
+  const result = await write.updateRefs([refUpdateCreate('refs/mythos/dispatch/lane-00', 'a'.repeat(40))]);
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'switch_off');
+  assert.equal(gqlCalls, 0);
+});
+
+test('combined createLeaseCommit forwards switch options and skips POST when off', async () => {
+  let postCalls = 0;
+  const gh = (args) => {
+    const flat = args.map((a) => String(a));
+    if (flat.includes('-X') && flat.some((a) => a.includes('/git/commits'))) {
+      postCalls += 1;
+      return { status: 0, stdout: JSON.stringify({ sha: 'c'.repeat(40) }) };
+    }
+    if (flat.some((a) => a.includes('/git/commits/') && flat.includes('.tree.sha'))) {
+      return { status: 0, stdout: 't'.repeat(40) + '\n' };
+    }
+    return { status: 0, stdout: '"R_x"\n' };
+  };
+  const { combined } = createDispatchClients({ readToken: 'r', writeToken: 'w', gh });
+  const result = await combined.createLeaseCommit('lease-msg', 'a'.repeat(40), {
+    reReadSwitch: async () => ({ ok: true, enabled: false }),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'switch_off');
+  assert.equal(postCalls, 0);
+});
+
 test('createLeaseCommit aborts when switch flips after parent tree fetch', async () => {
   let calls = 0;
   const gh = (args) => {

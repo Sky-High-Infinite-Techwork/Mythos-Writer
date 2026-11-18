@@ -29,13 +29,23 @@ const {
   assertHolderBeforePublish,
   tryCreateRefPair,
   REF_EXISTS,
+  activeLeasesAll,
 } = require('./dispatch/claim');
 
-async function concurrentSlotRace(client, slotIndex, leaseSha, workers) {
+function workerLeaseSha(index, prefix = 'a') {
+  const hex = String(index).padStart(39, '0');
+  return `${prefix}${hex}`.slice(0, 40);
+}
+
+async function concurrentSlotRace(client, slotIndex, workers, leaseShaForIndex) {
   const ref = slotRef(slotIndex);
   const claimRefName = `${claimRef(0, 0)}-race`;
   const attempts = await Promise.all(
-    Array.from({ length: workers }, () => tryCreateRefPair(client, { laneRef: ref, claimRef: claimRefName, leaseSha })),
+    Array.from({ length: workers }, (_, i) => {
+      const leaseSha = leaseShaForIndex(i);
+      return tryCreateRefPair(client, { laneRef: ref, claimRef: claimRefName, leaseSha })
+        .then((row) => ({ ...row, leaseSha }));
+    }),
   );
   const wins = attempts.filter((row) => row.ok);
   const refExists = attempts.filter((row) => row.refExists || row.reason === REF_EXISTS).length;
@@ -132,21 +142,20 @@ test('previous_filename must be in claim', () => {
 
 test('20-way concurrent race', async () => {
   const client = createMockRefClient();
-  const race = await concurrentSlotRace(client, 0, 'a'.repeat(40), 20);
+  const race = await concurrentSlotRace(client, 0, 20, (i) => workerLeaseSha(i, 'a'));
   assert.equal(race.winners, 1);
-  assert.equal(race.refExists, 19);
+  const lostToHolder = race.attempts.filter(
+    (row) => !row.ok && (row.refExists || row.reason === REF_EXISTS || row.reason === 'slice_already_claimed'),
+  );
+  assert.equal(lostToHolder.length, 19);
   assert.equal(race.fatal, 0);
-});
-
-test('yielding mock race', async () => {
-  const client = createYieldingRaceClient(2);
-  const { winners } = await concurrentSlotRace(client, 0, 'b'.repeat(40), 20);
-  assert.equal(winners, 1);
-});
-
-test('lane cap five', async () => {
-  const client = createMockRefClient();
-  const payload = buildLeasePayload({
+  const win = race.attempts.find((row) => row.ok);
+  assert.ok(win);
+  const claimRefName = `${claimRef(0, 0)}-race`;
+  assert.equal(client.refs.get(race.ref), win.leaseSha);
+  assert.equal(client.refs.get(claimRefName), win.leaseSha);
+  const future = new Date(Date.now() + 3600000).toISOString();
+  const msg = leaseMessage({
     issue: 1,
     slice: 0,
     planCommentId: 1,
@@ -154,16 +163,74 @@ test('lane cap five', async () => {
     files: ['a.ts'],
     runId: 1,
     runAttempt: 1,
+    claimedAt: new Date().toISOString(),
+    expiresAt: future,
   });
+  client.setRefMessage(race.ref, msg);
+  client.setRefMessage(claimRefName, msg);
+  const laneGot = await client.getRef({ ref: race.ref });
+  assert.equal(laneGot.sha, win.leaseSha);
+  const claimGot = await client.getRef({ ref: claimRefName });
+  assert.equal(claimGot.sha, win.leaseSha);
+});
+
+test('ref_exists loser with different sha does not delete holder refs', async () => {
+  const client = createMockRefClient();
+  const lane = slotRef(0);
+  const claim = claimRef(1, 0);
+  const holderSha = 'a'.repeat(40);
+  const loserSha = 'b'.repeat(40);
+  const holder = await tryCreateRefPair(client, { laneRef: lane, claimRef: claim, leaseSha: holderSha });
+  assert.equal(holder.ok, true);
+  const lost = await tryCreateRefPair(client, { laneRef: lane, claimRef: claim, leaseSha: loserSha });
+  assert.equal(lost.ok, false);
+  assert.ok(lost.refExists || lost.reason === 'slice_already_claimed');
+  assert.equal(client.refs.get(lane), holderSha);
+  assert.equal(client.refs.get(claim), holderSha);
+});
+
+test('yielding mock race', async () => {
+  const client = createYieldingRaceClient(2);
+  const { winners } = await concurrentSlotRace(client, 0, 20, (i) => workerLeaseSha(i, 'b'));
+  assert.equal(winners, 1);
+});
+
+test('lane cap five', async () => {
+  const client = createMockRefClient();
+  const basePayload = {
+    slice: 0,
+    planCommentId: 1,
+    planBodySha256: 'c'.repeat(64),
+    runId: 1,
+    runAttempt: 1,
+  };
   const results = await Promise.all(
-    Array.from({ length: 6 }, (_, idx) => claimLaneAndSlice(client, {
-      cap: 5,
-      leaseSha: 'd'.repeat(40),
-      payload: { ...payload, issue: idx + 1, files: [`f${idx}.ts`] },
-    })),
+    Array.from({ length: 6 }, (_, idx) => {
+      const leaseSha = workerLeaseSha(idx, 'd');
+      const payload = buildLeasePayload({
+        ...basePayload,
+        issue: idx + 1,
+        files: [`f${idx}.ts`],
+      });
+      return claimLaneAndSlice(client, {
+        cap: 5,
+        leaseSha,
+        payload,
+      }).then((row) => ({ ...row, leaseSha }));
+    }),
   );
   assert.equal(results.filter((r) => r.ok).length, 5);
   assert.equal(results.filter((r) => r.reason === 'lane_full').length, 1);
+  const future = new Date(Date.now() + 3600000).toISOString();
+  for (const row of results.filter((r) => r.ok)) {
+    const msg = leaseMessage({ ...row.payload, expiresAt: future });
+    client.setRefMessage(row.ref, msg);
+    client.setRefMessage(row.claimRef, msg);
+    assert.equal(client.refs.get(row.ref), row.leaseSha);
+    assert.equal(client.refs.get(row.claimRef), row.leaseSha);
+  }
+  const listed = await client.listRefs({ prefix: 'refs/mythos/dispatch/' });
+  assert.equal(activeLeasesAll(listed.refs).length, 5);
 });
 
 test('identity ref is issue-slice only', () => {
@@ -588,6 +655,49 @@ test('dry-run never calls createLeaseCommit', async () => {
   assert.equal(leaseCalls, 0);
 });
 
+test('malformed official plan hold logs reason and commentId without raw comment text', async () => {
+  const secretLine = 'TOP-SECRET-PLAN-LINE-xyzzy !!!';
+  const logs = [];
+  const origLog = console.log;
+  console.log = (...a) => logs.push(a.join(' '));
+  try {
+    const client = createMockRefClient();
+    client.issueComments = async () => ({
+      ok: true,
+      comments: [{
+        id: '4242',
+        databaseId: 4242,
+        author: { login: 'SkyyPlayz' },
+        body: `## Files\n${secretLine}\n`,
+        createdAt: '2026-01-02T00:00:00Z',
+      }],
+    });
+    client.getIssue = async () => ({ ok: true, issue: { state: 'open' } });
+    const code = await runDispatchPlan({
+      MODE: 'dry-run',
+      client,
+      MAIN_SHA: 'a'.repeat(40),
+      readDispatchSwitchesFn: async () => ({ ok: true, enabled: true }),
+      readRepoVariableFn: async (_r, _t, n) => {
+        if (n === 'MYTHOS_BUILD_ORDER_ISSUES') return { ok: true, value: '99' };
+        if (n === 'MYTHOS_DISPATCH_LANE_CAP') return { ok: true, value: '5' };
+        return { ok: true, value: null };
+      },
+      activeClaimsFromRefs: (refs) => activeClaimsFromRefs(refs),
+    });
+    assert.equal(code, 0);
+    const holdLine = logs.find((l) => l.includes('dispatch_hold'));
+    assert.ok(holdLine);
+    const row = JSON.parse(holdLine);
+    assert.equal(row.reason, 'invalid_entry');
+    assert.equal(row.commentId, '4242');
+    assert.equal(row.detail, undefined);
+    assert.ok(!logs.join('\n').includes(secretLine));
+  } finally {
+    console.log = origLog;
+  }
+});
+
 test('canary verify six legs passes and deletes scratch ref', async () => {
   const fs = require('node:fs');
   const os = require('node:os');
@@ -609,7 +719,7 @@ test('canary verify six legs passes and deletes scratch ref', async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('canary verify bad indexes still deletes scratch ref', async () => {
+test('canary verify bad indexes keeps scratch ref on failure', async () => {
   const fs = require('node:fs');
   const os = require('node:os');
   const path = require('node:path');
@@ -638,7 +748,7 @@ test('canary verify bad indexes still deletes scratch ref', async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('canary verify missing artifacts dir deletes scratch first', async () => {
+test('canary verify missing artifacts dir keeps scratch ref on failure', async () => {
   const { runCanaryVerify } = require('./dispatch/canary-verify');
   const main = 'a'.repeat(40);
   const client = createMockRefClient();
@@ -648,7 +758,7 @@ test('canary verify missing artifacts dir deletes scratch first', async () => {
   assert.equal(client.exists(CANARY_SCRATCH_REF), true);
 });
 
-test('canary verify bad counts deletes scratch then fails', async () => {
+test('canary verify bad counts keeps scratch ref on failure', async () => {
   const fs = require('node:fs');
   const os = require('node:os');
   const path = require('node:path');

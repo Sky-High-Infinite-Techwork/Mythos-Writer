@@ -139,7 +139,7 @@ async function runDispatchPlan(env) {
         kind: 'dispatch_hold',
         issue: issueNumber,
         reason: official.reason,
-        detail: official.detail,
+        commentId: official.commentId,
       }));
       continue;
     }

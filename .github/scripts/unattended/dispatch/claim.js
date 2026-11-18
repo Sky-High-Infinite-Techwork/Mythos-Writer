@@ -98,8 +98,6 @@ async function tryCreateRefPair(client, { laneRef, claimRef: claimRefName, lease
         return { ok: true, laneRef, claimRef: claimRefName, recovered: true };
       }
     }
-    await releaseOursIfHeld(client, laneRef, leaseSha, reReadSwitch);
-    await releaseOursIfHeld(client, claimRefName, leaseSha, reReadSwitch);
     return { ok: false, reason: REF_EXISTS, refExists: true };
   }
   if (result.fatal) return { ok: false, fatal: true, reason: result.error || 'update_refs_failed' };

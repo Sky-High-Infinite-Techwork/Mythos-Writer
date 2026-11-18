@@ -180,7 +180,7 @@ When `MODE=dry-run`:
 `mythos-dispatch.yml`:
 
 - Triggers: `schedule` (sweep only when armed), `workflow_dispatch` (dry-run default; optional canary matrix).
-- Jobs: `admit` → `discover` (`mythos-control`, dry-run plan) → `sweep` (CAS delete lane/claim only) → `claim` (manual `workflow_dispatch` + `act` only) → optional `canary` + `canary-verify` (6 parallel scratch-ref creators on `scratch-shared`, one winner, CAS cleanup).
+- Jobs: `admit` → `discover` (`mythos-control`, dry-run plan) → `sweep` (CAS delete lane/claim only) → `claim` (manual `workflow_dispatch` + `act` only) → optional `canary` + `canary-verify` (6 parallel creators on per-run `canary/scratch-{runId}-{runAttempt}`, one winner, CAS cleanup on pass only).
 
 Concurrency: `mythos-unattended-dispatch` for sweep+claim orchestration job; do not serialize future per-PR reviews.
 

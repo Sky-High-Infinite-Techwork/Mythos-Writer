@@ -36,13 +36,21 @@ function writeCanaryOutcome(payload) {
   );
 }
 
-async function main() {
+async function main(options = {}) {
+  const {
+    readDispatchSwitchesFn = readDispatchSwitches,
+    actWritesEnabledFn = actWritesEnabled,
+    createDispatchClientsFn = createDispatchClients,
+    runDispatchPlanFn = runDispatchPlan,
+    sweepDispatchRefsFn = sweepDispatchRefs,
+    runCanaryVerifyFn = runCanaryVerify,
+  } = options;
   const command = process.argv[2] || 'plan';
   const repo = process.env.REPO || REPO;
   const readToken = process.env.READ_TOKEN || process.env.GITHUB_TOKEN || '';
   const writeToken = process.env.WRITE_TOKEN || '';
   const controlToken = process.env.CONTROL_TOKEN || '';
-  const { combined: client } = createDispatchClients({
+  const { combined: client } = createDispatchClientsFn({
     repo,
     readToken,
     writeToken,
@@ -52,7 +60,7 @@ async function main() {
     return 1;
   }
 
-  const reReadSwitch = async () => readDispatchSwitches(repo, controlToken);
+  const reReadSwitch = async () => readDispatchSwitchesFn(repo, controlToken);
 
   if (command === 'sweep') {
     const switches = await reReadSwitch();
@@ -60,11 +68,11 @@ async function main() {
       console.error('sweep: switch read failed');
       return 1;
     }
-    if (!actWritesEnabled(switches)) {
+    if (!actWritesEnabledFn(switches)) {
       console.log('sweep: inert');
       return 0;
     }
-    const result = await sweepDispatchRefs(client, { reReadSwitch });
+    const result = await sweepDispatchRefsFn(client, { reReadSwitch });
     console.log(JSON.stringify({ kind: 'sweep', ...result }));
     return result.ok ? 0 : 1;
   }
@@ -83,20 +91,24 @@ async function main() {
       writeCanaryOutcome({ kind: 'canary_fatal', index, reason: 'switch_read' });
       return 1;
     }
-    if (!actWritesEnabled(switches)) {
+    if (!actWritesEnabledFn(switches)) {
       console.log(JSON.stringify({ kind: 'canary_inert', index }));
       writeCanaryOutcome({ kind: 'canary_inert', index });
       return 0;
     }
     const sw2 = await reReadSwitch();
-    if (!actWritesEnabled(sw2)) {
+    if (!actWritesEnabledFn(sw2)) {
       console.log(JSON.stringify({ kind: 'canary_abort', index, reason: 'switch_flipped' }));
       writeCanaryOutcome({ kind: 'canary_abort', index, reason: 'switch_flipped' });
       return 0;
     }
-    const runId = process.env.GITHUB_RUN_ID || '0';
-    const runAttempt = process.env.GITHUB_RUN_ATTEMPT || '1';
-    const ref = canaryScratchRef(runId, runAttempt);
+    const ids = parseGithubRunIds();
+    if (!ids.ok) {
+      console.error(`canary: ${ids.reason}`);
+      writeCanaryOutcome({ kind: 'canary_fatal', index, reason: ids.reason });
+      return 1;
+    }
+    const ref = ids.scratchRef;
     const result = await client.createRef({ ref, sha });
     if (result.ok) {
       console.log(JSON.stringify({ kind: 'canary_win', index, status: 201 }));
@@ -118,7 +130,7 @@ async function main() {
   }
 
   if (command === 'canary-verify') {
-    return runCanaryVerify(client, {
+    return runCanaryVerifyFn(client, {
       reReadSwitch,
       mainSha: process.env.MAIN_SHA || '',
       artifactsDir: process.env.CANARY_ARTIFACTS_DIR || '',
@@ -138,7 +150,7 @@ async function main() {
       client,
       activeClaimsFromRefs: (refs) => activeClaimsFromRefs(refs),
     };
-    return runDispatchPlan(env);
+    return runDispatchPlanFn(env);
   }
 
   console.error(`unknown command: ${command}`);

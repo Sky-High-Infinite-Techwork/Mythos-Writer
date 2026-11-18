@@ -1,6 +1,7 @@
 'use strict';
 
 const { gh: defaultGh } = require('../spawn');
+const { actWritesEnabled: defaultActWritesEnabled } = require('./switch');
 const { httpStatusFromGh } = require('./gh-http');
 const { REPO, MATCHING_REF_PREFIX } = require('./constants');
 
@@ -36,7 +37,14 @@ function parseGhJson(stdout) {
   }
 }
 
-function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaultGh } = {}) {
+function createDispatchClients({
+  repo = REPO,
+  readToken,
+  writeToken,
+  gh = defaultGh,
+  reReadSwitch,
+  actWritesEnabledFn = defaultActWritesEnabled,
+} = {}) {
   const target = splitRepo(repo);
   const noop = async () => ({ ok: false, error: 'no_token' });
   if (!target) {
@@ -56,6 +64,14 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
     if (result.status !== 0) return null;
     repoNodeIdCache = result.stdout.replace(/\r?\n$/, '');
     return repoNodeIdCache;
+  }
+
+  async function assertWritesEnabledBeforeMutation() {
+    if (typeof reReadSwitch !== 'function') return { ok: true };
+    const sw = await reReadSwitch();
+    if (!sw || !sw.ok) return { ok: false, fatal: true, error: 'switch_read' };
+    if (!actWritesEnabledFn(sw)) return { ok: false, fatal: true, error: 'switch_off' };
+    return { ok: true };
   }
 
   const read = {
@@ -286,6 +302,8 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
       for (const row of refUpdates) assertDispatchRef(row.name);
       const nodeId = await repositoryNodeId();
       if (!nodeId) return { ok: false, fatal: true, error: 'repo_node_id' };
+      const gate = await assertWritesEnabledBeforeMutation();
+      if (!gate.ok) return { ok: false, fatal: gate.fatal, error: gate.error };
       const body = JSON.stringify({
         query: UPDATE_REFS_MUTATION,
         variables: { repositoryId: nodeId, refUpdates },
@@ -418,7 +436,7 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
       getIssue: (args) => read.getIssue(args),
       updateRefs: (updates) => write.updateRefs(updates),
       createRefPair: (args) => write.createRefPair(args),
-      createLeaseCommit: (msg, parent) => write.createLeaseCommit(msg, parent),
+      createLeaseCommit: (msg, parent, options) => write.createLeaseCommit(msg, parent, options),
       renewRef: (args) => write.renewRef(args),
       renewRefPair: (args) => write.renewRefPair(args),
       read,
