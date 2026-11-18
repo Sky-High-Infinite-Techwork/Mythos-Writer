@@ -20,11 +20,11 @@
  *   5. The preset export file has no accentBreathe key.
  *   6. Ticks start no transitions of their own and never cut or skip a user
  *      transition (one running across a tick, one still pending at a tick).
- *   7. Perf: ON vs OFF in the same run against a populated DOM (a documented
- *      N-element proxy) — rAF frame deltas (animationFps.ts) plus CDP
- *      RecalcStyleDuration / LayoutCount, each mode judged by the better of two
- *      sequential 4 s windows; a tick's style work must stay within 2× (a
- *      coarse guard) of one plain root-token change measured in the same run.
+ *   7. Perf: interleaved ON/OFF pairs (on1/off1, on2/off2) against a populated
+ *      DOM proxy — rAF frame deltas (animationFps.ts) plus CDP RecalcStyle /
+ *      LayoutCount; each pair held to +2 pp dropped-frame and −3 fps floor bars
+ *      (soak: CI #44370787558, accent-breathe:331 ×10, retries=0). A tick's
+ *      style work must stay within 2× of one root-token change in the same run.
  *
  * The app's 5 s idle pause would also freeze breathe, so each window gets a
  * synthetic pointermove keep-alive every second.
@@ -460,25 +460,25 @@ test.describe.serial('#1774 Accent breathe', () => {
     expect(on2.distinct).toBeGreaterThanOrEqual(10);
     expect(off1.distinct).toBe(1);
     expect(off2.distinct).toBe(1);
-    // Paired interleaved windows within +2 pp dropped-frame delta and −3 fps floor.
-    // Interleaving absorbs runner jank; the pre-fix per-tick transition restarts
-    // measured 5–9% ON vs 0% OFF in every window, which this still fails.
+    // Interleaved pairs: each ON window compared to its preceding OFF window
+    // (+2 pp / −3 fps bars unchanged). Stability evidence: GitHub Actions run
+    // 44370787558 (accent-breathe.spec.ts:331, --repeat-each=10, --retries=0,
+    // 10/10 pass) — pairing does not remove one-window stalls; it only balances
+    // shared-runner jank across modes vs sequential ON/OFF blocks.
     const dropPair1Pp = on1.stats.droppedFramePct - off1.stats.droppedFramePct;
     const dropPair2Pp = on2.stats.droppedFramePct - off2.stats.droppedFramePct;
-    const dropDeltaPp = Math.min(dropPair1Pp, dropPair2Pp);
-    const fpsPair1 = on1.stats.p95Fps - (off1.stats.p95Fps - 3);
-    const fpsPair2 = on2.stats.p95Fps - (off2.stats.p95Fps - 3);
-    const fpsPairMin = Math.min(fpsPair1, fpsPair2);
+    const offFloor1Fps = off1.stats.p95Fps - 3;
+    const offFloor2Fps = off2.stats.p95Fps - 3;
     // eslint-disable-next-line no-console
     console.log(
-      `[perf] accent-breathe dropΔ paired min=${dropDeltaPp.toFixed(2)}pp ` +
-        `(pair1=${dropPair1Pp.toFixed(2)} pair2=${dropPair2Pp.toFixed(2)}) ` +
-        `fpsFloorΔ min=${fpsPairMin.toFixed(2)}`,
+      `[perf] accent-breathe dropΔ pair1=${dropPair1Pp.toFixed(2)}pp pair2=${dropPair2Pp.toFixed(2)}pp ` +
+        `fpsFloor on1=${on1.stats.p95Fps.toFixed(1)} off1=${off1.stats.p95Fps.toFixed(1)} ` +
+        `on2=${on2.stats.p95Fps.toFixed(1)} off2=${off2.stats.p95Fps.toFixed(1)}`,
     );
     expect(dropPair1Pp).toBeLessThanOrEqual(2);
     expect(dropPair2Pp).toBeLessThanOrEqual(2);
-    expect(on1.stats.p95Fps).toBeGreaterThanOrEqual(off1.stats.p95Fps - 3);
-    expect(on2.stats.p95Fps).toBeGreaterThanOrEqual(off2.stats.p95Fps - 3);
+    expect(on1.stats.p95Fps).toBeGreaterThanOrEqual(offFloor1Fps);
+    expect(on2.stats.p95Fps).toBeGreaterThanOrEqual(offFloor2Fps);
     // A tick costs about one root-token change: no extra whole-tree recalc.
     expect(perChangeRecalcMs).toBeGreaterThan(0);
     expect(perTickRecalcMs).toBeLessThanOrEqual(perChangeRecalcMs * PER_TICK_RECALC_RATIO_MAX);
