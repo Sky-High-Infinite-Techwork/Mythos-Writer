@@ -113,7 +113,9 @@ describe('AgentHubPanel — Slice B partner shell', () => {
     expect(history).not.toHaveAttribute('role');
     expect(pill).toBeInTheDocument();
 
-    fireEvent.keyDown(toggle, { key: 'Escape' });
+    pill.focus();
+    expect(pill).toHaveFocus();
+    fireEvent.keyDown(pill, { key: 'Escape' });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(toggle).toHaveFocus();
     expect(within(card).queryByTestId('ahp-partner-history-link')).not.toBeInTheDocument();
