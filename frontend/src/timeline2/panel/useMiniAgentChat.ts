@@ -65,9 +65,8 @@ type FailedExchange = {
 
 /** Drop the failed exchange tail so retry invoke(history, prompt) does not duplicate the user turn. */
 function turnsForModelHistory(turns: AgentSessionTurn[], retryPrompt: string | null): AgentSessionTurn[] {
-  let work = turns;
   if (!retryPrompt) {
-    return work.slice(-MAX_HISTORY_TURNS);
+    return turns.slice(-MAX_HISTORY_TURNS);
   }
   const trimmed = [...work];
   const last = trimmed.at(-1);
