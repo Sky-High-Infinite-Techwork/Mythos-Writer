@@ -10,10 +10,7 @@
  * - AC-9: upgrade preserves existing model settings
  * - AC-10: per-agent test-connection independence (mocked IPC)
  */
-/*
- * Removed TC-LMP-01..07 (2026-11): classic per-agent Settings cards unmounted (Slice C).
- * Model & keys + Writing partner replaced per-agent picker E2E.
- */
+
 
 // Slice C Soft-FAIL: four classic per-agent Settings cards unmounted — suite skipped.
 import fs from 'fs';
@@ -225,14 +222,176 @@ test.afterEach(async () => {
   fs.rmSync(notesVault, { recursive: true, force: true });
 });
 
-test('TC-LMP-retired: classic per-agent picker specs removed (AgentsSection unmounted, Slice C)', () => {
-  // Supersedes TC-LMP-01..07 — see Writing partner + Model & keys specs.
-  expect(true).toBe(true);
+test.skip('TC-LMP-01 / AC-8: fresh install defaults all agents to the global Anthropic provider', async () => {
+  seedUserData(userData, storyVault, notesVault);
+  app = await launchApp(userData);
+  page = await firstWindow(app);
+  await installProviderMocks(app);
+
+  await openSettings(page);
+
+  await expect(page.getByLabel('AI provider')).toHaveValue('anthropic');
+  for (const [cardName, modelLabel, overrideAgent] of [
+    ['Writing Coach', 'Writing Coach model', 'writingAssistant'],
+    ['Brainstorm Agent', 'Brainstorm Agent model', 'brainstorm'],
+    ['Beta Reader', 'Beta Reader model', 'betaReader'],
+  ] as const) {
+    const card = agentCard(page, cardName);
+    await expect(card).toContainText('Using global provider (Anthropic (Claude))');
+    await expect(card.getByLabel(modelLabel)).toHaveValue('claude-sonnet-4-6');
+    await expect(card.getByLabel(`Enable ${overrideAgent} provider override`)).not.toBeChecked();
+  }
+  await expect(page.getByLabel('Archive Agent model')).toHaveCount(0);
 });
 
+test.skip('TC-LMP-02 / AC-1: per-agent picker renders and global provider changes only non-overridden agents', async () => {
+  seedUserData(userData, storyVault, notesVault);
+  app = await launchApp(userData);
+  page = await firstWindow(app);
+  await installProviderMocks(app);
 
+  await openSettings(page);
 
+  const brainstorm = agentCard(page, 'Brainstorm Agent');
+  await enableAgentOverride(brainstorm, 'brainstorm');
+  await expect(brainstorm.getByLabel('Provider for brainstorm')).toBeVisible();
+  await expect(brainstorm.getByLabel('Model for brainstorm')).toBeVisible();
+  await expect(brainstorm.getByRole('button', { name: 'Test provider connection for brainstorm' })).toBeVisible();
+  await expect(brainstorm.getByRole('button', { name: 'Refresh models for brainstorm' })).not.toBeVisible();
 
+  await brainstorm.getByLabel('Provider for brainstorm').selectOption('openai');
+  await expect(brainstorm.getByRole('button', { name: 'Refresh models for brainstorm' })).toBeVisible();
 
+  const writing = agentCard(page, 'Writing Coach');
+  const beta = agentCard(page, 'Beta Reader');
+  await expect(writing).toContainText('Using global provider (Anthropic (Claude))');
+  await expect(beta).toContainText('Using global provider (Anthropic (Claude))');
 
+  await page.getByLabel('AI provider').selectOption('openai');
+  await expect(writing).toContainText('Using global provider (OpenAI)');
+  await expect(beta).toContainText('Using global provider (OpenAI)');
+  await expect(brainstorm.getByLabel('Provider for brainstorm')).toHaveValue('openai');
+});
 
+test.skip('TC-LMP-03 / AC-3: Ollama-not-running shows an inline user-friendly hint', async () => {
+  seedUserData(userData, storyVault, notesVault);
+  app = await launchApp(userData);
+  page = await firstWindow(app);
+  await installProviderMocks(app, {
+    ollama: { ok: false, error: 'ECONNREFUSED 127.0.0.1:11434' },
+  });
+
+  await openSettings(page);
+
+  const writing = agentCard(page, 'Writing Coach');
+  await enableAgentOverride(writing, 'writingAssistant');
+  await writing.getByLabel('Provider for writingAssistant').selectOption('ollama');
+
+  await expect(writing.getByLabel('Base URL for writingAssistant')).toHaveValue('http://127.0.0.1:11434/v1');
+  await expect(writing).toContainText('Ollama is not running. Start it with ollama serve.');
+  await expect(writing.getByText(/ECONNREFUSED|fetch failed|network/i)).not.toBeVisible();
+});
+
+test.skip('TC-LMP-04 / AC-4: custom OpenAI-compatible endpoint populates model dropdown from mocked IPC', async () => {
+  seedUserData(userData, storyVault, notesVault);
+  app = await launchApp(userData);
+  page = await firstWindow(app);
+  await installProviderMocks(app, {
+    custom: { ok: true, models: ['gpt-4o', 'gpt-4o-mini'] },
+  });
+
+  await openSettings(page);
+
+  const writing = agentCard(page, 'Writing Coach');
+  await enableAgentOverride(writing, 'writingAssistant');
+  await writing.getByLabel('Provider for writingAssistant').selectOption('custom');
+  await writing.getByLabel('Base URL for writingAssistant').fill('https://api.custom-provider.local/v1');
+  await writing.getByLabel('API key for writingAssistant').fill('test-key-123');
+  await writing.getByRole('button', { name: 'Refresh models for writingAssistant' }).click();
+
+  const model = writing.getByLabel('Model for writingAssistant');
+  await expect(model).toHaveJSProperty('tagName', 'SELECT');
+  await expect(model.locator('option')).toHaveText(['gpt-4o', 'gpt-4o-mini', 'Custom…']);
+  await model.selectOption('gpt-4o-mini');
+  await expect(model).toHaveValue('gpt-4o-mini');
+});
+
+test.skip('TC-LMP-05 / AC-2: Ollama model list populates a per-agent dropdown from mocked IPC', async () => {
+  seedUserData(userData, storyVault, notesVault);
+  app = await launchApp(userData);
+  page = await firstWindow(app);
+  await installProviderMocks(app, {
+    ollama: { ok: true, models: ['llama3', 'mistral', 'neural-chat'] },
+  });
+
+  await openSettings(page);
+
+  const brainstorm = agentCard(page, 'Brainstorm Agent');
+  await enableAgentOverride(brainstorm, 'brainstorm');
+  await brainstorm.getByLabel('Provider for brainstorm').selectOption('ollama');
+  await brainstorm.getByRole('button', { name: 'Refresh models for brainstorm' }).click();
+
+  const model = brainstorm.getByLabel('Model for brainstorm');
+  await expect(model).toHaveJSProperty('tagName', 'SELECT');
+  await expect(model.locator('option')).toContainText(['llama3', 'mistral', 'neural-chat', 'Custom…']);
+  await model.selectOption('llama3');
+  await expect(model).toHaveValue('llama3');
+});
+
+test.skip('TC-LMP-06 / AC-9: upgrade preserves old model settings while using global provider', async () => {
+  const settings = baseSettings();
+  settings.agents.writingAssistant.model = 'claude-opus-4-7';
+  settings.agents.brainstorm.model = 'claude-opus-4-7';
+  settings.agents.archive.model = 'claude-opus-4-7';
+  seedUserData(userData, storyVault, notesVault, settings);
+  app = await launchApp(userData);
+  page = await firstWindow(app);
+  await installProviderMocks(app);
+
+  await openSettings(page);
+
+  const brainstorm = agentCard(page, 'Brainstorm Agent');
+  await expect(brainstorm).toContainText('Using global provider (Anthropic (Claude))');
+  await expect(brainstorm.getByLabel('Brainstorm Agent model')).toHaveValue('claude-opus-4-7');
+  await expect(brainstorm.getByLabel('Enable brainstorm provider override')).not.toBeChecked();
+
+  await page.getByLabel('AI provider').selectOption('openai');
+  await expect(brainstorm).toContainText('Using global provider (OpenAI)');
+  await expect(brainstorm.getByLabel('Brainstorm Agent model')).toHaveValue('claude-opus-4-7');
+
+  // F2#15: close auto-saves
+  await page.getByLabel('Close settings').click();
+  await expect(page.locator('[role="dialog"][aria-label="Settings"]')).toHaveCount(0, { timeout: 5_000 });
+
+  await openSettings(page);
+  const reopenedBrainstorm = agentCard(page, 'Brainstorm Agent');
+  await expect(page.getByLabel('AI provider')).toHaveValue('openai');
+  await expect(reopenedBrainstorm).toContainText('Using global provider (OpenAI)');
+  await expect(reopenedBrainstorm.getByLabel('Brainstorm Agent model')).toHaveValue('claude-opus-4-7');
+});
+
+test.skip('TC-LMP-07 / AC-10: per-agent test-connection results are independent', async () => {
+  seedUserData(userData, storyVault, notesVault);
+  app = await launchApp(userData);
+  page = await firstWindow(app);
+  await installProviderMocks(app, {
+    ollama: { ok: true, models: ['llama3'] },
+  });
+
+  await openSettings(page);
+
+  const brainstorm = agentCard(page, 'Brainstorm Agent');
+  await enableAgentOverride(brainstorm, 'brainstorm');
+  await brainstorm.getByLabel('Provider for brainstorm').selectOption('openai');
+  await brainstorm.getByRole('button', { name: 'Test provider connection for brainstorm' }).click();
+  await expect(brainstorm.getByRole('status')).toHaveText('Connection successful');
+
+  const beta = agentCard(page, 'Beta Reader');
+  await enableAgentOverride(beta, 'betaReader');
+  await beta.getByLabel('Provider for betaReader').selectOption('ollama');
+  await beta.getByRole('button', { name: 'Test provider connection for betaReader' }).click();
+  await expect(beta.getByRole('alert')).toHaveText('Mock Ollama connection failed');
+
+  await expect(brainstorm.getByRole('status')).toHaveText('Connection successful');
+  await expect(agentCard(page, 'Writing Coach').getByRole('button', { name: /Test provider connection/ })).not.toBeVisible();
+});
