@@ -230,15 +230,53 @@ const bridgeRecorded = JSON.parse(
 const BRIDGE_RECORDED_PAYLOADS = bridgeRecorded.recorded;
 const SINGLE_ARG_INVOKE = new Set<string>(bridgeRecorded.singles);
 
-type ListenerExpectation = {
-  channel: string;
-  kind: string;
-  ipcArgs: unknown[];
-  userCbArgs: unknown[];
+type ListenerKind =
+  | 'noArg'
+  | 'passthrough'
+  | 'chunk'
+  | 'requestId'
+  | 'text'
+  | 'panelId'
+  | 'storySlug'
+  | 'entries'
+  | 'info';
+
+type ListenerFixtureRow = {
+  kind: ListenerKind;
+  ipcPayload?: unknown;
 };
-const LISTENER_EXPECTATIONS = JSON.parse(
+
+const LISTENER_FIXTURE = JSON.parse(
   fs.readFileSync(path.join(FIXTURES_DIR, 'preload.bridge.listeners.json'), 'utf8'),
-) as Record<string, ListenerExpectation>;
+) as Record<string, ListenerFixtureRow>;
+
+/** Minimal shared payload for generic `cb(data)` listeners without channel overrides. */
+const LISTENER_SHARED_PASSTHROUGH = SAMPLE.obj;
+
+const LISTENER_PASSTHROUGH_BY_CHANNEL: Record<string, unknown> = {
+  'jobs:event': { jobId: SAMPLE.id, event: 'progress' },
+  'navigator:scene-changed': { sceneId: SAMPLE.id },
+  'navigator:scene-synced': { sceneId: SAMPLE.id },
+  'project:switched': { vaultRoot: SAMPLE.path, notesVaultRoot: SAMPLE.path2 },
+  'vault:notes-asset-changed': { path: SAMPLE.path },
+  'vault:notes-updated': { count: 1, path: SAMPLE.path },
+  'vault:file-changed': { path: SAMPLE.path },
+  'vault:obsidian:import:progress': { current: 1, total: 2, lastAction: 'lc' },
+  'stream:reasoning': { streamId: SAMPLE.id },
+  'stream:token': { streamId: SAMPLE.id, token: 'lc-token' },
+  'stream:end': { streamId: SAMPLE.id },
+  'stream:error': { streamId: SAMPLE.id, category: 'lc-cat', message: 'lc-msg' },
+  'brainstorm:proposalQueued': { proposals: [{ id: 'p' }] },
+  'panel:float-closed': {
+    panelId: SAMPLE.id,
+    docked: true,
+    bounds: { x: 0, y: 0, width: 1, height: 1 },
+  },
+  'panel:float-bounds': { panelId: SAMPLE.id, x: 0, y: 0, width: 1, height: 1 },
+  'panel:float-pin-changed': { panelId: SAMPLE.id, alwaysOnTop: false },
+  'panel:popout-closed': { panelId: SAMPLE.id },
+  'scene-crafter:external-edit': { storySlug: 'lc-slug' },
+};
 
 const FAKE_IPC_RENDERER_EVENT = Object.freeze({
   sender: { id: 4242, send: () => undefined },
@@ -326,18 +364,76 @@ function assertNoRawIpcSurface(value: unknown, pathKey: string, ipcRendererRef: 
   }
 }
 
+function detectListenerKind(bridgeFn: (...args: unknown[]) => unknown): ListenerKind {
+  const src = Function.prototype.toString.call(bridgeFn);
+  if (/const handler = \(\) => cb\(\)/.test(src)) return 'noArg';
+  if (src.includes('cb(data.chunk)')) return 'chunk';
+  if (src.includes('cb(data.requestId)')) return 'requestId';
+  if (src.includes('cb(data.text)')) return 'text';
+  if (src.includes('cb(data.panelId)')) return 'panelId';
+  if (src.includes('cb(data.storySlug)')) return 'storySlug';
+  if (src.includes('cb(entries)')) return 'entries';
+  if (src.includes('cb(info)')) return 'info';
+  return 'passthrough';
+}
+
+function defaultIpcPayloadForListener(row: ExposedRow, kind: ListenerKind): unknown | undefined {
+  if (kind === 'noArg') return undefined;
+  if (kind === 'chunk') return { chunk: 'lc-chunk' };
+  if (kind === 'requestId') return { requestId: SAMPLE.id, category: 'lc-cat', message: 'lc-msg' };
+  if (kind === 'text') return { text: 'lc-text' };
+  if (kind === 'panelId') return { panelId: SAMPLE.id };
+  if (kind === 'storySlug') return { storySlug: 'lc-slug' };
+  if (kind === 'entries') return [SAMPLE.obj];
+  if (kind === 'info') return { reason: 'lc', itemPath: SAMPLE.path };
+  return LISTENER_PASSTHROUGH_BY_CHANNEL[row.channel] ?? LISTENER_SHARED_PASSTHROUGH;
+}
+
+function userCbArgsFromListenerRow(row: ListenerFixtureRow): unknown[] {
+  const { kind, ipcPayload } = row;
+  if (kind === 'noArg') return [];
+  if (kind === 'chunk') return [(ipcPayload as { chunk: string }).chunk];
+  if (kind === 'requestId') return [(ipcPayload as { requestId: string }).requestId];
+  if (kind === 'text') return [(ipcPayload as { text: string }).text];
+  if (kind === 'panelId') return [(ipcPayload as { panelId: string }).panelId];
+  if (kind === 'storySlug') return [(ipcPayload as { storySlug: string }).storySlug];
+  if (kind === 'entries') return [ipcPayload];
+  if (kind === 'info') return [ipcPayload];
+  return [ipcPayload];
+}
+
+function ipcInvokeArgsForListenerRow(row: ListenerFixtureRow): unknown[] {
+  if (row.kind === 'noArg') return [FAKE_IPC_RENDERER_EVENT];
+  return [FAKE_IPC_RENDERER_EVENT, row.ipcPayload];
+}
+
+function recordListenerFixtureRow(row: ExposedRow): ListenerFixtureRow {
+  const bridgeFn = getAtPath(capturedWorlds[row.world], row.path) as (
+    cb: (arg?: unknown) => void,
+  ) => () => void;
+  const kind = detectListenerKind(bridgeFn as (...args: unknown[]) => unknown);
+  const ipcPayload = defaultIpcPayloadForListener(row, kind);
+  const probeCb = vi.fn<(arg?: unknown) => void>();
+  onMock.mockClear();
+  bridgeFn(probeCb);
+  const handler = onMock.mock.calls[0]![1] as (...args: unknown[]) => void;
+  handler(...ipcInvokeArgsForListenerRow({ kind, ipcPayload }));
+  const fixture: ListenerFixtureRow = ipcPayload === undefined ? { kind } : { kind, ipcPayload };
+  expect(probeCb).toHaveBeenCalledWith(...userCbArgsFromListenerRow(fixture));
+  return fixture;
+}
+
 function assertListenerForwardsFromTable(
   key: string,
   ipcHandler: (...args: unknown[]) => void,
   userCb: ReturnType<typeof vi.fn>,
 ): void {
-  const spec = LISTENER_EXPECTATIONS[key];
+  const spec = LISTENER_FIXTURE[key];
   expect(spec, `missing listener fixture for ${key}`).toBeDefined();
   userCb.mockClear();
-  const invokeArgs = spec!.ipcArgs.map((arg) => (arg === null ? FAKE_IPC_RENDERER_EVENT : arg));
-  ipcHandler(...invokeArgs);
+  ipcHandler(...ipcInvokeArgsForListenerRow(spec!));
   expect(userCb).toHaveBeenCalledTimes(1);
-  expect(userCb).toHaveBeenCalledWith(...spec!.userCbArgs);
+  expect(userCb).toHaveBeenCalledWith(...userCbArgsFromListenerRow(spec!));
   for (const call of userCb.mock.calls) {
     expect(call[0]).not.toBe(FAKE_IPC_RENDERER_EVENT);
   }
@@ -352,9 +448,19 @@ describe('preload bridge', () => {
   });
 
   it('covers every frozen listener with a fixture table row', () => {
-    const missing = FROZEN_LISTENERS.map(callKey).filter((key) => !LISTENER_EXPECTATIONS[key]);
+    const missing = FROZEN_LISTENERS.map(callKey).filter((key) => !LISTENER_FIXTURE[key]);
     expect(missing).toEqual([]);
   });
+
+  it.each(FROZEN_LISTENERS.map((row) => [callKey(row), row] as const))(
+    '%s fixture kind matches preload listener wiring (red-on-revert)',
+    (_key, row) => {
+      const fn = getAtPath(capturedWorlds[row.world], row.path);
+      expect(typeof fn).toBe('function');
+      const runtimeKind = detectListenerKind(fn as (...args: unknown[]) => unknown);
+      expect(LISTENER_FIXTURE[callKey(row)]?.kind).toBe(runtimeKind);
+    },
+  );
 
   it('covers every frozen exposeInMainWorld function (new key without a case fails)', () => {
     const runtime = allRuntimeFunctionPaths();
@@ -495,6 +601,18 @@ describe('preload bridge', () => {
 });
 
 describe.skipIf(!process.env.PRELOAD_BRIDGE_RECORD)('preload bridge recorder', () => {
+  it('refresh listener fixture table', () => {
+    const table: Record<string, ListenerFixtureRow> = {};
+    for (const row of FROZEN_LISTENERS) {
+      table[callKey(row)] = recordListenerFixtureRow(row);
+    }
+    const outPath = path.join(FIXTURES_DIR, 'preload.bridge.listeners.json');
+    const body = JSON.stringify(table, null, 2);
+    fs.writeFileSync(outPath, body);
+    expect(fs.readFileSync(outPath, 'utf8')).toBe(body);
+    expect(Object.keys(table).length).toBe(FROZEN_LISTENERS.length);
+  });
+
   it('refresh BRIDGE_RECORDED_PAYLOADS', async () => {
     const recorded: Record<string, unknown> = {};
     const singles: string[] = [];
