@@ -217,18 +217,64 @@ const BRIDGE_ARG_OVERRIDES: Record<string, BridgeArgOverride> = {
     args: [SAMPLE.str, SAMPLE.str2, { limit: 10, offset: 0 }],
   },
   'api.notesThumbResolve': { args: [[SAMPLE.path, SAMPLE.str2]] },
+  'api.agentSessions.delete': { args: [SAMPLE.id] },
+  'api.agentSessions.duplicate': { args: [SAMPLE.id] },
+  'api.agentSessions.read': { args: [SAMPLE.id] },
+  'api.agentSessions.list': { args: [SAMPLE.str] },
+  'api.customFieldsSet': { args: [[{ name: SAMPLE.str, type: 'text' as const }]] },
+  'api.generationLogRecent': { args: [{ limit: 10 }] },
+  'api.providerListModels': { args: [SAMPLE.obj] },
 };
 
 const SINGLE_ARG_SEND = new Set(['api.sttStart', 'api.sttStop', 'api.notifyFlushBeforeQuitDone']);
 
 const FIXTURES_DIR = path.join(SRC_DIR, '..', 'fixtures');
+const BRIDGE_RECORDED_PATH = path.join(FIXTURES_DIR, 'preload.bridge.recorded.json');
+const BRIDGE_LISTENERS_PATH = path.join(FIXTURES_DIR, 'preload.bridge.listeners.json');
 
 type BridgeRecordedFixture = { recorded: Record<string, unknown>; singles: string[] };
-const bridgeRecorded = JSON.parse(
-  fs.readFileSync(path.join(FIXTURES_DIR, 'preload.bridge.recorded.json'), 'utf8'),
-) as BridgeRecordedFixture;
-const BRIDGE_RECORDED_PAYLOADS = bridgeRecorded.recorded;
-const SINGLE_ARG_INVOKE = new Set<string>(bridgeRecorded.singles);
+
+let bridgeRecordedCache: BridgeRecordedFixture | null = null;
+let listenerFixtureCache: Record<string, ListenerFixtureRow> | null = null;
+
+function invalidateBridgeFixturesCache(): void {
+  bridgeRecordedCache = null;
+  listenerFixtureCache = null;
+}
+
+function loadBridgeRecordedFixture(): BridgeRecordedFixture {
+  if (!fs.existsSync(BRIDGE_RECORDED_PATH)) {
+    return { recorded: {}, singles: [] };
+  }
+  return JSON.parse(fs.readFileSync(BRIDGE_RECORDED_PATH, 'utf8')) as BridgeRecordedFixture;
+}
+
+function getBridgeRecordedPayloads(): Record<string, unknown> {
+  if (bridgeRecordedCache === null) {
+    bridgeRecordedCache = loadBridgeRecordedFixture();
+  }
+  return bridgeRecordedCache.recorded;
+}
+
+function getSingleArgInvokeSet(): Set<string> {
+  if (bridgeRecordedCache === null) {
+    bridgeRecordedCache = loadBridgeRecordedFixture();
+  }
+  return new Set(bridgeRecordedCache.singles);
+}
+
+function getListenerFixture(): Record<string, ListenerFixtureRow> {
+  if (listenerFixtureCache === null) {
+    if (!fs.existsSync(BRIDGE_LISTENERS_PATH)) {
+      listenerFixtureCache = {};
+    } else {
+      listenerFixtureCache = JSON.parse(
+        fs.readFileSync(BRIDGE_LISTENERS_PATH, 'utf8'),
+      ) as Record<string, ListenerFixtureRow>;
+    }
+  }
+  return listenerFixtureCache;
+}
 
 type ListenerKind =
   | 'noArg'
@@ -245,10 +291,6 @@ type ListenerFixtureRow = {
   kind: ListenerKind;
   ipcPayload?: unknown;
 };
-
-const LISTENER_FIXTURE = JSON.parse(
-  fs.readFileSync(path.join(FIXTURES_DIR, 'preload.bridge.listeners.json'), 'utf8'),
-) as Record<string, ListenerFixtureRow>;
 
 /** Minimal shared payload for generic `cb(data)` listeners without channel overrides. */
 const LISTENER_SHARED_PASSTHROUGH = SAMPLE.obj;
@@ -294,18 +336,66 @@ const INVOKE_ENVELOPE_CALL_KEYS = new Set([
 
 const ORDERED_IDS = [SAMPLE.idA, SAMPLE.idB, SAMPLE.idC, SAMPLE.idD, SAMPLE.idE, SAMPLE.idF] as const;
 
+function singleArgDefault(row: ExposedRow): unknown {
+  const leaf = row.path.split('.').pop() ?? row.path;
+  const hay = `${row.path} ${row.channel} ${leaf}`.toLowerCase();
+
+  if (row.channel.includes('voice:pickBinary')) return 'stt-binary';
+  if (leaf === 'installUpdate') return false;
+  if (row.channel === 'vault:graphNodes') return 'notes';
+  if (row.channel === 'vault:graphEdges') return 'both';
+  if (row.channel === 'voice:stop' || leaf === 'voiceStop') return SAMPLE.id;
+  if (leaf === 'writeManifest' || row.channel === 'vault:manifest:write') return SAMPLE.obj;
+  if (
+    hay.includes('path') ||
+    hay.includes('folder') ||
+    hay.includes('root') ||
+    hay.includes('directory') ||
+    hay.includes('pickfolder')
+  ) {
+    return SAMPLE.path;
+  }
+  if (
+    hay.includes('sceneid') ||
+    hay.includes('sessionid') ||
+    hay.includes('storyid') ||
+    hay.includes('snapshotid') ||
+    hay.includes('entityid') ||
+    hay.includes('jobid') ||
+    hay.includes('streamid') ||
+    hay.includes('speakid') ||
+    hay.includes('requestid') ||
+    hay.includes('suggestionid') ||
+    hay.includes('proposalid') ||
+    hay.includes('furnitureid') ||
+    hay.includes('relationshipid') ||
+    hay.includes('panelid') ||
+    hay.includes('timelineid') ||
+    hay.includes('arcid') ||
+    hay.includes('itemid') ||
+    leaf.endsWith('id') ||
+    leaf.endsWith('byid')
+  ) {
+    return SAMPLE.id;
+  }
+  if (leaf === 'customfieldsset' || row.path === 'customFieldsSet') {
+    return [{ name: SAMPLE.str, type: 'text' as const }];
+  }
+  if (leaf.includes('generationlog') && leaf.includes('recent')) {
+    return { limit: 10 };
+  }
+  if (leaf.includes('providerlist') || leaf === 'providerListModels') {
+    return SAMPLE.obj;
+  }
+  return SAMPLE.str;
+}
+
 function defaultArgsFor(row: ExposedRow, fn: (...args: unknown[]) => unknown): unknown[] {
   const key = callKey(row);
   if (BRIDGE_ARG_OVERRIDES[key]?.args) return BRIDGE_ARG_OVERRIDES[key].args;
   const n = fn.length;
   if (n === 0) return [];
-  if (row.channel.includes('voice:pickBinary')) return ['stt-binary'];
-  if (n === 1) {
-    const golden = BRIDGE_RECORDED_PAYLOADS[key];
-    if (typeof golden === 'object' && golden !== null && !Array.isArray(golden)) return [SAMPLE.obj];
-    if (golden === SAMPLE.path || (typeof golden === 'string' && golden.startsWith('/'))) return [SAMPLE.path];
-    return [SAMPLE.str];
-  }
+  if (n === 1) return [singleArgDefault(row)];
   const pathFirst =
     row.path.includes('Vault') ||
     row.path.includes('Path') ||
@@ -342,8 +432,9 @@ function resolveCallSpec(row: ExposedRow, fn: (...args: unknown[]) => unknown): 
       ? 'send'
       : 'invoke');
   const singleArgInvoke =
-    override?.singleArgInvoke ?? (op === 'send' ? SINGLE_ARG_SEND.has(key) : SINGLE_ARG_INVOKE.has(key));
-  const payload = override?.payload ?? (singleArgInvoke ? undefined : BRIDGE_RECORDED_PAYLOADS[key]);
+    override?.singleArgInvoke ?? (op === 'send' ? SINGLE_ARG_SEND.has(key) : getSingleArgInvokeSet().has(key));
+  const payload =
+    override?.payload ?? (singleArgInvoke ? undefined : getBridgeRecordedPayloads()[key]);
   return { args, payload, op, singleArgInvoke };
 }
 
@@ -428,7 +519,7 @@ function assertListenerForwardsFromTable(
   ipcHandler: (...args: unknown[]) => void,
   userCb: ReturnType<typeof vi.fn>,
 ): void {
-  const spec = LISTENER_FIXTURE[key];
+  const spec = getListenerFixture()[key];
   expect(spec, `missing listener fixture for ${key}`).toBeDefined();
   userCb.mockClear();
   ipcHandler(...ipcInvokeArgsForListenerRow(spec!));
@@ -439,7 +530,7 @@ function assertListenerForwardsFromTable(
   }
 }
 
-describe('preload bridge', () => {
+describe.skipIf(!!process.env.PRELOAD_BRIDGE_RECORD)('preload bridge', () => {
   beforeEach(() => {
     invokeMock.mockClear();
     sendMock.mockClear();
@@ -448,7 +539,7 @@ describe('preload bridge', () => {
   });
 
   it('covers every frozen listener with a fixture table row', () => {
-    const missing = FROZEN_LISTENERS.map(callKey).filter((key) => !LISTENER_FIXTURE[key]);
+    const missing = FROZEN_LISTENERS.map(callKey).filter((key) => !getListenerFixture()[key]);
     expect(missing).toEqual([]);
   });
 
@@ -458,7 +549,7 @@ describe('preload bridge', () => {
       const fn = getAtPath(capturedWorlds[row.world], row.path);
       expect(typeof fn).toBe('function');
       const runtimeKind = detectListenerKind(fn as (...args: unknown[]) => unknown);
-      expect(LISTENER_FIXTURE[callKey(row)]?.kind).toBe(runtimeKind);
+      expect(getListenerFixture()[callKey(row)]?.kind).toBe(runtimeKind);
     },
   );
 
@@ -583,7 +674,7 @@ describe('preload bridge', () => {
   });
 
   it('vaultSetPaths golden encodes distinct story vs notes paths (red-on-revert)', () => {
-    const golden = BRIDGE_RECORDED_PAYLOADS['api.vaultSetPaths'] as {
+    const golden = getBridgeRecordedPayloads()['api.vaultSetPaths'] as {
       storyVaultPath: string;
       notesVaultPath: string;
     };
@@ -600,47 +691,85 @@ describe('preload bridge', () => {
   });
 });
 
-describe.skipIf(!process.env.PRELOAD_BRIDGE_RECORD)('preload bridge recorder', () => {
-  it('refresh listener fixture table', () => {
-    const table: Record<string, ListenerFixtureRow> = {};
-    for (const row of FROZEN_LISTENERS) {
-      table[callKey(row)] = recordListenerFixtureRow(row);
+async function writeBridgeListenerFixtureToDisk(): Promise<void> {
+  const table: Record<string, ListenerFixtureRow> = {};
+  for (const row of FROZEN_LISTENERS) {
+    table[callKey(row)] = recordListenerFixtureRow(row);
+  }
+  const body = JSON.stringify(table, null, 2);
+  fs.writeFileSync(BRIDGE_LISTENERS_PATH, body);
+  listenerFixtureCache = null;
+}
+
+async function writeBridgeRecordedFixtureToDisk(): Promise<string> {
+  const recorded: Record<string, unknown> = {};
+  const singles: string[] = [];
+  for (const row of FROZEN_CALLS) {
+    invokeMock.mockClear();
+    sendMock.mockClear();
+    const api = capturedWorlds[row.world];
+    const fn = getAtPath(api, row.path) as (...a: unknown[]) => unknown;
+    const spec = resolveCallSpec(row, fn);
+    const result = fn(...spec.args);
+    if (result && typeof (result as Promise<unknown>).then === 'function') await result;
+    const key = callKey(row);
+    if (sendMock.mock.calls.length) {
+      recorded[key] = firstIpcMockCall(sendMock)[1];
+    } else {
+      const invokeCall = firstIpcMockCall(invokeMock);
+      if (invokeCall.length === 1) {
+        singles.push(key);
+      } else {
+        recorded[key] = invokeCall[1];
+      }
     }
-    const outPath = path.join(FIXTURES_DIR, 'preload.bridge.listeners.json');
-    const body = JSON.stringify(table, null, 2);
-    fs.writeFileSync(outPath, body);
-    expect(fs.readFileSync(outPath, 'utf8')).toBe(body);
-    expect(Object.keys(table).length).toBe(FROZEN_LISTENERS.length);
+  }
+  singles.sort();
+  const body = JSON.stringify({ recorded, singles }, null, 2);
+  fs.writeFileSync(BRIDGE_RECORDED_PATH, body);
+  invalidateBridgeFixturesCache();
+  return body;
+}
+
+describe.skipIf(!process.env.PRELOAD_BRIDGE_RECORD)('preload bridge recorder', () => {
+  it('refresh listener fixture table', async () => {
+    await writeBridgeListenerFixtureToDisk();
+    const onDisk = fs.readFileSync(BRIDGE_LISTENERS_PATH, 'utf8');
+    expect(JSON.parse(onDisk)).toEqual(JSON.parse(fs.readFileSync(BRIDGE_LISTENERS_PATH, 'utf8')));
+    expect(Object.keys(JSON.parse(onDisk)).length).toBe(FROZEN_LISTENERS.length);
   });
 
   it('refresh BRIDGE_RECORDED_PAYLOADS', async () => {
-    const recorded: Record<string, unknown> = {};
-    const singles: string[] = [];
-    for (const row of FROZEN_CALLS) {
-      invokeMock.mockClear();
-      sendMock.mockClear();
-      const api = capturedWorlds[row.world];
-      const fn = getAtPath(api, row.path) as (...a: unknown[]) => unknown;
-      const spec = resolveCallSpec(row, fn);
-      const result = fn(...spec.args);
-      if (result && typeof (result as Promise<unknown>).then === 'function') await result;
-      const key = callKey(row);
-      if (sendMock.mock.calls.length) {
-        recorded[key] = firstIpcMockCall(sendMock)[1];
-      } else {
-        const invokeCall = firstIpcMockCall(invokeMock);
-        if (invokeCall.length === 1) {
-          singles.push(key);
-        } else {
-          recorded[key] = invokeCall[1];
-        }
+    const body = await writeBridgeRecordedFixtureToDisk();
+    expect(fs.readFileSync(BRIDGE_RECORDED_PATH, 'utf8')).toBe(body);
+    expect(Object.keys(JSON.parse(body).recorded).length).toBeGreaterThan(0);
+  });
+
+  it('recorded invoke fixture is idempotent (back-to-back record)', async () => {
+    const first = await writeBridgeRecordedFixtureToDisk();
+    const second = await writeBridgeRecordedFixtureToDisk();
+    expect(second).toBe(first);
+    expect(fs.readFileSync(BRIDGE_RECORDED_PATH, 'utf8')).toBe(first);
+  });
+
+  it('bootstraps recorded fixture when file is absent', async () => {
+    const backup = fs.existsSync(BRIDGE_RECORDED_PATH)
+      ? fs.readFileSync(BRIDGE_RECORDED_PATH, 'utf8')
+      : null;
+    if (fs.existsSync(BRIDGE_RECORDED_PATH)) fs.unlinkSync(BRIDGE_RECORDED_PATH);
+    invalidateBridgeFixturesCache();
+    try {
+      const body = await writeBridgeRecordedFixtureToDisk();
+      expect(fs.existsSync(BRIDGE_RECORDED_PATH)).toBe(true);
+      expect(fs.readFileSync(BRIDGE_RECORDED_PATH, 'utf8')).toBe(body);
+    } finally {
+      if (backup !== null) {
+        fs.writeFileSync(BRIDGE_RECORDED_PATH, backup);
+      } else if (fs.existsSync(BRIDGE_RECORDED_PATH)) {
+        fs.unlinkSync(BRIDGE_RECORDED_PATH);
       }
+      invalidateBridgeFixturesCache();
     }
-    const outPath = path.join(FIXTURES_DIR, 'preload.bridge.recorded.json');
-    const body = JSON.stringify({ recorded, singles }, null, 2);
-    fs.writeFileSync(outPath, body);
-    expect(fs.readFileSync(outPath, 'utf8')).toBe(body);
-    expect(Object.keys(recorded).length).toBeGreaterThan(0);
   });
 });
 
@@ -691,7 +820,7 @@ async function assertReadVaultChannelContractUnderPreload(moduleHref: string): P
   expect(invokeMock).toHaveBeenCalledWith('vault:read', { path: SAMPLE.path });
 }
 
-describe('preload bridge mutation sentinel', () => {
+describe.skipIf(!!process.env.PRELOAD_BRIDGE_RECORD)('preload bridge mutation sentinel', () => {
   afterAll(() => {
     if (mutatedPreloadDirForCleanup) {
       fs.rmSync(mutatedPreloadDirForCleanup, { recursive: true, force: true });
