@@ -29,6 +29,18 @@ describe('sceneBody marker seams', () => {
     expect(re.test('Title')).toBe(false);
     expect(re.test('##NoSpace')).toBe(false);
     expect(re.test('#\n')).toBe(true);
+    expect(re.test('### Deep Section')).toBe(true);
+    expect(re.test('not-a-heading')).toBe(false);
+    expect(re.test('text # hash inside')).toBe(false);
+    expect(re.test('#######')).toBe(false);
+    expect(re.test('### H3')).toBe(true);
+    expect(blocksToMarkdownBody([b('heading', '### H3', 0)])).toBe('### H3');
+    for (const level of [2, 3, 4, 5, 6]) {
+      const hashes = '#'.repeat(level);
+      const title = `${hashes} Level ${level}`;
+      expect(re.test(title)).toBe(true);
+      expect(blocksToMarkdownBody([b('heading', title, 0)])).toBe(title);
+    }
   });
 });
 
@@ -49,6 +61,21 @@ describe('sceneBody whitespace seams', () => {
     expect(trailingWsLen('')).toBe(0);
     expect(trailingWsLen('no-trail')).toBe(0);
     expect(leadingWsLen('no-lead')).toBe(0);
+    expect(leadingWsLen('     lead')).toBe(5);
+    expect(trailingWsLen('trail     ')).toBe(5);
+    expect(trailingWsLen('  ')).toBe(2);
+    expect(leadingWsLen('  ')).toBe(2);
+    const layout = computeSceneBodyLayout([b('prose', '     padded', 0), b('prose', 'tail     ', 1)]);
+    expect(layout.totalLength).toBe(blocksToMarkdownBody([b('prose', '     padded', 0), b('prose', 'tail     ', 1)]).length);
+  });
+});
+
+describe('blocksToMarkdownBody — segment separator is observable between blocks', () => {
+  it('joins non-empty segments with a blank line (\\n\\n) between them', () => {
+    const body = blocksToMarkdownBody([b('prose', 'A', 0), b('prose', 'B', 1)]);
+    expect(body).toBe('A\n\nB');
+    expect(SEGMENT_SEPARATOR).toBe('\n\n');
+    expect(body.slice(1, 3)).toBe('\n\n');
   });
 });
 
@@ -78,10 +105,29 @@ describe('blocksToMarkdownBody — mirror of frontend/src/BlockEditor.tsx', () =
 
   it('prefixes "# " onto a heading that carries no # run (frontend H1 fallback)', () => {
     expect(blocksToMarkdownBody([b('heading', 'Untitled Heading', 0)])).toBe('# Untitled Heading');
+    expect(blocksToMarkdownBody([b('heading', '##NoSpace', 0)])).toBe('# ##NoSpace');
+  });
+
+  it('skips blocks that are only ASCII whitespace, but preserves interior non-breaking spaces in the body', () => {
+    expect(blocksToMarkdownBody([b('prose', '\t\r\n  ', 0), b('prose', 'kept', 1)])).toBe('kept');
+    expect(serializeBlockSegment(b('prose', '\u00a0\u00a0', 0))).toBe('\u00a0\u00a0');
+    expect(blocksToMarkdownBody([b('prose', 'a', 0), b('prose', '\u00a0mid\u00a0', 1), b('prose', 'z', 2)])).toBe(
+      'a\n\n\u00a0mid\u00a0\n\nz',
+    );
+  });
+
+  it('trims leading whitespace from the first segment and trailing whitespace from the last only', () => {
+    const blocks = [b('prose', ' \t opener', 0), b('prose', ' middle ', 1), b('prose', 'closer\t  ', 2)];
+    expect(blocksToMarkdownBody(blocks)).toBe('opener\n\n middle \n\ncloser');
+    const layout = computeSceneBodyLayout(blocks);
+    expect(layout.totalLength).toBe(blocksToMarkdownBody(blocks).length);
   });
 
   it('keeps an existing heading # run verbatim', () => {
     expect(blocksToMarkdownBody([b('heading', '### Deep Section', 0)])).toBe('### Deep Section');
+    expect(blocksToMarkdownBody([b('heading', '#### L4', 0)])).toBe('#### L4');
+    expect(blocksToMarkdownBody([b('heading', '##### L5', 0)])).toBe('##### L5');
+    expect(blocksToMarkdownBody([b('heading', '######', 0)])).toBe('######');
   });
 
   it('skips blocks with empty or whitespace-only content', () => {
@@ -269,7 +315,16 @@ describe('unwrapBlockSegment — exact inverse of serializeBlockSegment', () => 
     expect(unwrapBlockSegment('note', '<!-- unterminated')).toBeNull();
     expect(unwrapBlockSegment('note', '<!-- short')).toBeNull();
     expect(unwrapBlockSegment('note', '<!-- x -->')).toBe('x');
+    expect(unwrapBlockSegment('note', '<!-- missing close')).toBeNull();
+    expect(unwrapBlockSegment('note', 'raw note without markers')).toBeNull();
+    expect(unwrapBlockSegment('note', '<!--no-space-->')).toBeNull();
+    expect(unwrapBlockSegment('note', '<!--x-->')).toBeNull();
     expect(unwrapBlockSegment('description', '*a*')).toBe('a');
+    expect(unwrapBlockSegment('description', '**')).toBe('');
+    expect(unwrapBlockSegment('description', '*')).toBeNull();
+    expect(unwrapBlockSegment('description', '*em*')).toBe('em');
+    expect(unwrapBlockSegment('description', 'em*')).toBeNull();
+    expect(unwrapBlockSegment('description', '*em')).toBeNull();
   });
 
   it('unwrap(wrap(content)) === content for every type with marker-free interior content', () => {

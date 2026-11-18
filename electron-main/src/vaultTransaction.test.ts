@@ -71,6 +71,9 @@ describe('vaultTransaction', () => {
     const refused = undoVaultTransaction({ notesRoot, storyRoot });
     expect(refused.response.undone).toBe(false);
     expect(refused.response.reason).toBe('Nothing to undo.');
+    expect(refused.response.restoredNotesPaths).toEqual([]);
+    expect(refused.response.restoredStoryPaths).toEqual([]);
+    expect(refused.conflicts).toEqual([]);
   });
   it('surfaces rollback failures when restore after a mid-cascade error also fails', () => {
     writeNote('Jasper Thorne.md', 'j');
@@ -256,6 +259,60 @@ describe('vaultTransaction', () => {
     expect(readNote('Allies.md')).toBe('See [[Jasper]] for details.');
     expect(readNote('Enemies.md')).toBe('Feared by [[Jasper|Jay]].');
     expect(readScene('Manuscript/01/scene-1.md')).toBe('Then [[Jasper]] arrived.');
+  });
+
+  it('rolls back a story-side rewrite to the story root when the cascade fails on the next change', () => {
+    writeNote('Jasper Thorne.md', 'note-body\n');
+    writeNote('Allies.md', 'allies-v1\n');
+    writeNote('B.md', 'b-v1\n');
+    writeScene('Manuscript/01/scene-1.md', 'scene-v1\n');
+    let writes = 0;
+    const failAfterStory: VaultWriter = (root, relPath, content) => {
+      writes += 1;
+      writeVaultFileAtomic(root, relPath, content);
+      if (writes === 3) throw new Error('stop after story and allies');
+    };
+    expect(() =>
+      applyVaultTransaction({
+        notesRoot,
+        storyRoot,
+        fromPath: 'Jasper.md',
+        toPath: 'Jasper Thorne.md',
+        oldStem: 'Jasper',
+        newStem: 'Jasper Thorne',
+        changes: [
+          {
+            side: 'notes',
+            kind: 'note',
+            relPath: 'Allies.md',
+            newContent: 'allies-v2\n',
+            linkCount: 0,
+            mode: 'update-display',
+          },
+          {
+            side: 'story',
+            kind: 'note',
+            relPath: 'Manuscript/01/scene-1.md',
+            newContent: 'scene-v2\n',
+            linkCount: 0,
+            mode: 'preserve-display',
+          },
+          {
+            side: 'notes',
+            kind: 'note',
+            relPath: 'B.md',
+            newContent: 'b-v2\n',
+            linkCount: 0,
+            mode: 'update-display',
+          },
+        ],
+        writeFile: failAfterStory,
+      }),
+    ).toThrow(/rolled back/);
+    expect(readNote('Allies.md')).toBe('allies-v1\n');
+    expect(readScene('Manuscript/01/scene-1.md')).toBe('scene-v1\n');
+    expect(bytesEqual(notesRoot, 'Allies.md', 'allies-v1\n')).toBe(true);
+    expect(bytesEqual(storyRoot, 'Manuscript/01/scene-1.md', 'scene-v1\n')).toBe(true);
   });
 
   it('omits skippedSymlinks from the response when every file restored cleanly', () => {
@@ -700,6 +757,147 @@ describe('vaultTransaction', () => {
     expect(undo.response.undone).toBe(true);
     expect(undo.conflicts).toContainEqual({ side: 'notes', relPath: 'Allies.md' });
     expect(undo.response.skippedSymlinks).toEqual([symlinkSkipLine('Allies.md')]);
+  });
+
+  it('undo fills restoredNotesPaths and restoredStoryPaths with the paths actually rewritten', () => {
+    writeNote('Jasper Thorne.md', 'self\n');
+    writeNote('Allies.md', 'allies-v1\n');
+    writeScene('Manuscript/01/scene-1.md', 'scene-v1\n');
+    applyVaultTransaction({
+      notesRoot,
+      storyRoot,
+      fromPath: 'Jasper.md',
+      toPath: 'Jasper Thorne.md',
+      oldStem: 'Jasper',
+      newStem: 'Jasper Thorne',
+      changes: [
+        {
+          side: 'notes',
+          kind: 'note',
+          relPath: 'Allies.md',
+          newContent: 'allies-v2\n',
+          linkCount: 1,
+          mode: 'update-display',
+        },
+        {
+          side: 'story',
+          kind: 'note',
+          relPath: 'Manuscript/01/scene-1.md',
+          newContent: 'scene-v2\n',
+          linkCount: 1,
+          mode: 'preserve-display',
+        },
+      ],
+    });
+    const undo = undoVaultTransaction({ notesRoot, storyRoot });
+    expect(undo.response.undone).toBe(true);
+    expect(undo.response.restoredNotesPaths).toEqual(['Allies.md']);
+    expect(undo.response.restoredStoryPaths).toEqual(['Manuscript/01/scene-1.md']);
+    expect(readNote('Allies.md')).toBe('allies-v1\n');
+    expect(readScene('Manuscript/01/scene-1.md')).toBe('scene-v1\n');
+  });
+
+  it('undo writes the renamed note back to fromPath when the transaction touched that file', () => {
+    const renamedWas = 'renamed-self-v1\n';
+    const renamedNext = 'renamed-self-v2\n';
+    writeNote('Jasper Thorne.md', renamedWas);
+    applyVaultTransaction({
+      notesRoot,
+      storyRoot,
+      fromPath: 'Jasper.md',
+      toPath: 'Jasper Thorne.md',
+      oldStem: 'Jasper',
+      newStem: 'Jasper Thorne',
+      changes: [
+        {
+          side: 'notes',
+          kind: 'note',
+          relPath: 'Jasper Thorne.md',
+          newContent: renamedNext,
+          linkCount: 0,
+          mode: 'update-display',
+        },
+      ],
+    });
+    expect(readNote('Jasper Thorne.md')).toBe(renamedNext);
+    const undo = undoVaultTransaction({ notesRoot, storyRoot });
+    expect(undo.response.undone).toBe(true);
+    expect(undo.response.restoredNotesPaths).toContain('Jasper.md');
+    expect(fs.existsSync(path.join(notesRoot, 'Jasper Thorne.md'))).toBe(false);
+    expect(bytesEqual(notesRoot, 'Jasper.md', renamedWas)).toBe(true);
+  });
+
+  it('throws the rollback-only message when a write fails but rollback succeeds', () => {
+    writeNote('Jasper Thorne.md', 'j');
+    writeNote('Allies.md', 'a');
+    writeNote('B.md', 'b');
+    let calls = 0;
+    const flaky: VaultWriter = (r, rel, content) => {
+      calls += 1;
+      if (calls === 2) throw new Error('fail on second write');
+      writeVaultFileAtomic(r, rel, content);
+    };
+    expect(() =>
+      applyVaultTransaction({
+        notesRoot,
+        storyRoot,
+        fromPath: 'Jasper.md',
+        toPath: 'Jasper Thorne.md',
+        oldStem: 'Jasper',
+        newStem: 'Jasper Thorne',
+        changes: [
+          {
+            side: 'notes',
+            kind: 'note',
+            relPath: 'Allies.md',
+            newContent: 'a2',
+            linkCount: 0,
+            mode: 'update-display',
+          },
+          {
+            side: 'notes',
+            kind: 'note',
+            relPath: 'B.md',
+            newContent: 'b2',
+            linkCount: 0,
+            mode: 'update-display',
+          },
+        ],
+        writeFile: flaky,
+      }),
+    ).toThrow(/no changes were kept/);
+    expect(readNote('Allies.md')).toBe('a');
+    expect(readNote('B.md')).toBe('b');
+  });
+
+  it('undo counts a missing rewritten file as skipped with a conflict entry', () => {
+    writeNote('Jasper Thorne.md', 'body');
+    writeNote('Allies.md', '[[Jasper]]');
+    applyVaultTransaction({
+      notesRoot,
+      storyRoot,
+      fromPath: 'Jasper.md',
+      toPath: 'Jasper Thorne.md',
+      oldStem: 'Jasper',
+      newStem: 'Jasper Thorne',
+      changes: [
+        {
+          side: 'notes',
+          kind: 'note',
+          relPath: 'Allies.md',
+          newContent: '[[Jasper Thorne]]',
+          linkCount: 1,
+          mode: 'update-display',
+        },
+      ],
+    });
+    fs.rmSync(path.join(notesRoot, 'Allies.md'));
+    const undo = undoVaultTransaction({ notesRoot, storyRoot });
+    expect(undo.response.undone).toBe(true);
+    expect(undo.response.filesRestored).toBe(0);
+    expect(undo.response.filesSkipped).toBe(1);
+    expect(undo.conflicts).toEqual([{ side: 'notes', relPath: 'Allies.md' }]);
+    expect(fs.existsSync(path.join(notesRoot, 'Jasper.md'))).toBe(true);
   });
 
   it('rolls back the rename and does not recreate a file deleted after planning', () => {
