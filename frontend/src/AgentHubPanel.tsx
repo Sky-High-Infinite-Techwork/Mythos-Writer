@@ -375,16 +375,31 @@ function PartnerChatView({
     ?? (writerBusy ? 'writer' : brainstormActivity.active ? null : null);
   const [pastOpen, setPastOpen] = useState(false);
   const pastToggleRef = useRef<HTMLButtonElement>(null);
-  // FD-9 #3 — the session pill stays mounted while Past chats is closed
-  // (TC-8537-02). Escape is handled only inside this region.
-  const onPastChatsKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!pastOpen || event.key !== 'Escape') return;
-    const target = event.target;
-    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
-    event.preventDefault();
+  const pastChatsRef = useRef<HTMLDivElement>(null);
+  const dismissPastChats = useCallback(() => {
     setPastOpen(false);
     pastToggleRef.current?.focus();
-  };
+  }, []);
+  // FD-9 #3 — the session pill stays mounted while Past chats is closed
+  // (TC-8537-02). Escape is handled only inside this region. Capture-phase
+  // listener so Escape closes when focus sits on the session pill (Playwright /
+  // real keyboard) — React bubble-only onKeyDown missed CDP-delivered keys in CI.
+  useEffect(() => {
+    if (!pastOpen) return;
+    const root = pastChatsRef.current;
+    if (!root) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (!root.contains(event.target as Node)) return;
+      const target = event.target;
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dismissPastChats();
+    };
+    root.addEventListener('keydown', onKeyDown, true);
+    return () => root.removeEventListener('keydown', onKeyDown, true);
+  }, [pastOpen, dismissPastChats]);
   // Tip cards always mounted (N4-A tips-only WA); chat stays on the partner thread.
   const [showWriterTips, setShowWriterTips] = useState(false);
 
@@ -399,9 +414,9 @@ function PartnerChatView({
         pastChats={(
           /* FD-9 #3 — small neutral Past chats dropdown in the header card. */
           <div
+            ref={pastChatsRef}
             className="ahp-past-chats"
             data-testid="ahp-past-chats"
-            onKeyDown={onPastChatsKeyDown}
           >
             <button
               ref={pastToggleRef}
