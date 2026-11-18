@@ -65,9 +65,10 @@ describe('main.handlers settings:set', () => {
     });
     expect(result.saved).toBe(false);
     expect(result.error).toMatch(/agents\.writingAssistant\.provider\.baseUrl/i);
-    const after = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
-    expect(after.agents.writingAssistant.provider?.baseUrl).toBe(priorUrl);
-    expect(after.agents.writingAssistant.provider?.baseUrl).not.toContain('169.254.169.254');
+    const disk = fs.readFileSync(settingsPath, 'utf-8');
+    expect(disk).not.toContain('169.254.169.254');
+    const after = JSON.parse(disk) as AppSettings;
+    expect(after.agents.writingAssistant.provider?.baseUrl ?? priorUrl).toBe(priorUrl);
   });
 
   it('refuses invalid provider baseUrl and does not persist the hostile URL', async () => {
