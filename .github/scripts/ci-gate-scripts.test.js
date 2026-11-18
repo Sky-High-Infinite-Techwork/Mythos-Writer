@@ -245,6 +245,16 @@ test('ci-tier1-gate: six results (missing shard) exits 1', () => {
   );
 });
 
+test('ci-tier1-gate: eighth token on following line exits 1', () => {
+  assert.equal(
+    runBash(TIER1_SCRIPT, {
+      NEEDS_TIER1_RESULTS: `success success success success success success success
+failure`,
+    }).status,
+    1,
+  );
+});
+
 test('ci-tier1-gate: eight results (extra job) exits 1', () => {
   assert.equal(
     runBash(TIER1_SCRIPT, { NEEDS_TIER1_RESULTS: `${ALL_TIER1_OK} success` }).status,
@@ -438,6 +448,39 @@ test('ci-paths-filter-resolve-docs: empty outcome defaults docs-only=false', () 
     runBash(RESOLVE_DOCS, { GITHUB_OUTPUT: out, FILTER_DOCS_OUTCOME: '', FILTER_DOCS_DOCS_ONLY: 'true' }),
   );
   assert.equal(lines, 'docs-only=false');
+});
+
+test('ci-paths-filter-resolve-docs: success outcome with false passes docs-only=false', () => {
+  const { lines } = withGithubOutput((out) =>
+    runBash(RESOLVE_DOCS, {
+      GITHUB_OUTPUT: out,
+      FILTER_DOCS_OUTCOME: 'success',
+      FILTER_DOCS_DOCS_ONLY: 'false',
+    }),
+  );
+  assert.equal(lines, 'docs-only=false');
+});
+
+test('ci-paths-filter-resolve-docs: mutant true on explicit false input is killed', () => {
+  const prod = withGithubOutput((out) =>
+    runBash(RESOLVE_DOCS, {
+      GITHUB_OUTPUT: out,
+      FILTER_DOCS_OUTCOME: 'success',
+      FILTER_DOCS_DOCS_ONLY: 'false',
+    }),
+  );
+  assert.equal(prod.lines, 'docs-only=false');
+  const src = fs.readFileSync(RESOLVE_DOCS, 'utf8');
+  const mutant = src.replace('false) value="false"', 'false) value="true"');
+  const broken = withGithubOutput((out) =>
+    runMutantScript(mutant, {
+      GITHUB_OUTPUT: out,
+      FILTER_DOCS_OUTCOME: 'success',
+      FILTER_DOCS_DOCS_ONLY: 'false',
+    }),
+  );
+  assert.equal(broken.lines, 'docs-only=true');
+  assert.notEqual(prod.lines, broken.lines);
 });
 
 test('ci-paths-filter-resolve-docs: passes docs-only=true through', () => {

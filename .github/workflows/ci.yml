@@ -104,6 +104,27 @@ jobs:
               - '!.gitignore'
               - '!.github/ISSUE_TEMPLATE/**'
 
+      # Trust boundary (pull_request): resolve scripts come from PR base, not candidate head.
+      - name: Install trusted gate scripts for resolve (PR)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p .github/scripts
+          scripts=(ci-paths-filter-resolve-docs.sh ci-paths-filter-resolve-e2e.sh ci-tier1-gate.sh ci-aggregator.sh)
+          for s in "${scripts[@]}"; do
+            if git cat-file -e "$BASE_SHA:.github/scripts/$s" 2>/dev/null; then
+              git show "$BASE_SHA:.github/scripts/$s" > ".github/scripts/$s"
+            elif [ -f ".github/scripts/$s" ]; then
+              echo "::notice title=Gate script bootstrap::$s missing on PR base — using candidate copy"
+            else
+              echo "ERROR: missing gate script $s" >&2
+              exit 1
+            fi
+            chmod +x ".github/scripts/$s"
+          done
+
       # Fail closed: ambiguous filter → docs-only=false (run full CI, do not treat as docs-only).
       - name: Resolve docs-only output
         id: resolve-docs
@@ -350,7 +371,9 @@ jobs:
     # job and prevented all 4 e2e shards from running. Fuzz coverage is retained
     # via fuzz.yml (runs on every PR as a separate non-blocking check).
     # Tier 2: starts only after tier1-gate (SKY-2425 fuzz moved to fuzz.yml).
-    needs: [tier1-gate]
+    # SKY-8090: skip when run-e2e is false so a failed build cannot be masked by skipped e2e shards.
+    needs: [tier1-gate, paths-filter]
+    if: needs.paths-filter.outputs.run-e2e == 'true' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -1152,7 +1175,43 @@ jobs:
     if: always()
     timeout-minutes: 5
     steps:
+      - name: Checkout gate scripts from PR base
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: _gate-base
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: true
+      - name: Checkout gate scripts from candidate (bootstrap)
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: _gate-candidate
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: true
+      - name: Install trusted gate scripts (PR)
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          mkdir -p .github/scripts
+          scripts=(ci-tier1-gate.sh ci-aggregator.sh ci-paths-filter-resolve-docs.sh ci-paths-filter-resolve-e2e.sh)
+          for s in "${scripts[@]}"; do
+            if [ -f "_gate-base/.github/scripts/$s" ]; then
+              cp "_gate-base/.github/scripts/$s" ".github/scripts/$s"
+            elif [ -f "_gate-candidate/.github/scripts/$s" ]; then
+              cp "_gate-candidate/.github/scripts/$s" ".github/scripts/$s"
+              echo "::notice title=Gate script bootstrap::$s missing on PR base — using candidate copy"
+            else
+              echo "ERROR: missing gate script $s" >&2
+              exit 1
+            fi
+            chmod +x ".github/scripts/$s"
+          done
       - name: Checkout gate scripts
+        if: github.event_name != 'pull_request'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -1186,7 +1245,43 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      - name: Checkout gate scripts from PR base
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: _gate-base
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: true
+      - name: Checkout gate scripts from candidate (bootstrap)
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: _gate-candidate
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: true
+      - name: Install trusted gate scripts (PR)
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          mkdir -p .github/scripts
+          scripts=(ci-tier1-gate.sh ci-aggregator.sh ci-paths-filter-resolve-docs.sh ci-paths-filter-resolve-e2e.sh)
+          for s in "${scripts[@]}"; do
+            if [ -f "_gate-base/.github/scripts/$s" ]; then
+              cp "_gate-base/.github/scripts/$s" ".github/scripts/$s"
+            elif [ -f "_gate-candidate/.github/scripts/$s" ]; then
+              cp "_gate-candidate/.github/scripts/$s" ".github/scripts/$s"
+              echo "::notice title=Gate script bootstrap::$s missing on PR base — using candidate copy"
+            else
+              echo "ERROR: missing gate script $s" >&2
+              exit 1
+            fi
+            chmod +x ".github/scripts/$s"
+          done
       - name: Checkout gate scripts
+        if: github.event_name != 'pull_request'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

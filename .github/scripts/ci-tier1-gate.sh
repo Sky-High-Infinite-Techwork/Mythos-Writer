@@ -12,8 +12,12 @@ if [ -z "$tier1" ]; then
   fail "NEEDS_TIER1_RESULTS is missing or empty"
 fi
 
+# read <<< only sees the first line; flatten all lines into tokens first.
+flat=$(printf '%s' "$tier1" | tr '\n\t\r' ' ' | tr -s ' ')
+flat="${flat#"${flat%%[![:space:]]*}"}"
+flat="${flat%"${flat##*[![:space:]]}"}"
 set -f
-IFS=$' \t\n' read -r -a results <<<"$tier1"
+IFS=' ' read -r -a results <<<"$flat"
 set +f
 if [ "${#results[@]}" -ne 7 ]; then
   fail "expected 7 Tier 1 results, got ${#results[@]}"
