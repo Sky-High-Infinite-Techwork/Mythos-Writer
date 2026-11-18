@@ -40,10 +40,10 @@ const FROZEN_CALLS = FROZEN_IPC.filter((row) => !isListenerPath(row.path));
 // ─── Mock electron (capture bridge + record IPC) ─────────────────────────────
 
 const harness = vi.hoisted(() => {
-  const invokeMock = vi.fn(async () => ({ ok: true, data: null }));
-  const sendMock = vi.fn();
-  const onMock = vi.fn();
-  const removeListenerMock = vi.fn();
+  const invokeMock = vi.fn(async (_channel: string, _payload?: unknown) => ({ ok: true, data: null }));
+  const sendMock = vi.fn((_channel: string, _payload?: unknown) => undefined);
+  const onMock = vi.fn((_channel: string, _handler: (...evt: unknown[]) => void) => undefined);
+  const removeListenerMock = vi.fn((_channel: string, _handler: (...evt: unknown[]) => void) => undefined);
   const capturedWorlds: Record<string, unknown> = {};
   return { invokeMock, sendMock, onMock, removeListenerMock, capturedWorlds };
 });
@@ -57,10 +57,11 @@ vi.mock('electron', () => ({
     },
   },
   ipcRenderer: {
-    invoke: (...args: unknown[]) => harness.invokeMock(...args),
-    send: (...args: unknown[]) => harness.sendMock(...args),
-    on: (...args: unknown[]) => harness.onMock(...args),
-    removeListener: (...args: unknown[]) => harness.removeListenerMock(...args),
+    invoke: (channel: string, payload?: unknown) => harness.invokeMock(channel, payload),
+    send: (channel: string, payload?: unknown) => harness.sendMock(channel, payload),
+    on: (channel: string, handler: (...evt: unknown[]) => void) => harness.onMock(channel, handler),
+    removeListener: (channel: string, handler: (...evt: unknown[]) => void) =>
+      harness.removeListenerMock(channel, handler),
   },
   webUtils: {
     getPathForFile: (file: File) => `/mock/${file.name}`,
@@ -1245,6 +1246,12 @@ function callKey(row: ExposedRow): string {
   return `${row.world}.${row.path}`;
 }
 
+function firstIpcMockCall(mock: { mock: { calls: readonly unknown[][] } }): unknown[] {
+  const call = mock.mock.calls[0];
+  expect(call).toBeDefined();
+  return call as unknown[];
+}
+
 function resolveCallSpec(row: ExposedRow, fn: (...args: unknown[]) => unknown): BridgeCallSpec {
   const key = callKey(row);
   const override = BRIDGE_ARG_OVERRIDES[key];
@@ -1343,22 +1350,24 @@ describe('preload bridge', () => {
       const op = spec.op ?? 'invoke';
       if (op === 'send') {
         expect(sendMock).toHaveBeenCalledTimes(1);
-        expect(sendMock.mock.calls[0]?.[0]).toBe(row.channel);
+        const sendCall = firstIpcMockCall(sendMock);
+        expect(sendCall[0]).toBe(row.channel);
         if (spec.singleArgInvoke) {
-          expect(sendMock.mock.calls[0]).toHaveLength(1);
+          expect(sendCall[1]).toBeUndefined();
         } else {
-          expect(sendMock.mock.calls[0]?.[1]).toEqual(spec.payload);
+          expect(sendCall[1]).toEqual(spec.payload);
         }
         expect(invokeMock).not.toHaveBeenCalled();
         return;
       }
 
       expect(invokeMock).toHaveBeenCalledTimes(1);
-      expect(invokeMock.mock.calls[0]?.[0]).toBe(row.channel);
+      const invokeCall = firstIpcMockCall(invokeMock);
+      expect(invokeCall[0]).toBe(row.channel);
       if (spec.singleArgInvoke) {
-        expect(invokeMock.mock.calls[0]).toHaveLength(1);
+        expect(invokeCall[1]).toBeUndefined();
       } else {
-        expect(invokeMock.mock.calls[0]?.[1]).toEqual(spec.payload);
+        expect(invokeCall[1]).toEqual(spec.payload);
       }
       expect(sendMock).not.toHaveBeenCalled();
     },
@@ -1371,12 +1380,13 @@ describe('preload bridge', () => {
       const fn = getAtPath(api, row.path);
       expect(typeof fn).toBe('function');
 
-      const cb = vi.fn();
-      const unsub = (fn as (cb: typeof cb) => () => void)(cb);
+      const cb = vi.fn<() => void>();
+      const unsub = (fn as (listener: () => void) => () => void)(cb);
       expect(typeof unsub).toBe('function');
       expect(onMock).toHaveBeenCalledTimes(1);
-      expect(onMock.mock.calls[0]?.[0]).toBe(row.channel);
-      const handler = onMock.mock.calls[0]?.[1];
+      const onCall = firstIpcMockCall(onMock);
+      expect(onCall[0]).toBe(row.channel);
+      const handler = onCall[1];
       expect(typeof handler).toBe('function');
 
       unsub();
@@ -1404,11 +1414,14 @@ describe.skipIf(!process.env.PRELOAD_BRIDGE_RECORD)('preload bridge recorder', (
       if (result && typeof (result as Promise<unknown>).then === 'function') await result;
       const key = callKey(row);
       if (sendMock.mock.calls.length) {
-        recorded[key] = sendMock.mock.calls[0]?.[1];
-      } else if (invokeMock.mock.calls[0]?.length === 1) {
-        singles.push(key);
+        recorded[key] = firstIpcMockCall(sendMock)[1];
       } else {
-        recorded[key] = invokeMock.mock.calls[0]?.[1];
+        const invokeCall = firstIpcMockCall(invokeMock);
+        if (invokeCall.length === 1) {
+          singles.push(key);
+        } else {
+          recorded[key] = invokeCall[1];
+        }
       }
     }
     fs.writeFileSync(
