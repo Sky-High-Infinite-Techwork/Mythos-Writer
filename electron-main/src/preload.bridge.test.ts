@@ -691,17 +691,21 @@ describe.skipIf(!!process.env.PRELOAD_BRIDGE_RECORD)('preload bridge', () => {
   });
 });
 
-async function writeBridgeListenerFixtureToDisk(): Promise<void> {
+async function writeBridgeListenerFixtureToDisk(
+  targetPath: string = BRIDGE_LISTENERS_PATH,
+): Promise<void> {
   const table: Record<string, ListenerFixtureRow> = {};
   for (const row of FROZEN_LISTENERS) {
     table[callKey(row)] = recordListenerFixtureRow(row);
   }
   const body = JSON.stringify(table, null, 2);
-  fs.writeFileSync(BRIDGE_LISTENERS_PATH, body);
-  listenerFixtureCache = null;
+  fs.writeFileSync(targetPath, body);
+  if (targetPath === BRIDGE_LISTENERS_PATH) listenerFixtureCache = null;
 }
 
-async function writeBridgeRecordedFixtureToDisk(): Promise<string> {
+async function writeBridgeRecordedFixtureToDisk(
+  targetPath: string = BRIDGE_RECORDED_PATH,
+): Promise<string> {
   const recorded: Record<string, unknown> = {};
   const singles: string[] = [];
   for (const row of FROZEN_CALLS) {
@@ -726,10 +730,42 @@ async function writeBridgeRecordedFixtureToDisk(): Promise<string> {
   }
   singles.sort();
   const body = JSON.stringify({ recorded, singles }, null, 2);
-  fs.writeFileSync(BRIDGE_RECORDED_PATH, body);
-  invalidateBridgeFixturesCache();
+  fs.writeFileSync(targetPath, body);
+  if (targetPath === BRIDGE_RECORDED_PATH) invalidateBridgeFixturesCache();
   return body;
 }
+
+describe('preload bridge recorder proofs', () => {
+  it('recorded invoke fixture is idempotent (back-to-back record)', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-bridge-record-'));
+    const outPath = path.join(tmpDir, path.basename(BRIDGE_RECORDED_PATH));
+    try {
+      const first = await writeBridgeRecordedFixtureToDisk(outPath);
+      const second = await writeBridgeRecordedFixtureToDisk(outPath);
+      expect(second).toBe(first);
+      expect(fs.readFileSync(outPath, 'utf8')).toBe(first);
+      const parsed = JSON.parse(first) as BridgeRecordedFixture;
+      expect(parsed.singles).toEqual([...parsed.singles].toSorted((a, b) => a.localeCompare(b)));
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('bootstraps recorded fixture when file is absent', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-bridge-record-'));
+    const outPath = path.join(tmpDir, path.basename(BRIDGE_RECORDED_PATH));
+    try {
+      expect(fs.existsSync(outPath)).toBe(false);
+      const bootstrap = await writeBridgeRecordedFixtureToDisk(outPath);
+      expect(fs.existsSync(outPath)).toBe(true);
+      expect(fs.readFileSync(outPath, 'utf8')).toBe(bootstrap);
+      const again = await writeBridgeRecordedFixtureToDisk(outPath);
+      expect(again).toBe(bootstrap);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe.skipIf(!process.env.PRELOAD_BRIDGE_RECORD)('preload bridge recorder', () => {
   it('refresh listener fixture table', async () => {
@@ -743,33 +779,6 @@ describe.skipIf(!process.env.PRELOAD_BRIDGE_RECORD)('preload bridge recorder', (
     const body = await writeBridgeRecordedFixtureToDisk();
     expect(fs.readFileSync(BRIDGE_RECORDED_PATH, 'utf8')).toBe(body);
     expect(Object.keys(JSON.parse(body).recorded).length).toBeGreaterThan(0);
-  });
-
-  it('recorded invoke fixture is idempotent (back-to-back record)', async () => {
-    const first = await writeBridgeRecordedFixtureToDisk();
-    const second = await writeBridgeRecordedFixtureToDisk();
-    expect(second).toBe(first);
-    expect(fs.readFileSync(BRIDGE_RECORDED_PATH, 'utf8')).toBe(first);
-  });
-
-  it('bootstraps recorded fixture when file is absent', async () => {
-    const backup = fs.existsSync(BRIDGE_RECORDED_PATH)
-      ? fs.readFileSync(BRIDGE_RECORDED_PATH, 'utf8')
-      : null;
-    if (fs.existsSync(BRIDGE_RECORDED_PATH)) fs.unlinkSync(BRIDGE_RECORDED_PATH);
-    invalidateBridgeFixturesCache();
-    try {
-      const body = await writeBridgeRecordedFixtureToDisk();
-      expect(fs.existsSync(BRIDGE_RECORDED_PATH)).toBe(true);
-      expect(fs.readFileSync(BRIDGE_RECORDED_PATH, 'utf8')).toBe(body);
-    } finally {
-      if (backup !== null) {
-        fs.writeFileSync(BRIDGE_RECORDED_PATH, backup);
-      } else if (fs.existsSync(BRIDGE_RECORDED_PATH)) {
-        fs.unlinkSync(BRIDGE_RECORDED_PATH);
-      }
-      invalidateBridgeFixturesCache();
-    }
   });
 });
 
