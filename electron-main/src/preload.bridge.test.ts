@@ -745,7 +745,8 @@ describe('preload bridge recorder proofs', () => {
       expect(second).toBe(first);
       expect(fs.readFileSync(outPath, 'utf8')).toBe(first);
       const parsed = JSON.parse(first) as BridgeRecordedFixture;
-      expect(parsed.singles).toEqual([...parsed.singles].toSorted((a, b) => a.localeCompare(b)));
+      const singlesLex = [...parsed.singles].sort((a: string, b: string) => a.localeCompare(b));
+      expect(parsed.singles).toEqual(singlesLex);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
