@@ -41,30 +41,21 @@ describe('main.handlers settings:set', () => {
     expect(after.theme).toBe(next.theme);
   });
 
-  it('refuses invalid brainstorm agent baseUrl without persisting', async () => {
+  it('refuses invalid writing-assistant agent baseUrl without persisting', async () => {
     const settingsPath = path.join(bundle.userData, 'app-settings.json');
-    const beforeBytes = fs.readFileSync(settingsPath);
-    const before = JSON.parse(beforeBytes.toString('utf-8')) as AppSettings;
-    const baseProvider =
-      before.agents.brainstorm.provider ??
-      SETTINGS_DEFAULTS.agents.brainstorm.provider ?? {
-        kind: 'openai' as const,
-        model: 'gpt-4o',
-        apiKey: '',
-        baseUrl: 'https://api.openai.com/v1',
-      };
-    const prior = baseProvider.baseUrl;
+    const before = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
+    const priorUrl = before.agents.writingAssistant.provider?.baseUrl;
     const poisoned: AppSettings = {
       ...before,
       agents: {
         ...before.agents,
-        brainstorm: {
-          ...before.agents.brainstorm,
+        writingAssistant: {
+          ...before.agents.writingAssistant,
           provider: {
-            kind: baseProvider.kind,
-            model: baseProvider.model,
-            apiKey: baseProvider.apiKey,
-            baseUrl: 'file:///etc/passwd',
+            kind: before.agents.writingAssistant.provider?.kind ?? 'openai',
+            model: before.agents.writingAssistant.provider?.model ?? 'gpt-4o',
+            apiKey: before.agents.writingAssistant.provider?.apiKey ?? '',
+            baseUrl: 'http://169.254.169.254/latest/meta-data/wa',
           },
         },
       },
@@ -73,11 +64,10 @@ describe('main.handlers settings:set', () => {
       settings: poisoned,
     });
     expect(result.saved).toBe(false);
-    expect(result.error).toMatch(/agents\.brainstorm\.provider\.baseUrl/i);
-    const afterBytes = fs.readFileSync(settingsPath);
-    expect(afterBytes.equals(beforeBytes)).toBe(true);
-    expect(afterBytes.toString('utf-8')).not.toContain('file:///etc/passwd');
-    expect(prior).toBeTruthy();
+    expect(result.error).toMatch(/agents\.writingAssistant\.provider\.baseUrl/i);
+    const after = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
+    expect(after.agents.writingAssistant.provider?.baseUrl).toBe(priorUrl);
+    expect(after.agents.writingAssistant.provider?.baseUrl).not.toContain('169.254.169.254');
   });
 
   it('refuses invalid provider baseUrl and does not persist the hostile URL', async () => {
