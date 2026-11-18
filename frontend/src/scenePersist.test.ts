@@ -1,12 +1,31 @@
 import { describe, expect, it, vi } from 'vitest';
-import { sceneSaveFailureMessage, vaultWriteRefused, writeSceneVault } from './scenePersist';
+import {
+  markSceneFailureMissing,
+  removeSceneFailure,
+  sceneSaveFailureMessage,
+  upsertSceneFailure,
+  vaultWriteRefused,
+  writeSceneVault,
+} from './scenePersist';
 
 describe('vaultWriteRefused', () => {
-  it('treats a resolved { error, bytes: 0 } as refused', () => {
+  it('treats a resolved { error, bytes: 0, code } as refused', () => {
     expect(vaultWriteRefused({ path: 'x.md', bytes: 0, error: 'EACCES', code: 'EACCES' })).toBe(true);
   });
 
-  it('treats a successful { bytes } payload as ok', () => {
+  it('treats sanitized Permission denied (no bytes field) as refused', () => {
+    expect(vaultWriteRefused({ error: 'Permission denied.' })).toBe(true);
+  });
+
+  it('treats { path } without bytes as refused', () => {
+    expect(vaultWriteRefused({ path: 'stories/a/Scene.md' })).toBe(true);
+  });
+
+  it('treats empty error string with bytes as not refused', () => {
+    expect(vaultWriteRefused({ error: '', bytes: 10 })).toBe(false);
+  });
+
+  it('treats a successful { bytes > 0 } payload as ok', () => {
     expect(vaultWriteRefused({ path: 'x.md', bytes: 42 })).toBe(false);
   });
 
@@ -34,6 +53,25 @@ describe('writeSceneVault', () => {
   it('returns true when writeVault resolves bytes', async () => {
     const writeVault = vi.fn().mockResolvedValue({ path: 'stories/a/Scene.md', bytes: 12 });
     await expect(writeSceneVault(writeVault, 'stories/a/Scene.md', 'body')).resolves.toBe(true);
+  });
+});
+
+describe('scene save failure map', () => {
+  const a = { storyId: 'st-a', sceneId: 'sc-1', sceneTitle: 'Alpha' };
+  const b = { storyId: 'st-a', sceneId: 'sc-2', sceneTitle: 'Beta' };
+
+  it('keeps banner for the other scene when one entry clears', () => {
+    let map = upsertSceneFailure(new Map(), a);
+    map = upsertSceneFailure(map, b);
+    map = removeSceneFailure(map, a.storyId, a.sceneId);
+    expect(map.size).toBe(1);
+    expect(map.has('st-a:sc-2')).toBe(true);
+  });
+
+  it('marks missing when retry target is gone', () => {
+    let map = upsertSceneFailure(new Map(), a);
+    map = markSceneFailureMissing(map, a.storyId, a.sceneId);
+    expect(map.get('st-a:sc-1')?.missing).toBe(true);
   });
 });
 

@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react';
-import { sceneSaveFailureMessage } from '../scenePersist';
+import type { SceneSaveFailureEntry } from '../scenePersist';
+import { sceneFailureKey, sceneSaveFailureMessage } from '../scenePersist';
 
 const BANNER_STYLE: CSSProperties = {
   margin: '8px 12px',
@@ -14,30 +15,37 @@ const BANNER_STYLE: CSSProperties = {
   gap: 12,
 };
 
-export interface SceneSaveFailure {
-  sceneId: string;
-  sceneTitle: string;
-}
+export type SceneSaveFailure = SceneSaveFailureEntry;
 
 export function SceneSaveNotice({
-  failure,
+  failures,
   onRetry,
 }: {
-  failure: SceneSaveFailure | null;
+  failures: readonly SceneSaveFailureEntry[];
   onRetry: () => void;
 }) {
-  if (!failure) return null;
+  if (failures.length === 0) return null;
+  const retryLabel = failures.length > 1 ? 'Retry all' : 'Retry';
   return (
-    <div
-      role="status"
-      aria-live="polite"
-      data-testid="scene-save-warning"
-      style={BANNER_STYLE}
-    >
-      <p style={{ margin: 0, flex: 1 }}>{sceneSaveFailureMessage(failure.sceneTitle)}</p>
-      <button type="button" onClick={onRetry}>
-        Retry
-      </button>
+    <div data-testid="scene-save-warning-region">
+      {failures.map((failure) => (
+        <div
+          key={sceneFailureKey(failure.storyId, failure.sceneId)}
+          role="status"
+          aria-live="polite"
+          data-testid="scene-save-warning"
+          style={BANNER_STYLE}
+        >
+          <p style={{ margin: 0, flex: 1 }}>
+            {sceneSaveFailureMessage(failure.sceneTitle, failure.missing)}
+          </p>
+        </div>
+      ))}
+      <div style={{ margin: '0 12px 8px', textAlign: 'right' }}>
+        <button type="button" onClick={onRetry}>
+          {retryLabel}
+        </button>
+      </div>
     </div>
   );
 }

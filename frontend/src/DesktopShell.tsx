@@ -27,8 +27,15 @@ import { LIQUID_NEON_PRESETS, type LiquidNeonPresetKey } from './theme/presets';
 import { notifyMythosActiveVaultChanged } from './migration/MythosMigrationCenter';
 import { stripManifestContentForIpc } from './manifestIpc';
 import { BookSyncNotice, failedManifestRead, isLoadedManifest, manifestSaveOutcome, STORY_LIST_READ_FAILURE, type ManifestSaveOutcome } from './components/BookSyncNotice';
-import { SceneSaveNotice, type SceneSaveFailure } from './components/SceneSaveNotice';
-import { writeSceneVault } from './scenePersist';
+import { SceneSaveNotice } from './components/SceneSaveNotice';
+import {
+  markSceneFailureMissing,
+  removeSceneFailure,
+  type SceneSaveFailureEntry,
+  upsertSceneFailure,
+  writeSceneVault,
+} from './scenePersist';
+import { applySceneSaveIndicatorAfterPersist } from './sceneSaveIndicator';
 import {
   parseSceneNotes,
   serializeSceneNotes,
@@ -302,6 +309,22 @@ function blocksToMarkdown(scene: Scene): string {
     lines.push('');
   }
   return lines.join('\n');
+}
+
+function findSceneInStories(stories: Story[], storyId: string, sceneId: string): Scene | undefined {
+  const story = stories.find((s) => s.id === storyId);
+  if (!story) return undefined;
+  for (const ch of story.chapters) {
+    const sc = ch.scenes.find((s) => s.id === sceneId);
+    if (sc) return sc;
+  }
+  for (const part of story.parts ?? []) {
+    for (const ch of part.chapters) {
+      const sc = ch.scenes.find((s) => s.id === sceneId);
+      if (sc) return sc;
+    }
+  }
+  return undefined;
 }
 
 interface SearchResultItem {
@@ -778,7 +801,9 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
 
   const { distractionFree, toggle: toggleDistractionFree } = useFocusMode();
   const [saveState, setSaveState] = useState<'idle' | 'saved'>('idle');
-  const [sceneSaveFailure, setSceneSaveFailure] = useState<SceneSaveFailure | null>(null);
+  const [sceneSaveFailures, setSceneSaveFailures] = useState<Map<string, SceneSaveFailureEntry>>(
+    () => new Map(),
+  );
 
   // ─── SKY-1686: Global right-sidebar state ───
   // undefined = settings not yet loaded (sidebar not rendered at all, no space taken).
@@ -1928,6 +1953,7 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
 
   const switchToVault = useCallback(async (vaultId: string): Promise<boolean> => {
     if (vaultId === activeVaultRoot) return true;
+    setSceneSaveFailures(new Map());
     // Wait out any in-flight announce rollback before parking or switching.
     await vaultSwitchSerialRef.current;
     const ok = await flushOpenSettings();
@@ -3461,30 +3487,39 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
     // quit-critical — the flush-before-quit handshake drains it before
     // acking, which is what keeps the last keystrokes on disk.
     const ok = await write();
-    if (!ok) {
-      setSceneSaveFailure({ sceneId: scene.id, sceneTitle: scene.title });
+    const storyId = scene.storyId
+      ?? storiesRef.current.find((st) => st.chapters.some((ch) => ch.scenes.some((sc) => sc.id === scene.id)))?.id;
+    if (!storyId) {
       // eslint-disable-next-line no-console
-      console.error('Failed to write scene markdown:', scene.path);
+      console.error('Failed to write scene markdown: missing storyId', scene.id);
       return false;
     }
-    setSceneSaveFailure((prev) => (prev?.sceneId === scene.id ? null : prev));
+    if (!ok) {
+      setSceneSaveFailures((prev) => upsertSceneFailure(prev, {
+        storyId,
+        sceneId: scene.id,
+        sceneTitle: scene.title,
+      }));
+      // eslint-disable-next-line no-console
+      console.error('Failed to write scene markdown:', scene.id);
+      return false;
+    }
+    setSceneSaveFailures((prev) => removeSceneFailure(prev, storyId, scene.id));
     return true;
   }, []);
 
   const retrySceneSave = useCallback(() => {
-    const failure = sceneSaveFailure;
-    if (!failure) return;
+    if (sceneSaveFailures.size === 0) return;
     const latest = storiesRef.current;
-    for (const story of latest) {
-      for (const chapter of story.chapters) {
-        const scene = chapter.scenes.find((sc) => sc.id === failure.sceneId);
-        if (scene) {
-          void persistSceneMarkdown(scene);
-          return;
-        }
+    for (const entry of sceneSaveFailures.values()) {
+      const scene = findSceneInStories(latest, entry.storyId, entry.sceneId);
+      if (scene) {
+        void persistSceneMarkdown(scene);
+      } else {
+        setSceneSaveFailures((prev) => markSceneFailureMissing(prev, entry.storyId, entry.sceneId));
       }
     }
-  }, [sceneSaveFailure, persistSceneMarkdown]);
+  }, [sceneSaveFailures, persistSceneMarkdown]);
 
   /**
    * F1#9 / Shield / Probe: apply editor blocks to a CAPTURED story/scene id.
@@ -3533,17 +3568,24 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
       });
     }
     void persistSceneMarkdown(updatedScene).then((saved) => {
-      if (!saved) return;
-      if (content.trim()) {
-        checkGettingStartedItem('write-scene');
-        setSeenEmptySceneHints((prev) => new Set(prev).add(sceneId));
-      }
-      window.api.snapshotSave?.(sceneId, content).catch(() => {});
-      if (saveIndicatorTimer.current) clearTimeout(saveIndicatorTimer.current);
-      saveIndicatorTimer.current = setTimeout(() => {
-        setSaveState('saved');
-        saveIndicatorTimer.current = setTimeout(() => setSaveState('idle'), 1500);
-      }, 1200);
+      applySceneSaveIndicatorAfterPersist(saved, {
+        clearPending: () => {
+          if (saveIndicatorTimer.current) clearTimeout(saveIndicatorTimer.current);
+          setSaveState('idle');
+        },
+        scheduleSaved: () => {
+          if (content.trim()) {
+            checkGettingStartedItem('write-scene');
+            setSeenEmptySceneHints((prev) => new Set(prev).add(sceneId));
+          }
+          window.api.snapshotSave?.(sceneId, content).catch(() => {});
+          if (saveIndicatorTimer.current) clearTimeout(saveIndicatorTimer.current);
+          saveIndicatorTimer.current = setTimeout(() => {
+            setSaveState('saved');
+            saveIndicatorTimer.current = setTimeout(() => setSaveState('idle'), 1500);
+          }, 1200);
+        },
+      });
     });
     if (isProvisional && provisionalScene) {
       const committedTabs = storyDocTabs.map((t) =>
@@ -6737,7 +6779,7 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
           §3). Panel border overlays keep the neon look. */}
       <UpdateBanner />
       <BookSyncNotice outcome={bookSave} />
-      <SceneSaveNotice failure={sceneSaveFailure} onRetry={retrySceneSave} />
+      <SceneSaveNotice failures={[...sceneSaveFailures.values()]} onRetry={retrySceneSave} />
       {/* PLAN-058 L2 (06:55): the title bar is full window width. The nav
           rail starts in the row below and must not cover the top bar.
           Document tabs stay in the main column under that bar. */}

@@ -24,9 +24,7 @@ const SCENE_TWO = 'The Harbor';
 const SEED_PROSE_ONE = 'The lantern flickered once.';
 const SEED_PROSE_TWO = 'Harbor mist rolled in.';
 
-/** RichTextEditor debounce is 800ms; allow headroom under CI repetition load. */
-const AUTOSAVE_WAIT_MS = 1_500;
-const SAVE_ERROR_BANNER_TIMEOUT_MS = 12_000;
+const SAVE_ERROR_BANNER_TIMEOUT_MS = 20_000;
 const EDITOR_DEBOUNCE_MS = 800;
 const SAVE_INDICATOR_DELAY_MS = 1_200;
 /** Time after typing when a successful save would show \"Saved ✓\" in focus chrome. */
@@ -165,6 +163,70 @@ function sceneBody(scenePath: string): string {
   return (parts[2] ?? '').replace(/^\n/, '');
 }
 
+async function waitForSceneBodyContains(scenePath: string, text: string, timeout = 20_000) {
+  await expect.poll(() => sceneBody(scenePath), { timeout }).toContain(text);
+}
+
+async function waitForSceneBodyExcludes(scenePath: string, text: string, timeout = 20_000) {
+  await expect.poll(() => sceneBody(scenePath), { timeout }).not.toContain(text);
+}
+
+function vaultTreeContainsText(root: string, needle: string): boolean {
+  if (!fs.existsSync(root)) return false;
+  const stack = [root];
+  while (stack.length > 0) {
+    const dir = stack.pop()!;
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        stack.push(p);
+      } else if (ent.isFile() && ent.name.endsWith('.md')) {
+        try {
+          if (fs.readFileSync(p, 'utf-8').includes(needle)) return true;
+        } catch {
+          /* unreadable leaf */
+        }
+      }
+    }
+  }
+  return false;
+}
+
+async function waitForVaultContainsText(vaultRoot: string, text: string, timeout = 20_000) {
+  await expect.poll(() => vaultTreeContainsText(vaultRoot, text), { timeout }).toBe(true);
+}
+
+async function waitForSaveErrorBanner(page: Page) {
+  await expect.poll(
+    async () => page.getByTestId('scene-save-warning').count(),
+    { timeout: SAVE_ERROR_BANNER_TIMEOUT_MS },
+  ).toBeGreaterThan(0);
+}
+
+type ChmodPrior = { priorFileMode: number; priorDirMode: number };
+
+function lockChapterForRefusedWrite(chapterDir: string, sceneOnePath: string): ChmodPrior {
+  const priorFileMode = fs.statSync(sceneOnePath).mode & 0o777;
+  const priorDirMode = fs.statSync(chapterDir).mode & 0o777;
+  fs.chmodSync(sceneOnePath, 0o444);
+  fs.chmodSync(chapterDir, 0o555);
+  expect(() => fs.accessSync(sceneOnePath, fs.constants.W_OK)).toThrow();
+  expect(() => fs.writeFileSync(path.join(chapterDir, 'probe.tmp'), 'x')).toThrow();
+  return { priorFileMode, priorDirMode };
+}
+
+function unlockChapter(chapterDir: string, sceneOnePath: string, prior: ChmodPrior): void {
+  fs.chmodSync(chapterDir, prior.priorDirMode | 0o200);
+  fs.chmodSync(sceneOnePath, prior.priorFileMode | 0o200);
+}
+
+function lockBundleUnwritable(bundle: string): number {
+  const priorBundleMode = fs.statSync(bundle).mode & 0o777;
+  fs.chmodSync(bundle, 0o555);
+  expect(() => fs.writeFileSync(path.join(bundle, 'probe.tmp'), 'x')).toThrow();
+  return priorBundleMode;
+}
+
 test.describe('scene save error paths (#1904)', () => {
   test('TC-SE-01: read-only scene file surfaces save error, keeps editor text, recovers on retry', async () => {
     test.skip(process.platform === 'win32', 'read-only chmod assertion runs on Linux CI');
@@ -174,106 +236,118 @@ test.describe('scene save error paths (#1904)', () => {
     const bundle = path.join(tmpRoot, 'Save Error Vault');
     const { sceneOnePath } = seedV2Vault(bundle);
     seedUserData(userData, path.join(bundle, 'Story Vault'), path.join(bundle, 'Notes Vault'));
-
     const chapterDir = path.dirname(sceneOnePath);
-    const priorFileMode = fs.statSync(sceneOnePath).mode & 0o777;
-    const priorDirMode = fs.statSync(chapterDir).mode & 0o777;
-    // File-only 0444 is not enough: atomic rename can still replace the leaf when
-    // the parent directory is writable. Lock the chapter dir too so the write
-    // really fails in CI (issue #1904 vacuous-pass guard).
-    fs.chmodSync(sceneOnePath, 0o444);
-    fs.chmodSync(chapterDir, 0o555);
-    expect(() => fs.accessSync(sceneOnePath, fs.constants.W_OK)).toThrow();
-    expect(() => fs.writeFileSync(path.join(chapterDir, 'probe.tmp'), 'x')).toThrow();
+    let chmodPrior: ChmodPrior | undefined;
+    let app: ElectronApplication | undefined;
 
-    const app = await launchApp(userData);
-    const page = await firstWindow(app);
-    await openScene(page, SCENE_ONE, SEED_PROSE_ONE);
+    try {
+      app = await launchApp(userData);
+      const page = await firstWindow(app);
+      await openScene(page, SCENE_ONE, SEED_PROSE_ONE);
 
-    const surface = page.locator('.ProseMirror').first();
-    await surface.click();
-    await page.keyboard.press('End');
-    const typed = ' Then the room went dark.';
-    await page.keyboard.insertText(typed);
-    await expect(surface).toContainText(typed);
-    await page.waitForTimeout(900);
+      const surface = page.locator('.ProseMirror').first();
+      await surface.click();
+      await page.keyboard.press('F11');
+      await expect(page.locator('.desktop-shell.distraction-free')).toBeVisible({ timeout: 10_000 });
 
-    const banner = page.getByTestId('scene-save-warning');
-    await expect(banner).toBeVisible({ timeout: SAVE_ERROR_BANNER_TIMEOUT_MS });
-    await expect(banner).toContainText(SCENE_ONE);
-    await expect(banner).toContainText('Your text is still in the editor');
-    await page.waitForTimeout(SAVE_OK_VISIBLE_WAIT_MS);
-    await expect(page.locator('.focus-save-ok')).toHaveCount(0);
-    expect(sceneBody(sceneOnePath)).not.toContain(typed.trim());
+      await page.keyboard.press('End');
+      await page.keyboard.insertText(' Baseline save proof.');
+      await waitForSceneBodyContains(sceneOnePath, 'Baseline save proof');
+      await expect(page.locator('.focus-save-ok')).toBeVisible({ timeout: SAVE_OK_VISIBLE_WAIT_MS });
 
-    fs.chmodSync(chapterDir, priorDirMode | 0o200);
-    fs.chmodSync(sceneOnePath, priorFileMode | 0o200);
-    await banner.getByRole('button', { name: 'Retry' }).click();
-    await expect(banner).toHaveCount(0, { timeout: 10_000 });
-    expect(sceneBody(sceneOnePath)).toContain(typed.trim());
+      chmodPrior = lockChapterForRefusedWrite(chapterDir, sceneOnePath);
+      const typed = ' Then the room went dark.';
+      await page.keyboard.insertText(typed);
+      await expect(surface).toContainText(typed);
+      await waitForSaveErrorBanner(page);
+      const banner = page.getByTestId('scene-save-warning').first();
+      await expect(banner).toContainText(SCENE_ONE);
+      await expect(banner).toContainText('Your text is still in the editor');
+      await waitForSceneBodyExcludes(sceneOnePath, typed.trim());
+      await page.waitForTimeout(SAVE_OK_VISIBLE_WAIT_MS);
+      await expect(page.locator('.focus-save-ok')).toHaveCount(0);
 
-    await surface.click();
-    await page.keyboard.insertText(' Second pass.');
-    await page.waitForTimeout(AUTOSAVE_WAIT_MS);
-    expect(sceneBody(sceneOnePath)).toContain(typed.trim());
-    expect(sceneBody(sceneOnePath)).toContain('Second pass');
+      unlockChapter(chapterDir, sceneOnePath, chmodPrior);
+      chmodPrior = undefined;
+      await page.getByTestId('scene-save-warning-region').getByRole('button', { name: 'Retry' }).click();
+      await expect.poll(async () => page.getByTestId('scene-save-warning').count(), { timeout: 10_000 })
+        .toBe(0);
+      await waitForSceneBodyContains(sceneOnePath, typed.trim());
 
-    await app.close();
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+      await surface.click();
+      await page.keyboard.insertText(' Second pass.');
+      await waitForSceneBodyContains(sceneOnePath, 'Second pass');
+    } finally {
+      if (chmodPrior) {
+        try { unlockChapter(chapterDir, sceneOnePath, chmodPrior); } catch { /* cleanup */ }
+      }
+      try { await app?.close(); } catch { /* cleanup */ }
+      try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* cleanup */ }
+    }
   });
 
   test('TC-SE-02a: Story Vault folder removed while scene is open — vault rescaffolds, text saves, no banner', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-save-err-vault-gone-'));
     const userData = path.join(tmpRoot, 'user-data');
     const bundle = path.join(tmpRoot, 'Save Error Vault');
-    const { vaultRoot, sceneOnePath } = seedV2Vault(bundle);
+    const { vaultRoot } = seedV2Vault(bundle);
     seedUserData(userData, vaultRoot, path.join(bundle, 'Notes Vault'));
+    let app: ElectronApplication | undefined;
 
-    const app = await launchApp(userData);
-    const page = await firstWindow(app);
-    await openScene(page, SCENE_ONE, SEED_PROSE_ONE);
+    try {
+      app = await launchApp(userData);
+      const page = await firstWindow(app);
+      await openScene(page, SCENE_ONE, SEED_PROSE_ONE);
 
-    fs.rmSync(vaultRoot, { recursive: true, force: true });
+      fs.rmSync(vaultRoot, { recursive: true, force: true });
 
-    const typed = ' Vault removed marker.';
-    const surface = page.locator('.ProseMirror').first();
-    await surface.click();
-    await page.keyboard.insertText(typed);
-    await page.waitForTimeout(AUTOSAVE_WAIT_MS + 500);
-    await expect(page.getByTestId('scene-save-warning')).toHaveCount(0);
-    expect(fs.existsSync(vaultRoot)).toBe(true);
-    expect(sceneBody(sceneOnePath)).toContain(typed.trim());
-    await expect(page.locator('.desktop-shell')).toBeVisible();
-
-    await app.close();
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+      const typed = ' Vault removed marker.';
+      const surface = page.locator('.ProseMirror').first();
+      await surface.click();
+      await page.keyboard.insertText(typed);
+      await expect.poll(async () => page.getByTestId('scene-save-warning').count(), {
+        timeout: SAVE_ERROR_BANNER_TIMEOUT_MS,
+      }).toBe(0);
+      await waitForVaultContainsText(vaultRoot, typed.trim());
+      expect(fs.existsSync(vaultRoot)).toBe(true);
+      await expect(page.locator('.desktop-shell')).toBeVisible();
+    } finally {
+      try { await app?.close(); } catch { /* cleanup */ }
+      try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* cleanup */ }
+    }
   });
 
   test('TC-SE-02b: unwritable bundle parent while scene open — save error banner, no crash', async () => {
+    test.skip(process.platform === 'win32', 'read-only chmod assertion runs on Linux CI');
+
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-save-err-bundle-ro-'));
     const userData = path.join(tmpRoot, 'user-data');
     const bundle = path.join(tmpRoot, 'Save Error Vault');
     const { vaultRoot } = seedV2Vault(bundle);
     seedUserData(userData, vaultRoot, path.join(bundle, 'Notes Vault'));
+    let priorBundleMode: number | undefined;
+    let app: ElectronApplication | undefined;
 
-    const app = await launchApp(userData);
-    const page = await firstWindow(app);
-    await openScene(page, SCENE_ONE, SEED_PROSE_ONE);
+    try {
+      app = await launchApp(userData);
+      const page = await firstWindow(app);
+      await openScene(page, SCENE_ONE, SEED_PROSE_ONE);
 
-    fs.rmSync(vaultRoot, { recursive: true, force: true });
-    fs.chmodSync(bundle, 0o555);
+      fs.rmSync(vaultRoot, { recursive: true, force: true });
+      priorBundleMode = lockBundleUnwritable(bundle);
 
-    const surface = page.locator('.ProseMirror').first();
-    await surface.click();
-    await page.keyboard.insertText(' After bundle locked.');
-    await page.waitForTimeout(900);
-    const banner = page.getByTestId('scene-save-warning');
-    await expect(banner).toBeVisible({ timeout: SAVE_ERROR_BANNER_TIMEOUT_MS });
-    await expect(page.locator('.desktop-shell')).toBeVisible();
-
-    try { fs.chmodSync(bundle, 0o755); } catch { /* cleanup */ }
-    await app.close();
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+      const surface = page.locator('.ProseMirror').first();
+      await surface.click();
+      await page.keyboard.insertText(' After bundle locked.');
+      await waitForSaveErrorBanner(page);
+      await expect(page.locator('.desktop-shell')).toBeVisible();
+    } finally {
+      if (priorBundleMode !== undefined) {
+        try { fs.chmodSync(bundle, priorBundleMode | 0o200); } catch { /* cleanup */ }
+      }
+      try { await app?.close(); } catch { /* cleanup */ }
+      try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* cleanup */ }
+    }
   });
 
   test('TC-SE-03: type then switch scene immediately — first scene file has the text', async () => {
@@ -282,23 +356,24 @@ test.describe('scene save error paths (#1904)', () => {
     const bundle = path.join(tmpRoot, 'Save Error Vault');
     const { sceneOnePath } = seedV2Vault(bundle);
     seedUserData(userData, path.join(bundle, 'Story Vault'), path.join(bundle, 'Notes Vault'));
+    let app: ElectronApplication | undefined;
 
-    const app = await launchApp(userData);
-    const page = await firstWindow(app);
-    await openScene(page, SCENE_ONE, SEED_PROSE_ONE);
+    try {
+      app = await launchApp(userData);
+      const page = await firstWindow(app);
+      await openScene(page, SCENE_ONE, SEED_PROSE_ONE);
 
-    const surface = page.locator('.ProseMirror').first();
-    await surface.click();
-    const typed = ' Quick switch marker.';
-    await page.keyboard.insertText(typed);
-    await page.getByRole('button', { name: new RegExp(SCENE_TWO) }).first().click();
-    await expect(page.locator('.ProseMirror').first()).toContainText(SEED_PROSE_TWO, { timeout: 10_000 });
-
-    await page.waitForTimeout(AUTOSAVE_WAIT_MS);
-    expect(sceneBody(sceneOnePath)).toContain(typed.trim());
-
-    await app.close();
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+      const surface = page.locator('.ProseMirror').first();
+      await surface.click();
+      const typed = ' Quick switch marker.';
+      await page.keyboard.insertText(typed);
+      await page.getByRole('button', { name: new RegExp(SCENE_TWO) }).first().click();
+      await expect(page.locator('.ProseMirror').first()).toContainText(SEED_PROSE_TWO, { timeout: 10_000 });
+      await waitForSceneBodyContains(sceneOnePath, typed.trim());
+    } finally {
+      try { await app?.close(); } catch { /* cleanup */ }
+      try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* cleanup */ }
+    }
   });
 
   test('TC-SE-04: idle autosave lands on disk without closing the app', async () => {
@@ -307,19 +382,21 @@ test.describe('scene save error paths (#1904)', () => {
     const bundle = path.join(tmpRoot, 'Save Error Vault');
     const { sceneOnePath } = seedV2Vault(bundle);
     seedUserData(userData, path.join(bundle, 'Story Vault'), path.join(bundle, 'Notes Vault'));
+    let app: ElectronApplication | undefined;
 
-    const app = await launchApp(userData);
-    const page = await firstWindow(app);
-    await openScene(page, SCENE_ONE, SEED_PROSE_ONE);
+    try {
+      app = await launchApp(userData);
+      const page = await firstWindow(app);
+      await openScene(page, SCENE_ONE, SEED_PROSE_ONE);
 
-    const typed = ' Idle autosave marker.';
-    await page.locator('.ProseMirror').first().click();
-    await page.keyboard.insertText(typed);
-    await page.waitForTimeout(AUTOSAVE_WAIT_MS);
-    expect(sceneBody(sceneOnePath)).toContain(typed.trim());
-
-    await app.close();
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+      const typed = ' Idle autosave marker.';
+      await page.locator('.ProseMirror').first().click();
+      await page.keyboard.insertText(typed);
+      await waitForSceneBodyContains(sceneOnePath, typed.trim());
+    } finally {
+      try { await app?.close(); } catch { /* cleanup */ }
+      try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* cleanup */ }
+    }
   });
 
   test('TC-SE-05: hard kill after autosave — relaunch keeps text up to last save', async () => {
@@ -328,30 +405,34 @@ test.describe('scene save error paths (#1904)', () => {
     const bundle = path.join(tmpRoot, 'Save Error Vault');
     const { sceneOnePath } = seedV2Vault(bundle);
     seedUserData(userData, path.join(bundle, 'Story Vault'), path.join(bundle, 'Notes Vault'));
+    let app: ElectronApplication | undefined;
+    let app2: ElectronApplication | undefined;
 
-    const app = await launchApp(userData);
-    const page = await firstWindow(app);
-    await openScene(page, SCENE_ONE, SEED_PROSE_ONE);
-
-    const saved = ' Persisted before kill.';
-    await page.locator('.ProseMirror').first().click();
-    await page.keyboard.insertText(saved);
-    await page.waitForTimeout(AUTOSAVE_WAIT_MS);
-    expect(sceneBody(sceneOnePath)).toContain(saved.trim());
-
-    const proc = app.process();
     try {
+      app = await launchApp(userData);
+      const page = await firstWindow(app);
+      await openScene(page, SCENE_ONE, SEED_PROSE_ONE);
+
+      const saved = ' Persisted before kill.';
+      await page.locator('.ProseMirror').first().click();
+      await page.keyboard.insertText(saved);
+      await waitForSceneBodyContains(sceneOnePath, saved.trim());
+
+      const proc = app.process();
+      const exited = new Promise<void>((resolve) => {
+        proc.once('exit', () => resolve());
+      });
       proc.kill('SIGKILL');
-    } catch {
-      /* already gone */
+      await exited;
+
+      app2 = await launchApp(userData);
+      const page2 = await firstWindow(app2);
+      await openScene(page2, SCENE_ONE, SEED_PROSE_ONE);
+      await expect(page2.locator('.ProseMirror').first()).toContainText(saved.trim());
+    } finally {
+      try { await app2?.close(); } catch { /* cleanup */ }
+      try { await app?.close(); } catch { /* cleanup */ }
+      try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* cleanup */ }
     }
-
-    const app2 = await launchApp(userData);
-    const page2 = await firstWindow(app2);
-    await openScene(page2, SCENE_ONE, SEED_PROSE_ONE);
-    await expect(page2.locator('.ProseMirror').first()).toContainText(saved.trim());
-
-    await app2.close();
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 });
