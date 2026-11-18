@@ -310,8 +310,10 @@ describe('vaultTransaction', () => {
       }),
     ).toThrow(/rolled back/);
     expect(readNote('Allies.md')).toBe('allies-v1\n');
+    expect(readNote('B.md')).toBe('b-v1\n');
     expect(readScene('Manuscript/01/scene-1.md')).toBe('scene-v1\n');
     expect(bytesEqual(notesRoot, 'Allies.md', 'allies-v1\n')).toBe(true);
+    expect(bytesEqual(notesRoot, 'B.md', 'b-v1\n')).toBe(true);
     expect(bytesEqual(storyRoot, 'Manuscript/01/scene-1.md', 'scene-v1\n')).toBe(true);
   });
 

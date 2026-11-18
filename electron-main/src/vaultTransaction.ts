@@ -97,8 +97,8 @@ export function applyVaultTransaction(opts: ApplyVaultTransactionOptions): Apply
       snapshotted.push({ ...change, oldContent });
     }
     for (const file of snapshotted) {
-      write(file.side === 'notes' ? notesRoot : storyRoot, file.relPath, file.newContent);
       applied.push(file);
+      write(file.side === 'notes' ? notesRoot : storyRoot, file.relPath, file.newContent);
       onProgress?.({
         current: applied.length,
         total: snapshotted.length,
