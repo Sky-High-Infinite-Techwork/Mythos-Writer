@@ -5,7 +5,7 @@ const test = require('node:test');
 
 const { createDispatchClients, UPDATE_REFS_REF_EXISTS } = require('./dispatch-client');
 const { MATCHING_REF_PREFIX } = require('./constants');
-const { refUpdateCreate } = require('./refs-graphql');
+const { refUpdateCreate, refUpdateDelete, refUpdateRenew } = require('./refs-graphql');
 
 test('createDispatchClients uses matching-refs prefix without refs/', async () => {
   const calls = [];
@@ -122,4 +122,152 @@ test('deleteRef requires beforeOid', async () => {
   const { write } = createDispatchClients({ writeToken: 'w' });
   const del = await write.deleteRef({ ref: 'refs/mythos/dispatch/lane-00' });
   assert.equal(del.fatal, true);
+});
+
+test('listRefs skips commit messages for attempts and done refs', async () => {
+  const calls = [];
+  const gh = (args) => {
+    calls.push(args);
+    const flat = args.map((a) => String(a));
+    if (flat.some((a) => a.includes('matching-refs'))) {
+      return {
+        status: 0,
+        stdout: JSON.stringify([
+          { ref: 'refs/mythos/dispatch/lane-00', object: { sha: 'c'.repeat(40) } },
+          { ref: 'refs/mythos/dispatch/attempts/1-0', object: { sha: 'd'.repeat(40) } },
+        ]),
+      };
+    }
+    if (flat.some((a) => a.includes('/git/commits/'))) return { status: 0, stdout: 'lease-msg' };
+    return { status: 0, stdout: '[]' };
+  };
+  const { read } = createDispatchClients({ readToken: 'r', gh });
+  const listed = await read.listRefs({ prefix: MATCHING_REF_PREFIX });
+  assert.equal(listed.ok, true);
+  assert.equal(listed.refs.find((r) => r.ref.includes('lane')).message, 'lease-msg');
+  assert.equal(listed.refs.find((r) => r.ref.includes('attempts')).message, null);
+  assert.equal(calls.filter((a) => a.map(String).join('|').includes('/git/commits/')).length, 1);
+});
+
+test('write paths reject refs outside dispatch namespace', () => {
+  const oid = 'a'.repeat(40);
+  assert.throws(() => refUpdateCreate('refs/heads/main', oid));
+  assert.throws(() => refUpdateDelete('refs/heads/main', oid));
+  assert.throws(() => refUpdateRenew('refs/heads/main', oid, oid));
+});
+
+test('issueCommentContentEdits paginates edit history', async () => {
+  const pages = [
+    {
+      data: {
+        repository: {
+          issue: {
+            comments: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [{ databaseId: 42 }],
+            },
+          },
+        },
+      },
+    },
+    {
+      data: {
+        repository: {
+          issue: {
+            comments: {
+              nodes: [{
+                databaseId: 42,
+                userContentEdits: {
+                  pageInfo: { hasNextPage: true, endCursor: 'edit-cursor' },
+                  nodes: [{ editor: { login: 'SkyyPlayz', __typename: 'User' } }],
+                },
+              }],
+            },
+          },
+        },
+      },
+    },
+    {
+      data: {
+        repository: {
+          issue: {
+            comments: {
+              nodes: [{
+                databaseId: 42,
+                userContentEdits: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [{ editor: { login: 'SkyyPlayz', __typename: 'User' } }],
+                },
+              }],
+            },
+          },
+        },
+      },
+    },
+  ];
+  let n = 0;
+  const gh = (args, _tok, input) => {
+    if (args.includes('graphql')) {
+      const out = pages[Math.min(n, pages.length - 1)];
+      n += 1;
+      return { status: 0, stdout: JSON.stringify(out) };
+    }
+    return { status: 0, stdout: '' };
+  };
+  const { read } = createDispatchClients({ readToken: 'r', gh });
+  const edits = await read.issueCommentContentEdits({ issue: 1, commentDatabaseId: 42 });
+  assert.equal(edits.ok, true);
+  assert.equal(edits.editors.length, 2);
+  assert.equal(edits.complete, true);
+});
+
+test('issueCommentContentEdits holds on redacted editor', async () => {
+  const gh = (_args, _tok) => ({
+    status: 0,
+    stdout: JSON.stringify({
+      data: {
+        repository: {
+          issue: {
+            comments: {
+              pageInfo: { hasNextPage: false },
+              nodes: [{ databaseId: 7 }],
+            },
+          },
+        },
+      },
+    }),
+  });
+  const ghEdits = (args, _tok) => {
+    if (!args.includes('graphql')) return { status: 0, stdout: '' };
+    return {
+      status: 0,
+      stdout: JSON.stringify({
+        data: {
+          repository: {
+            issue: {
+              comments: {
+                nodes: [{
+                  databaseId: 7,
+                  userContentEdits: {
+                    pageInfo: { hasNextPage: false },
+                    nodes: [{ editor: null }],
+                  },
+                }],
+              },
+            },
+          },
+        },
+      }),
+    };
+  };
+  let pass = 0;
+  const ghWrap = (args, tok, input) => {
+    pass += 1;
+    if (pass === 1) return gh(args, tok);
+    return ghEdits(args, tok, input);
+  };
+  const { read } = createDispatchClients({ readToken: 'r', gh: ghWrap });
+  const edits = await read.issueCommentContentEdits({ issue: 1, commentDatabaseId: 7 });
+  assert.equal(edits.ok, false);
+  assert.equal(edits.error, 'editor_redacted');
 });

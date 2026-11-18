@@ -90,7 +90,8 @@ async function recordDispatchAttempt(client, issue, slice, options = {}) {
   const { reReadSwitch } = options;
   if (reReadSwitch) {
     const sw = await reReadSwitch();
-    if (!sw.ok || !sw.enabled) return { ok: false, reason: 'switch_off' };
+    if (!sw.ok) return { ok: false, reason: 'switch_read' };
+    if (!sw.enabled) return { ok: false, reason: 'switch_off' };
   }
   const ref = attemptsRef(issue, slice);
   const now = new Date().toISOString();
@@ -107,12 +108,22 @@ async function recordDispatchAttempt(client, issue, slice, options = {}) {
     count = 1;
   }
   const message = attemptsMessage({ count, lastAttemptAt: now });
+  if (reReadSwitch) {
+    const swMint = await reReadSwitch();
+    if (!swMint.ok) return { ok: false, reason: 'switch_read' };
+    if (!swMint.enabled) return { ok: false, reason: 'switch_off' };
+  }
   let oid;
   if (typeof options.mintLeaseSha === 'function') {
     oid = await options.mintLeaseSha(message);
     if (!oid) return { ok: false, reason: 'attempts_commit_failed' };
   } else {
     oid = `a${String(count).padStart(39, '0')}`;
+  }
+  if (reReadSwitch) {
+    const sw2 = await reReadSwitch();
+    if (!sw2.ok) return { ok: false, reason: 'switch_read' };
+    if (!sw2.enabled) return { ok: false, reason: 'switch_off' };
   }
   const upd = beforeOid === ZERO_OID
     ? await client.createRef({ ref, sha: oid })

@@ -908,6 +908,12 @@ test('mythos-dispatch schedule never claims; discover uses mythos-control', () =
   assert.equal(doc.jobs.canary.concurrency, undefined);
   assert.equal(doc.jobs['canary-verify'].concurrency, undefined);
   assert.match(text, /mythos-dispatch-canary/);
+  assert.match(text, /id: install-check/);
+  assert.match(
+    text,
+    /Assert single scratch ref and CAS delete[\s\S]*if: \$\{\{ success\(\) && steps\.write\.outcome == 'success' && steps\.install-check\.outcome == 'success' \}\}/,
+  );
+  assert.doesNotMatch(text, /always\(\) && steps\.write\.outcome == 'success'/);
 });
 
 test('privileged workflows are inert controllers with pinned actions and split credentials', () => {

@@ -8,7 +8,7 @@ const { createMockRefClient } = require('./mock-client');
 const { runDispatchPlan } = require('./dispatch-run');
 const { sweepDispatchRefs } = require('./claim');
 const { recordDispatchAttempt } = require('./slice-progress');
-const { attemptsRef } = require('./constants');
+const { attemptsRef, claimRef, leaseMessage } = require('./constants');
 const { attemptsMessage } = require('./slice-progress');
 const { readDispatchSwitches } = require('./switch');
 const { runCanaryVerify } = require('./canary-verify');
@@ -16,6 +16,7 @@ const { tryCreateRefPair } = require('./claim');
 const { verifyPlanCommentEditors, findOfficialPlan, canonicalAuthorLogin } = require('./official-plan');
 const { ATTEMPTS_SCHEMA } = require('./slice-progress');
 const { activeClaimsFromRefs } = require('./dispatch-helpers');
+const { refUpdateCreate, refUpdateDelete, refUpdateRenew } = require('./refs-graphql');
 
 const MAIN = 'a'.repeat(40);
 const gradePassOk = () => ({ ok: true, marker: {} });
@@ -75,25 +76,52 @@ test('getRef on real client shape returns commit message for attempts parsing', 
   assert.equal(parsed.count, 2);
 });
 
-test('claim sweep act again increments attempts 1 2 3 without exit 1', async () => {
+test('claim sweep act again increments attempts after expired lease sweep', async () => {
   const client = createMockRefClient();
   client.issueComments = async () => planComments();
   client.getIssue = async () => ({ ok: true, issue: { state: 'open' } });
-  const mint = async (message) => {
-    const c = await client.createLeaseCommit(message, MAIN);
-    return c.ok ? c.sha : null;
-  };
+  const lane = 'refs/mythos/dispatch/lane-00';
+  const claim = claimRef(1, 0);
   let code = await runDispatchPlan(actEnv(client));
   assert.equal(code, 0);
   const got1 = await client.getRef({ ref: attemptsRef(1, 0) });
   assert.match(got1.message, /"count":1/);
-  await sweepDispatchRefs(client, { reReadSwitch: async () => ({ ok: true, enabled: true }) });
+  assert.equal((await client.getRef({ ref: lane })).ok, true);
+  const past = new Date(Date.now() - 60_000).toISOString();
+  const expired = leaseMessage({
+    issue: 1,
+    slice: 0,
+    files: ['a.ts'],
+    planCommentId: 99,
+    planBodySha256: 'x'.repeat(64),
+    runId: 1,
+    runAttempt: 1,
+    claimedAt: past,
+    expiresAt: past,
+  });
+  client.setRefMessage(lane, expired);
+  client.setRefMessage(claim, expired);
+  const swept = await sweepDispatchRefs(client, { reReadSwitch: async () => ({ ok: true, enabled: true }) });
+  assert.equal(swept.deleted.includes(lane), true);
+  assert.equal(swept.deleted.includes(claim), true);
+  assert.equal((await client.getRef({ ref: lane })).ok, false);
+  client.setRefMessage(
+    attemptsRef(1, 0),
+    attemptsMessage({ count: 1, lastAttemptAt: '2020-01-01T00:00:00Z' }),
+  );
   code = await runDispatchPlan(actEnv(client));
   assert.equal(code, 0);
-  const c2 = await recordDispatchAttempt(client, 1, 0, { mintLeaseSha: mint });
-  assert.equal(c2.count, 2);
-  const c3 = await recordDispatchAttempt(client, 1, 0, { mintLeaseSha: mint });
-  assert.equal(c3.count, 3);
+  const got2 = await client.getRef({ ref: attemptsRef(1, 0) });
+  assert.match(got2.message, /"count":2/);
+  client.setRefMessage(lane, expired);
+  client.setRefMessage(claim, expired);
+  await sweepDispatchRefs(client, { reReadSwitch: async () => ({ ok: true, enabled: true }) });
+  client.setRefMessage(
+    attemptsRef(1, 0),
+    attemptsMessage({ count: 2, lastAttemptAt: '2020-01-01T00:00:00Z' }),
+  );
+  code = await runDispatchPlan(actEnv(client));
+  assert.equal(code, 0);
   const got3 = await client.getRef({ ref: attemptsRef(1, 0) });
   assert.match(got3.message, /"count":3/);
 });
@@ -127,9 +155,13 @@ test('act hold when recordDispatchAttempt fails releases claim pair', async () =
   const origErr = console.error;
   console.error = (...a) => errs.push(a.join(' '));
   try {
+    const lane = 'refs/mythos/dispatch/lane-00';
+    const claim = claimRef(1, 0);
     const code = await runDispatchPlan(actEnv(client));
     assert.equal(code, 1);
-    assert.ok(errs.some((l) => l.includes('dispatch_release_failed') || l.includes('attempt record failed')));
+    assert.ok(errs.some((l) => l.includes('attempt record failed')));
+    assert.equal((await client.getRef({ ref: lane })).ok, false);
+    assert.equal((await client.getRef({ ref: claim })).ok, false);
   } finally {
     console.error = origErr;
   }
@@ -156,6 +188,7 @@ test('REST comment edited holds when GraphQL lists untrusted editor', async () =
   const client = createMockRefClient();
   client.issueCommentContentEdits = async () => ({
     ok: true,
+    complete: true,
     editors: [{ login: 'evil', __typename: 'User' }],
   });
   const official = findOfficialPlan([{
@@ -186,19 +219,33 @@ test('bot plan author canonical login matches OFFICIAL_PLAN_AUTHORS', () => {
   assert.ok(plan && plan.files);
 });
 
-test('readDispatchSwitches requires both UNATTENDED and DISPATCH true', () => {
-  const ghFn = (args) => {
-    if (String(args[2]).includes('UNATTENDED_ENABLED')) {
-      return { status: 0, stdout: 'true\n' };
+function switchGh(values) {
+  return (args) => {
+    const path = String(args[1] || '');
+    if (path.includes('UNATTENDED_ENABLED')) {
+      return { status: 0, stdout: `${values.unattended}\n` };
     }
-    if (String(args[2]).includes('MYTHOS_DISPATCH_ENABLED')) {
-      return { status: 0, stdout: 'false\n' };
+    if (path.includes('MYTHOS_DISPATCH_ENABLED')) {
+      return { status: 0, stdout: `${values.dispatch}\n` };
     }
     return { status: 0, stdout: '' };
   };
+}
+
+test('readDispatchSwitches requires both UNATTENDED and DISPATCH true', () => {
+  const ghFn = switchGh({ unattended: 'true', dispatch: 'false' });
   const s = readDispatchSwitches('Sky-High-Infinite-Techwork/Mythos-Writer', 'tok', ghFn);
   assert.equal(s.ok, true);
   assert.equal(s.enabled, false);
+});
+
+test('readDispatchSwitches true false and false true stay disabled', () => {
+  const tF = readDispatchSwitches('Sky-High-Infinite-Techwork/Mythos-Writer', 'tok', switchGh({ unattended: 'true', dispatch: 'false' }));
+  assert.equal(tF.enabled, false);
+  const fT = readDispatchSwitches('Sky-High-Infinite-Techwork/Mythos-Writer', 'tok', switchGh({ unattended: 'false', dispatch: 'true' }));
+  assert.equal(fT.enabled, false);
+  const tT = readDispatchSwitches('Sky-High-Infinite-Techwork/Mythos-Writer', 'tok', switchGh({ unattended: 'true', dispatch: 'true' }));
+  assert.equal(tT.enabled, true);
 });
 
 test('act inert returns 0 when switches not true', async () => {
@@ -250,6 +297,135 @@ test('canary verify returns 1 when switch off after scratch match', async () => 
   });
   assert.equal(code, 1);
   require('node:fs').rmSync(dir, { recursive: true, force: true });
+});
+
+test('canary verify returns 1 when initial switch read fails', async () => {
+  const client = createMockRefClient();
+  await client.createRef({ ref: require('./constants').CANARY_SCRATCH_SHARED_REF, sha: MAIN });
+  const code = await runCanaryVerify(client, {
+    reReadSwitch: async () => ({ ok: false, enabled: false }),
+    mainSha: MAIN,
+    artifactsDir: require('node:fs').mkdtempSync(`${require('node:os').tmpdir()}/canary-`),
+  });
+  assert.equal(code, 1);
+  assert.equal(client.exists(require('./constants').CANARY_SCRATCH_SHARED_REF), true);
+});
+
+test('canary verify returns 1 when writes disabled before scratch check', async () => {
+  const client = createMockRefClient();
+  await client.createRef({ ref: require('./constants').CANARY_SCRATCH_SHARED_REF, sha: MAIN });
+  const code = await runCanaryVerify(client, {
+    reReadSwitch: async () => ({ ok: true, enabled: false }),
+    mainSha: MAIN,
+    artifactsDir: require('node:fs').mkdtempSync(`${require('node:os').tmpdir()}/canary-`),
+  });
+  assert.equal(code, 1);
+  assert.equal(client.exists(require('./constants').CANARY_SCRATCH_SHARED_REF), true);
+});
+
+test('verifyPlanCommentEditors holds on editor_fetch_failed', async () => {
+  const client = createMockRefClient();
+  client.issueCommentContentEdits = async () => ({ ok: false, editors: [], error: 'graphql_http' });
+  const official = findOfficialPlan([{
+    id: '1',
+    databaseId: 1,
+    author: { login: 'SkyyPlayz' },
+    body: '## Files\n- a.ts',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-02T00:00:00Z',
+  }]);
+  const hold = await verifyPlanCommentEditors(client, 1, official);
+  assert.equal(hold.hold, true);
+  assert.equal(hold.reason, 'editor_fetch_failed');
+});
+
+test('recordDispatchAttempt blocks ref write when switch flips before mutation', async () => {
+  const client = createMockRefClient();
+  const ref = attemptsRef(3, 0);
+  await client.createRef({ ref, sha: 'f'.repeat(40) });
+  client.setRefMessage(ref, attemptsMessage({ count: 1, lastAttemptAt: new Date().toISOString() }));
+  let calls = 0;
+  const result = await recordDispatchAttempt(client, 3, 0, {
+    reReadSwitch: async () => {
+      calls += 1;
+      return { ok: true, enabled: calls < 3 };
+    },
+    mintLeaseSha: async () => 'e'.repeat(40),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'switch_off');
+  const got = await client.getRef({ ref });
+  assert.match(got.message, /"count":1/);
+});
+
+test('sweep aborts after switch off between stale deletes', async () => {
+  const client = createMockRefClient();
+  const past = new Date(Date.now() - 60_000).toISOString();
+  const staleLane = async (slot) => {
+    const lane = `refs/mythos/dispatch/lane-${String(slot).padStart(2, '0')}`;
+    await client.createRef({ ref: lane, sha: `${slot + 4}`.repeat(40).slice(0, 40) });
+    client.setRefMessage(lane, leaseMessage({
+      issue: slot + 1,
+      slice: 0,
+      files: [`f${slot}.ts`],
+      planCommentId: 1,
+      planBodySha256: 'a'.repeat(64),
+      runId: 1,
+      runAttempt: 1,
+      claimedAt: past,
+      expiresAt: past,
+    }));
+    return lane;
+  };
+  const lane0 = await staleLane(0);
+  const lane1 = await staleLane(1);
+  let reads = 0;
+  const swept = await sweepDispatchRefs(client, {
+    reReadSwitch: async () => {
+      reads += 1;
+      return { ok: true, enabled: reads === 1 };
+    },
+  });
+  assert.equal(swept.aborted, true);
+  assert.equal(swept.errors[0], 'switch_off');
+  assert.equal(swept.deleted.length, 1);
+  assert.equal((await client.getRef({ ref: lane1 })).ok, true);
+  assert.equal((await client.getRef({ ref: lane0 })).ok, false);
+});
+
+test('sweep ok false when a delete fails', async () => {
+  const client = createMockRefClient();
+  const past = new Date(Date.now() - 60_000).toISOString();
+  const lane = 'refs/mythos/dispatch/lane-02';
+  await client.createRef({ ref: lane, sha: '2'.repeat(40) });
+  client.setRefMessage(lane, leaseMessage({
+    issue: 2,
+    slice: 0,
+    files: ['a.ts'],
+    planCommentId: 1,
+    planBodySha256: 'b'.repeat(64),
+    runId: 1,
+    runAttempt: 1,
+    claimedAt: past,
+    expiresAt: past,
+  }));
+  const orig = client.deleteRef.bind(client);
+  client.deleteRef = async (args) => {
+    if (args.ref === lane) return { ok: false, error: 'denied' };
+    return orig(args);
+  };
+  const swept = await sweepDispatchRefs(client, {});
+  assert.equal(swept.ok, false);
+  assert.equal(swept.deleted.length, 0);
+  assert.equal(swept.errors.includes(lane), true);
+});
+
+test('assertDispatchRef rejects refs outside dispatch namespace', () => {
+  const main = 'refs/heads/main';
+  const oid = 'a'.repeat(40);
+  assert.throws(() => refUpdateCreate(main, oid));
+  assert.throws(() => refUpdateDelete(main, oid));
+  assert.throws(() => refUpdateRenew(main, oid, oid));
 });
 
 test('fake gh e2e dry-run act claim and encoded ref paths', { timeout: 15000 }, async () => {

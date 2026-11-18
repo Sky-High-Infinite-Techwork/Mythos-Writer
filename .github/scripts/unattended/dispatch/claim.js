@@ -10,7 +10,6 @@ const {
   DEFAULT_LEASE_MINUTES,
   clampLeaseMinutes,
 } = require('./constants');
-const { refUpdateDelete } = require('./refs-graphql');
 const { globsOverlap } = require('./path-policy');
 
 const REF_EXISTS = 'ref_exists';
@@ -210,7 +209,8 @@ async function sweepDispatchRefs(client, { now = new Date(), reReadSwitch } = {}
     if (reReadSwitch) {
       // eslint-disable-next-line no-await-in-loop
       const sw = await reReadSwitch();
-      if (!sw.ok || !sw.enabled) return { ok: false, deleted, errors: ['switch_off'], aborted: true };
+      if (!sw.ok) return { ok: false, deleted, errors: ['switch_read'], aborted: true };
+      if (!sw.enabled) return { ok: false, deleted, errors: ['switch_off'], aborted: true };
     }
     const lease = parseLeaseMessage(row.message);
     const stale = !lease || isExpired(lease, now);

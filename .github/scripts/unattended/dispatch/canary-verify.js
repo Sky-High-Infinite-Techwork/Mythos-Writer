@@ -11,9 +11,13 @@ async function runCanaryVerify(client, {
   artifactsDir,
 }) {
   const switches = await reReadSwitch();
+  if (!switches.ok) {
+    console.error(JSON.stringify({ kind: 'canary_verify_fail', reason: 'switch_read' }));
+    return 1;
+  }
   if (!actWritesEnabled(switches)) {
-    console.log(JSON.stringify({ kind: 'canary_verify_inert' }));
-    return 0;
+    console.error(JSON.stringify({ kind: 'canary_verify_fail', reason: 'switch_off' }));
+    return 1;
   }
 
   const main = String(mainSha || '');
@@ -46,8 +50,12 @@ async function runCanaryVerify(client, {
   }
 
   const sw2 = await reReadSwitch();
+  if (!sw2.ok) {
+    console.error(JSON.stringify({ kind: 'canary_verify_fail', reason: 'switch_read' }));
+    return 1;
+  }
   if (!actWritesEnabled(sw2)) {
-    console.error('canary-verify: switch off before delete');
+    console.error(JSON.stringify({ kind: 'canary_verify_fail', reason: 'switch_off' }));
     return 1;
   }
   const del = await client.deleteRef({ ref: row.ref, beforeOid: row.sha });

@@ -121,7 +121,17 @@ async function verifyPlanCommentEditors(client, issueNumber, official) {
     issue: issueNumber,
     commentDatabaseId: official.databaseId || official.commentId,
   });
-  if (!edits.ok) return { hold: true, reason: 'editor_fetch_failed' };
+  if (!edits.ok) {
+    const err = edits.error || '';
+    if (err === 'editor_redacted') return { hold: true, reason: 'editor_redacted' };
+    if (err === 'editor_history_incomplete' || err === 'comment_not_found') {
+      return { hold: true, reason: err === 'comment_not_found' ? 'editor_fetch_failed' : 'editor_history_incomplete' };
+    }
+    return { hold: true, reason: 'editor_fetch_failed' };
+  }
+  if (edits.complete !== true) {
+    return { hold: true, reason: 'editor_history_incomplete' };
+  }
   for (const editor of edits.editors || []) {
     const login = canonicalAuthorLogin(editor);
     if (!OFFICIAL_PLAN_AUTHORS.has(login)) {

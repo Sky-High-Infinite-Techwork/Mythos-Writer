@@ -77,7 +77,7 @@ refs/mythos/dispatch/lane-19
 
 1. Read `MYTHOS_DISPATCH_LANE_CAP` (`N`, fail-closed if not an integer 1–20).
 2. For the first free slot `i` in `0 .. N-1` with no live lease, call GraphQL **`updateRefs`** with **two** `refUpdates` in one request: `lane-{ii}` and `claim/{issue}-{slice}`, each `beforeOid` = zero OID, `afterOid` = lease commit SHA.
-3. Before the mutation, `GET` both refs (`lane-{ii}` and `claim/{issue}-{slice}`). GraphQL message **`Reference already exists`** ⇒ try next slot. Any other error ⇒ fail closed (exit non-zero). After ambiguous errors, `GET` both refs again and **CAS-release only the half we successfully created** in this run (never release a ref we do not hold). Treat as success only for idempotent **same-run** retry (`recoverSameSha`). **Release** of our claim pair always CAS-deletes with `beforeOid` set to the holder’s known `leaseSha` for **each** ref, not a fresh `GET`.
+3. Issue a single two-ref `updateRefs` create. On GraphQL **`Reference already exists`**, `GET` the claim ref (and lane ref when recovering) to distinguish another holder from a same-run partial create. Any other error ⇒ fail closed (exit non-zero). After ambiguous errors, **CAS-release only the half we successfully created** in this run (never release a ref we do not hold). Treat as success only for idempotent **same-run** retry (`recoverSameSha`). **Release** of our claim pair always CAS-deletes with `beforeOid` set to the holder’s known `leaseSha` for **each** ref, not a fresh `GET`.
 4. Enforce **file disjointness** against live leases (normalized `files[]` in lease JSON).
 
 **Lease commit:** commit on `main`’s tree with message JSON (`schema: mythos-dispatch-lease/v1`):
@@ -98,7 +98,7 @@ refs/mythos/dispatch/lane-19
 
 Default TTL: **180** minutes (`MYTHOS_DISPATCH_LEASE_MINUTES`, clamped **30–360**). Must exceed longest lane job timeout plus margin.
 
-**Release / sweep / renew:** GraphQL `updateRefs` with `afterOid` = zero OID (delete) or a new lease commit SHA (renew). **`beforeOid` semantics:** **release** — the holder’s known `leaseSha` (never a pre-delete `GET`); **sweep** — the SHA observed when listing refs before delete; **renew** — the holder’s known `leaseSha` with `force: true` because the new lease commit is a sibling of the old on `main`. Re-read `UNATTENDED_ENABLED` and `MYTHOS_DISPATCH_ENABLED` before **every** delete in sweep (lane-`NN` and `claim/*` only — never `attempts/`, `done/`, or `canary/`). **`renewLeaseHeartbeat`** CAS-updates **both** lane and claim refs in one `updateRefs` to a new lease commit with a fresh `expiresAt`; holders call **`assertHolderBeforePublish`**.
+**Release / sweep / renew:** GraphQL `updateRefs` with `afterOid` = zero OID (delete) or a new lease commit SHA (renew). **`beforeOid` semantics:** **release** — the holder’s known `leaseSha` (never a pre-delete `GET`); **sweep** — the SHA observed when listing refs before delete; **renew** — the holder’s known `leaseSha` with `force: true` because the new lease commit is a sibling of the old on `main`. Re-read `UNATTENDED_ENABLED` and `MYTHOS_DISPATCH_ENABLED` before **every** delete in sweep (lane-`NN` and `claim/*` only — never `attempts/`, `done/`, or `canary/`). **Lease heartbeat renew** (holder extends `expiresAt` via a new lease commit) ships in **PR 2** with live publish; PR 1 implements sweep/release CAS only. Holders use **`assertHolderBeforePublish`** before publishing.
 
 **Identity:** `refs/mythos/dispatch/claim/{issue}-{slice}` (no body SHA in the ref name).
 
@@ -195,7 +195,7 @@ Concurrency: `mythos-unattended-dispatch` for sweep+claim orchestration job; do 
 ## Live canary (not CI)
 
 - Set build-order issue with official plan comment; dry-run dispatch logs correct slice.
-- Two manual act dispatches with cap 1: second is lane-full.
+- **PR 1:** manual `act` plan runs hold at `plan_not_graded` (no `findBoundPlanPass` yet); use mock/unit tests for claim CAS. **PR 2+:** two manual act dispatches with cap 1 — second is lane-full.
 - Force expired lease; sweep removes ref; slot reusable.
 - PR 2: plan grade revise loop; single-file slice PR; protected path triggers hold.
 

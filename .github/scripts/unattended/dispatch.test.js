@@ -17,10 +17,6 @@ const {
   verifyPlanCommentEditors,
 } = require('./dispatch/official-plan');
 const {
-  issueEditedByUntrusted,
-  planCommentEditedByUntrusted,
-} = require('./dispatch/official-plan-test-helpers');
-const {
   globEntryOverlaps,
   diffWithinClaim,
   normalizePlanPaths,
@@ -31,11 +27,21 @@ const {
   buildLeasePayload,
   computeWouldClaimSlot,
   assertHolderBeforePublish,
+  tryCreateRefPair,
+  REF_EXISTS,
 } = require('./dispatch/claim');
-const {
-  concurrentSlotRace,
-  renewLeaseHeartbeat,
-} = require('./dispatch/claim-test-helpers');
+
+async function concurrentSlotRace(client, slotIndex, leaseSha, workers) {
+  const ref = slotRef(slotIndex);
+  const claimRefName = `${claimRef(0, 0)}-race`;
+  const attempts = await Promise.all(
+    Array.from({ length: workers }, () => tryCreateRefPair(client, { laneRef: ref, claimRef: claimRefName, leaseSha })),
+  );
+  const wins = attempts.filter((row) => row.ok);
+  const refExists = attempts.filter((row) => row.refExists || row.reason === REF_EXISTS).length;
+  const fatal = attempts.filter((row) => row.fatal).length;
+  return { ref, winners: wins.length, attempts, refExists, fatal };
+}
 const { claimRef: claimRefFn } = require('./dispatch/constants');
 const { globOrPathProtected, globsOverlap } = require('./dispatch/path-policy');
 const { createMockRefClient, createYieldingRaceClient } = require('./dispatch/mock-client');
@@ -213,10 +219,6 @@ test('cap read failure is exit 1', async () => {
   assert.equal(code, 1);
 });
 
-test('untrusted editor hold', () => {
-  assert.equal(issueEditedByUntrusted([{ event: 'edited', actor: { login: 'evil' } }]).hold, true);
-});
-
 test('max attempts backoff hold', async () => {
   const client = createMockRefClient();
   const { attemptsRef, doneRef } = require('./dispatch/constants');
@@ -229,19 +231,6 @@ test('max attempts backoff hold', async () => {
   assert.equal(state.hold, true);
   assert.equal(state.reason, 'max_attempts');
   assert.equal(doneRef(1, 0).includes('done/'), true);
-});
-
-test('renewLeaseHeartbeat updates lane and claim together', async () => {
-  const client = createMockRefClient();
-  const leaseSha = 'a'.repeat(40);
-  const newSha = 'b'.repeat(40);
-  const lane = 'refs/mythos/dispatch/lane-00';
-  const claim = claimRefFn(1, 0);
-  await client.createRefPair({ laneRef: lane, claimRef: claim, afterOid: leaseSha });
-  const renewed = await renewLeaseHeartbeat(client, { laneRef: lane, claimRef: claim, newLeaseSha: newSha, beforeOid: leaseSha }, null);
-  assert.equal(renewed.ok, true);
-  assert.equal(client.refs.get(lane), newSha);
-  assert.equal(client.refs.get(claim), newSha);
 });
 
 test('assertHolderBeforePublish detects lost lease', async () => {
@@ -341,15 +330,6 @@ test('list refs failure fails dispatch dry-run', async () => {
   assert.equal(code, 1);
 });
 
-test('plan comment untrusted editor hold', () => {
-  const hold = planCommentEditedByUntrusted({
-    createdAt: '2026-01-01T00:00:00Z',
-    lastEditedAt: '2026-01-02T00:00:00Z',
-    editor: { login: 'evil' },
-  });
-  assert.equal(hold.hold, true);
-});
-
 test('CAS release race surfaces failure', async () => {
   const client = createMockRefClient();
   const { releaseRefCas } = require('./dispatch/claim');
@@ -383,17 +363,6 @@ test('lane full when live leases meet cap regardless of slot index', () => {
   const probe = computeWouldClaimSlot(refs, 3, { issue: 99, slice: 0, files: ['other.ts'] });
   assert.equal(probe.ok, false);
   assert.equal(probe.reason, 'lane_full');
-});
-
-test('trusted string editor passes', () => {
-  assert.equal(
-    planCommentEditedByUntrusted({
-      createdAt: '2026-01-01T00:00:00Z',
-      lastEditedAt: '2026-01-02T00:00:00Z',
-      editor: 'skyyplayz',
-    }).hold,
-    false,
-  );
 });
 
 test('ref renew update sets force', () => {
@@ -547,32 +516,6 @@ test('claimLaneAndSlice lane_full when three live high slots', async () => {
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'lane_full');
   assert.equal(listed.refs.length, 3);
-});
-
-test('untrusted editor plain string evil holds', () => {
-  const hold = planCommentEditedByUntrusted({
-    createdAt: '2026-01-01T00:00:00Z',
-    lastEditedAt: '2026-01-02T00:00:00Z',
-    editor: 'evil',
-  });
-  assert.equal(hold.hold, true);
-});
-
-test('renewLeaseHeartbeat CAS mismatch fails closed', async () => {
-  const client = createMockRefClient();
-  const lane = 'refs/mythos/dispatch/lane-00';
-  const claim = claimRefFn(3, 0);
-  const before = 'a'.repeat(40);
-  await client.createRefPair({ laneRef: lane, claimRef: claim, afterOid: before });
-  client.refs.set(claim, 'b'.repeat(40));
-  const renewed = await renewLeaseHeartbeat(client, {
-    laneRef: lane,
-    claimRef: claim,
-    newLeaseSha: 'd'.repeat(40),
-    beforeOid: before,
-  }, null);
-  assert.equal(renewed.ok, false);
-  assert.equal(client.refs.get(lane), before);
 });
 
 test('refUpdateRenew rejects zero beforeOid', () => {

@@ -340,6 +340,7 @@ jobs:
           repositories: Mythos-Writer
           permission-contents: write
       - name: Check the write token installation
+        id: install-check
         env:
           MINTED: ${{ steps.write.outputs.installation-id }}
           EXPECTED: ${{ vars.MYTHOS_WRITE_APP_INSTALLATION_ID }}
@@ -355,7 +356,7 @@ jobs:
           merge-multiple: true
           path: canary-outcomes
       - name: Assert single scratch ref and CAS delete
-        if: ${{ always() && steps.write.outcome == 'success' }}
+        if: ${{ success() && steps.write.outcome == 'success' && steps.install-check.outcome == 'success' }}
         env:
           MODE: act
           MAIN_SHA: ${{ github.sha }}

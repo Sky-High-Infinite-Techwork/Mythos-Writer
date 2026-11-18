@@ -1,7 +1,6 @@
 'use strict';
 
 const fs = require('node:fs');
-const path = require('node:path');
 
 const { REPO, CANARY_SCRATCH_SHARED_REF } = require('./constants');
 const { OID_HEX, UPDATE_REFS_REF_EXISTS } = require('./refs-graphql');
@@ -29,6 +28,10 @@ async function main() {
     readToken,
     writeToken,
   });
+  if (!client) {
+    console.error('dispatch: invalid repo');
+    return 1;
+  }
 
   const reReadSwitch = async () => readDispatchSwitches(repo, controlToken);
 

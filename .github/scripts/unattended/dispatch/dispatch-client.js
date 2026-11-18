@@ -3,6 +3,13 @@
 const { gh: defaultGh } = require('../spawn');
 const { httpStatusFromGh } = require('./gh-http');
 const { REPO, MATCHING_REF_PREFIX } = require('./constants');
+
+const LANE_REF_MSG_RE = /^refs\/mythos\/dispatch\/lane-\d{2}$/;
+const CLAIM_REF_MSG_RE = /^refs\/mythos\/dispatch\/claim\/\d+-\d+$/;
+
+function refNeedsLeaseMessage(ref) {
+  return LANE_REF_MSG_RE.test(ref) || CLAIM_REF_MSG_RE.test(ref);
+}
 const {
   UPDATE_REFS_MUTATION,
   refUpdateCreate,
@@ -33,7 +40,11 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
   const target = splitRepo(repo);
   const noop = async () => ({ ok: false, error: 'no_token' });
   if (!target) {
-    return { read: { listRefs: noop, getRef: noop, issueComments: noop, getIssue: noop }, write: { updateRefs: noop, createLeaseCommit: noop } };
+    return {
+      read: { listRefs: noop, getRef: noop, issueComments: noop, getIssue: noop, issueCommentContentEdits: noop },
+      write: { updateRefs: noop, createLeaseCommit: noop },
+      combined: null,
+    };
   }
   const base = `repos/${target.owner}/${target.name}`;
   let repoNodeIdCache = null;
@@ -61,7 +72,7 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
         if (!row || !row.ref) continue;
         const sha = row.object && row.object.sha;
         let message = null;
-        if (sha) {
+        if (sha && refNeedsLeaseMessage(row.ref)) {
           const commit = gh(['api', `${base}/git/commits/${sha}`, '--jq', '.message'], readToken);
           if (commit.status !== 0) {
             return { ok: false, refs: [], error: commit.stderr || 'commit_message_failed' };
@@ -120,32 +131,99 @@ function createDispatchClients({ repo = REPO, readToken, writeToken, gh = defaul
       if (!Number.isInteger(commentId) || commentId < 1) {
         return { ok: false, editors: [], error: 'bad_comment' };
       }
-      const query = [
-        'query($owner:String!,$name:String!,$number:Int!) {',
+      const commentPageQuery = [
+        'query($owner:String!,$name:String!,$number:Int!,$after:String) {',
         'repository(owner:$owner,name:$name) {',
         'issue(number:$number) {',
-        'comments(first:100) {',
-        'nodes { databaseId userContentEdits(first:100) {',
+        'comments(first:100, after:$after) {',
+        'pageInfo { hasNextPage endCursor }',
+        'nodes { databaseId } } } } }',
+      ].join(' ');
+      let commentAfter = null;
+      let commentPageCursor = null;
+      let found = false;
+      for (let guard = 0; guard < 50; guard += 1) {
+        const body = JSON.stringify({
+          query: commentPageQuery,
+          variables: {
+            owner: target.owner,
+            name: target.name,
+            number: issueNumber,
+            after: commentAfter,
+          },
+        });
+        const result = gh(['api', 'graphql', '--input', '-'], readToken, body);
+        if (result.status !== 0) {
+          return { ok: false, editors: [], error: result.stderr || 'graphql_http' };
+        }
+        const parsed = parseGhJson(result.stdout);
+        const page = parsed?.data?.repository?.issue?.comments;
+        if (!page || !Array.isArray(page.nodes)) {
+          return { ok: false, editors: [], error: 'graphql_parse' };
+        }
+        if (page.nodes.some((n) => Number(n.databaseId) === commentId)) {
+          commentPageCursor = commentAfter;
+          found = true;
+          break;
+        }
+        if (!page.pageInfo?.hasNextPage) break;
+        commentAfter = page.pageInfo.endCursor;
+      }
+      if (!found) return { ok: false, editors: [], error: 'comment_not_found' };
+
+      const editors = [];
+      let editAfter = null;
+      const editsQuery = [
+        'query($owner:String!,$name:String!,$number:Int!,$commentPage:String,$after:String) {',
+        'repository(owner:$owner,name:$name) {',
+        'issue(number:$number) {',
+        'comments(first:100, after:$commentPage) {',
+        'nodes { databaseId userContentEdits(first:100, after:$after) {',
+        'pageInfo { hasNextPage endCursor }',
         'nodes { editor { login __typename } } } } } } } }',
       ].join(' ');
-      const body = JSON.stringify({
-        query,
-        variables: { owner: target.owner, name: target.name, number: issueNumber },
-      });
-      const result = gh(['api', 'graphql', '--input', '-'], readToken, body);
-      if (result.status !== 0) {
-        return { ok: false, editors: [], error: result.stderr || 'graphql_http' };
+      for (let guard = 0; guard < 50; guard += 1) {
+        const body = JSON.stringify({
+          query: editsQuery,
+          variables: {
+            owner: target.owner,
+            name: target.name,
+            number: issueNumber,
+            commentPage: commentPageCursor,
+            after: editAfter,
+          },
+        });
+        const result = gh(['api', 'graphql', '--input', '-'], readToken, body);
+        if (result.status !== 0) {
+          return { ok: false, editors: [], error: result.stderr || 'graphql_http' };
+        }
+        const parsed = parseGhJson(result.stdout);
+        const nodes = parsed?.data?.repository?.issue?.comments?.nodes;
+        const row = Array.isArray(nodes)
+          ? nodes.find((n) => Number(n.databaseId) === commentId)
+          : null;
+        if (!row || !row.userContentEdits) {
+          return { ok: false, editors: [], error: 'graphql_parse' };
+        }
+        for (const edit of row.userContentEdits.nodes || []) {
+          if (!edit || !edit.editor || !edit.editor.login) {
+            return { ok: false, editors: [], error: 'editor_redacted' };
+          }
+          editors.push({
+            login: edit.editor.login,
+            __typename: edit.editor.__typename,
+          });
+        }
+        if (row.userContentEdits.pageInfo?.hasNextPage) {
+          if (!row.userContentEdits.pageInfo.endCursor) {
+            return { ok: false, editors: [], error: 'editor_history_incomplete' };
+          }
+          editAfter = row.userContentEdits.pageInfo.endCursor;
+          continue;
+        }
+        return { ok: true, editors, complete: true };
       }
-      const parsed = parseGhJson(result.stdout);
-      const nodes = parsed?.data?.repository?.issue?.comments?.nodes;
-      if (!Array.isArray(nodes)) {
-        return { ok: false, editors: [], error: 'graphql_parse' };
-      }
-      const row = nodes.find((n) => Number(n.databaseId) === commentId);
-      if (!row) return { ok: false, editors: [], error: 'comment_not_found' };
-      const edits = row.userContentEdits?.nodes || [];
-      const editors = edits.map((n) => (n.editor ? { login: n.editor.login, __typename: n.editor.__typename } : null)).filter(Boolean);
-      return { ok: true, editors };
+      return { ok: false, editors: [], error: 'editor_history_incomplete' };
     },
     async issueComments({ issue }) {
       if (!readToken) return { ok: false, comments: [], error: 'no_read_token' };
