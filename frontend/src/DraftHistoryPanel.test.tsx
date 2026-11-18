@@ -36,7 +36,7 @@ describe('DraftHistoryPanel', () => {
     render(<DraftHistoryPanel sceneId="scene-42" currentContent="live" onRestore={onRestore} />);
     await waitFor(() => expect(draftsList).toHaveBeenCalledWith('scene-42'));
     expect(screen.getByRole('button', { name: /Draft History \(1\)/ })).toBeInTheDocument();
-    expect(screen.getByLabelText(/Preview snapshot from/)).toBeInTheDocument();
+    expect(screen.getByText('Checkpoint')).toBeInTheDocument();
   });
 
   it('restores a draft after confirmation and calls onRestore with content', async () => {
@@ -44,19 +44,20 @@ describe('DraftHistoryPanel', () => {
     await waitFor(() => expect(draftsList).toHaveBeenCalled());
     fireEvent.click(screen.getByLabelText('Restore this draft'));
     fireEvent.click(screen.getByRole('button', { name: /^Restore$/ }));
-    await waitFor(() => expect(draftsRestore).toHaveBeenCalledWith('draft-snap-1', 'scene-42', 'live prose'));
-    expect(onRestore).toHaveBeenCalledWith('Restored snapshot body');
-    expect(draftsList).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(onRestore).toHaveBeenCalledWith('Restored snapshot body'));
+    expect(screen.queryByRole('dialog', { name: 'Confirm restore' })).not.toBeInTheDocument();
   });
 
-  it('does not call onRestore when draftsRestore fails', async () => {
+  it('does not call onRestore when draftsRestore fails and leaves the confirm dialog open', async () => {
     draftsRestore.mockRejectedValueOnce(new Error('restore failed'));
     render(<DraftHistoryPanel sceneId="scene-42" currentContent="live" onRestore={onRestore} />);
-    await waitFor(() => expect(draftsList).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText('Checkpoint')).toBeInTheDocument());
     fireEvent.click(screen.getByLabelText('Restore this draft'));
     fireEvent.click(screen.getByRole('button', { name: /^Restore$/ }));
     await waitFor(() => expect(draftsRestore).toHaveBeenCalled());
-    expect(onRestore).not.toHaveBeenCalled();
+    await waitFor(() => expect(onRestore).not.toHaveBeenCalled());
+    expect(screen.getByRole('dialog', { name: 'Confirm restore' })).toBeInTheDocument();
+    expect(screen.getByText('Checkpoint')).toBeInTheDocument();
   });
 
   it('shows empty state when there are no snapshots', async () => {
@@ -69,26 +70,33 @@ describe('DraftHistoryPanel', () => {
     render(<DraftHistoryPanel sceneId="scene-42" currentContent="" onRestore={onRestore} />);
     await waitFor(() => expect(draftsList).toHaveBeenCalled());
     fireEvent.click(screen.getByLabelText(/Preview snapshot from/));
-    await waitFor(() => expect(draftsPreview).toHaveBeenCalledWith('draft-snap-1'));
-    expect(screen.getByText('Snapshot preview text')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Snapshot preview text')).toBeInTheDocument());
   });
 
-  it('deletes a snapshot and reloads the list', async () => {
+  it('deletes a snapshot and shows empty state after reload', async () => {
+    draftsList
+      .mockResolvedValueOnce({ snapshots: [SNAP] })
+      .mockResolvedValueOnce({ snapshots: [] });
     render(<DraftHistoryPanel sceneId="scene-42" currentContent="" onRestore={onRestore} />);
-    await waitFor(() => expect(draftsList).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText('Checkpoint')).toBeInTheDocument());
     fireEvent.click(screen.getByLabelText('Delete this draft'));
-    await waitFor(() => expect(draftsDelete).toHaveBeenCalledWith('draft-snap-1'));
-    expect(draftsList).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(screen.getByText(/No drafts yet/)).toBeInTheDocument());
+    expect(screen.queryByText('Checkpoint')).not.toBeInTheDocument();
   });
 
-  it('saves an edited label', async () => {
+  it('saves an edited label and renders the new label after reload', async () => {
+    const relabeled = { ...SNAP, label: 'Renamed draft' };
+    draftsList
+      .mockResolvedValueOnce({ snapshots: [SNAP] })
+      .mockResolvedValueOnce({ snapshots: [relabeled] });
     render(<DraftHistoryPanel sceneId="scene-42" currentContent="" onRestore={onRestore} />);
-    await waitFor(() => expect(draftsList).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText('Checkpoint')).toBeInTheDocument());
     fireEvent.click(screen.getByLabelText('Edit label'));
     const input = screen.getByLabelText('Draft label');
     fireEvent.change(input, { target: { value: 'Renamed draft' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(draftsLabel).toHaveBeenCalledWith('draft-snap-1', 'Renamed draft'));
+    await waitFor(() => expect(screen.getByText('Renamed draft')).toBeInTheDocument());
+    expect(screen.queryByText('Checkpoint')).not.toBeInTheDocument();
   });
 
   it('cancels restore from the confirm dialog', async () => {

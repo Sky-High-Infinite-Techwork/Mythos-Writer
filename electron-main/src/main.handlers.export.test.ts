@@ -38,12 +38,43 @@ const db = vi.hoisted(() => {
 const paths = vi.hoisted(() => ({ userData: '' }));
 
 const browserWindowMock = vi.hoisted(() => ({
-  instances: [] as Array<{ webContents: { printToPDF: ReturnType<typeof vi.fn> } }>,
+  instances: [] as Array<{
+    lastHtmlPath: string;
+    lastHtmlContent: string;
+    webContents: { printToPDF: ReturnType<typeof vi.fn> };
+  }>,
 }));
+
+async function epubSceneXhtmlBodies(buf: Buffer): Promise<string[]> {
+  const zip = await JSZip.loadAsync(buf);
+  const bodies: string[] = [];
+  for (let i = 0; i < 32; i++) {
+    const file = zip.file(`OEBPS/scene-${i}.xhtml`);
+    if (!file) break;
+    bodies.push(await file.async('string'));
+  }
+  return bodies;
+}
+
+function assertDirectoryNotWritable(dir: string): void {
+  try {
+    fs.writeFileSync(path.join(dir, 'mythos-write-probe.txt'), 'probe');
+    throw new Error(`directory is writable: ${dir}`);
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith('directory is writable')) {
+      throw err;
+    }
+  }
+}
 
 vi.mock('electron', () => ({
   BrowserWindow: class MockBrowserWindow {
-    loadFile = vi.fn().mockResolvedValue(undefined);
+    lastHtmlPath = '';
+    lastHtmlContent = '';
+    loadFile = vi.fn().mockImplementation(async (htmlPath: string) => {
+      this.lastHtmlPath = htmlPath;
+      this.lastHtmlContent = fs.readFileSync(htmlPath, 'utf-8');
+    });
     webContents = {
       printToPDF: vi.fn().mockResolvedValue(Buffer.from('%PDF-1.4\n% fake pdf for tests\n')),
     };
@@ -208,8 +239,10 @@ describe('export handlers write real files with ordered prose', () => {
     });
     expect(result.cancelled).toBe(false);
     const text = fs.readFileSync(target, 'utf-8');
-    expect(text).toContain('First scene export prose.');
-    expect(text).toContain('Second scene export prose.');
+    const first = text.indexOf('First scene export prose.');
+    const second = text.indexOf('Second scene export prose.');
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(first).toBeLessThan(second);
   });
 
   it('export:docx writes a ZIP docx containing both scene prose strings', async () => {
@@ -239,6 +272,13 @@ describe('export handlers write real files with ordered prose', () => {
     });
     expect(result.cancelled).toBe(false);
     expect(browserWindowMock.instances.length).toBeGreaterThan(0);
+    const win = browserWindowMock.instances.at(-1)!;
+    expect(win.lastHtmlContent).toBeTruthy();
+    const html = win.lastHtmlContent;
+    const first = html.indexOf('First scene export prose.');
+    const second = html.indexOf('Second scene export prose.');
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(first).toBeLessThan(second);
     const pdf = fs.readFileSync(target);
     expect(pdf.subarray(0, 5).toString('latin1')).toBe('%PDF-');
   });
@@ -252,6 +292,12 @@ describe('export handlers write real files with ordered prose', () => {
     const buf = fs.readFileSync(target);
     expect(buf.subarray(0, 2).toString('latin1')).toBe('PK');
     expect(result.bytes).toBeGreaterThan(100);
+    const bodies = await epubSceneXhtmlBodies(buf);
+    const combined = bodies.join('\n');
+    const first = combined.indexOf('First scene export prose.');
+    const second = combined.indexOf('Second scene export prose.');
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(first).toBeLessThan(second);
   });
 
   it('export:epub with vault targetPath writes a real epub zip', async () => {
@@ -268,25 +314,27 @@ describe('export handlers write real files with ordered prose', () => {
     const buf = fs.readFileSync(abs);
     expect(buf.subarray(0, 2).toString('latin1')).toBe('PK');
     expect(buf.toString('latin1')).toContain('application/epub+zip');
+    const bodies = await epubSceneXhtmlBodies(buf);
+    const combined = bodies.join('\n');
+    expect(combined).toContain('First scene export prose.');
+    expect(combined).toContain('Second scene export prose.');
+    expect(combined.indexOf('First scene export prose.')).toBeLessThan(
+      combined.indexOf('Second scene export prose.'),
+    );
   });
 });
 
 describe('export handlers — read-only target', () => {
-  it('export:markdown rejects a non-writable directory without leaving a file', async () => {
-    if (process.platform === 'win32') return;
-    if (process.getuid && process.getuid() === 0) return;
+  it('export:markdown rejects a non-writable directory without leaving a file', async (ctx) => {
+    if (process.platform === 'win32') {
+      ctx.skip('chmod 0o555 does not reliably deny writes on Windows');
+    }
 
     const lockedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mw-export-ro-'));
     const target = path.join(lockedDir, 'blocked.md');
     try {
       fs.chmodSync(lockedDir, 0o555);
-      let writeFailed = false;
-      try {
-        fs.writeFileSync(path.join(lockedDir, 'probe.txt'), 'x');
-      } catch {
-        writeFailed = true;
-      }
-      expect(writeFailed, 'precondition: export dir must not be writable').toBe(true);
+      assertDirectoryNotWritable(lockedDir);
 
       vi.mocked(dialog.showSaveDialog).mockResolvedValue({ canceled: false, filePath: target });
       await expect(

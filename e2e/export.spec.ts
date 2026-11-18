@@ -596,18 +596,17 @@ test.describe('real markdown/plaintext export pipelines', () => {
   });
 
   test('AC-EXQ-12: export to a read-only directory surfaces failure and writes no file', async () => {
-    if (process.platform === 'win32' || (process.getuid && process.getuid() === 0)) return;
+    test.skip(process.platform === 'win32', 'chmod 0o555 does not reliably deny writes on Windows CI');
 
     const lockedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-export-ro-'));
     try {
       fs.chmodSync(lockedDir, 0o555);
-      let blocked = false;
       try {
         fs.writeFileSync(path.join(lockedDir, 'probe.txt'), 'nope');
+        expect(true, 'precondition: directory must not be writable (probe write succeeded)').toBe(false);
       } catch {
-        blocked = true;
+        /* probe correctly failed */
       }
-      expect(blocked, 'precondition: directory must not be writable').toBe(true);
 
       await realApp!.evaluate(({ dialog }, { dir }: { dir: string }) => {
         const nodePath = (process as unknown as {
@@ -619,15 +618,14 @@ test.describe('real markdown/plaintext export pipelines', () => {
         });
       }, { dir: lockedDir });
 
-      realPage.once('dialog', async (d) => {
-        expect(d.message()).toMatch(/Export failed/i);
-        await d.accept();
-      });
-
       await openExportDialog(realPage);
       const dialog = realPage.locator('[role="dialog"][aria-labelledby="export-dialog-title"]');
       await dialog.locator('input[type="radio"][value="markdown"]').click();
+      const alertPromise = realPage.waitForEvent('dialog');
       await dialog.getByRole('button', { name: /^Export/ }).click();
+      const alert = await alertPromise;
+      expect(alert.message()).toMatch(/Export failed/i);
+      await alert.accept();
       await expect(dialog.getByRole('button', { name: /^Export MD/ })).toBeVisible({ timeout: 30_000 });
       expect(fs.existsSync(path.join(lockedDir, 'blocked-export.md'))).toBe(false);
       await dialog.locator('button[aria-label="Close"]').click();
