@@ -79,6 +79,22 @@ test('ci-tier1-gate: all Tier 1 success exits 0', () => {
   assert.equal(r.status, 0, r.stderr);
 });
 
+test('ci-tier1-gate: success tokens not expanded against cwd filenames', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tier1-glob-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'success'), 'decoy');
+    const r = spawnSync('bash', [TIER1_SCRIPT], {
+      cwd: dir,
+      env: { ...process.env, NEEDS_TIER1_RESULTS: ALL_TIER1_OK },
+      encoding: 'utf8',
+    });
+    assert.equal(r.status, 0, r.stderr);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
 test('ci-tier1-gate: one failure exits 1', () => {
   const r = runBash(TIER1_SCRIPT, {
     NEEDS_TIER1_RESULTS: 'success success failure success success success success',
@@ -339,6 +355,15 @@ test('ci-aggregator: mutant dropping shard 4 from checks is killed', () => {
   );
 });
 
+test('ci-aggregator: mutant dropping shard 3 from checks is killed', () => {
+  assertMutantKilled(
+    'omit shard 3 require_nonempty',
+    AGG_SCRIPT,
+    aggEnv({ NEEDS_E2E_SHARD_3_RESULT: '', PATHS_FILTER_RUN_E2E: 'true' }),
+    (src) => src.replace(/\n  "\$\{NEEDS_E2E_SHARD_3_RESULT:-\}"\n/, '\n'),
+  );
+});
+
 test('ci-aggregator: partial e2e skip when RUN_E2E true exits 1', () => {
   assert.equal(
     runBash(
@@ -368,12 +393,27 @@ test('ci-aggregator: e2e shard failure when RUN_E2E false exits 1', () => {
   );
 });
 
-test('ci-aggregator: push always requires e2e success', () => {
+test('ci-aggregator: push requires e2e success when PATHS_FILTER_RUN_E2E false', () => {
   assert.equal(
     runBash(
       AGG_SCRIPT,
       aggEnv({
         GITHUB_EVENT_NAME: 'push',
+        PATHS_FILTER_RUN_E2E: 'false',
+        NEEDS_E2E_SHARD_1_RESULT: 'skipped',
+      }),
+    ).status,
+    1,
+  );
+});
+
+test('ci-aggregator: workflow_dispatch requires e2e success when PATHS_FILTER_RUN_E2E false', () => {
+  assert.equal(
+    runBash(
+      AGG_SCRIPT,
+      aggEnv({
+        GITHUB_EVENT_NAME: 'workflow_dispatch',
+        PATHS_FILTER_RUN_E2E: 'false',
         NEEDS_E2E_SHARD_1_RESULT: 'skipped',
       }),
     ).status,
@@ -461,6 +501,18 @@ test('ci-paths-filter-resolve-e2e: passes run-e2e=false through on PR', () => {
     }),
   );
   assert.equal(lines, 'run-e2e=false');
+});
+
+test('ci-paths-filter-resolve-e2e: passes run-e2e=true through on PR', () => {
+  const { lines } = withGithubOutput((out) =>
+    runBash(RESOLVE_E2E, {
+      GITHUB_OUTPUT: out,
+      GITHUB_EVENT_NAME: 'pull_request',
+      FILTER_E2E_OUTCOME: 'success',
+      FILTER_E2E_RUN_E2E: 'true',
+    }),
+  );
+  assert.equal(lines, 'run-e2e=true');
 });
 
 for (const ev of ['merge_group', 'push', 'workflow_dispatch']) {

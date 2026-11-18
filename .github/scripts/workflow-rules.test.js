@@ -96,7 +96,7 @@ test('ci aggregator tier1 includes needs.diff-guard.result (not oracle-sweeps)',
   const step = doc.jobs.ci.steps.find((s) => String(s.run || '').includes('ci-aggregator.sh'));
   assert.ok(step, 'ci aggregator step');
   assert.match(step.run, /ci-aggregator\.sh/);
-  assert.ok(step.env.NEEDS_DIFF_GUARD_RESULT);
+  assert.equal(step.env.NEEDS_DIFF_GUARD_RESULT, '${{ needs.diff-guard.result }}');
   assert.ok(step.env.NEEDS_TIER1_GATE_RESULT);
   assert.ok(step.env.NEEDS_ORACLE_SWEEPS_RESULT);
   const agg = fs.readFileSync(path.join(REPO, '.github', 'scripts', 'ci-aggregator.sh'), 'utf8');
@@ -239,6 +239,54 @@ test('tier1-gate and ci aggregator call extracted bash scripts', () => {
   assert.match(ciStep.run, /ci-aggregator\.sh/);
   assert.ok(tierStep.env.NEEDS_TIER1_RESULTS);
   assert.ok(ciStep.env.NEEDS_ORACLE_SWEEPS_RESULT);
+});
+
+test('ci.yml gate scripts: env vars map to needs.*.result and paths-filter run-e2e', () => {
+  const doc = loadWorkflow('ci.yml');
+  const tierStep = doc.jobs['tier1-gate'].steps.find((s) =>
+    String(s.run || '').includes('ci-tier1-gate.sh'),
+  );
+  const ciStep = doc.jobs.ci.steps.find((s) => String(s.run || '').includes('ci-aggregator.sh'));
+  assert.ok(tierStep?.env, 'tier1-gate step env');
+  assert.ok(ciStep?.env, 'ci aggregator step env');
+
+  const tier1Jobs = ['setup', 'lint', 'typecheck', 'unit', 'diff-guard', 'paths-filter', 'contracts'];
+  const tier1Blob = String(tierStep.env.NEEDS_TIER1_RESULTS);
+  for (const job of tier1Jobs) {
+    const escaped = job.replace(/-/g, '\\-');
+    assert.match(
+      tier1Blob,
+      new RegExp(`\\$\\{\\{\\s*needs\\.${escaped}\\.result\\s*\\}\\}`),
+      `NEEDS_TIER1_RESULTS must include needs.${job}.result`,
+    );
+  }
+
+  const aggEnvMap = {
+    NEEDS_TIER1_GATE_RESULT: '${{ needs.tier1-gate.result }}',
+    NEEDS_LINT_RESULT: '${{ needs.lint.result }}',
+    NEEDS_TYPECHECK_RESULT: '${{ needs.typecheck.result }}',
+    NEEDS_UNIT_RESULT: '${{ needs.unit.result }}',
+    NEEDS_DIFF_GUARD_RESULT: '${{ needs.diff-guard.result }}',
+    NEEDS_ORACLE_SWEEPS_RESULT: '${{ needs.oracle-sweeps.result }}',
+    NEEDS_E2E_SHARD_1_RESULT: '${{ needs.e2e-shard-1.result }}',
+    NEEDS_E2E_SHARD_2_RESULT: '${{ needs.e2e-shard-2.result }}',
+    NEEDS_E2E_SHARD_3_RESULT: '${{ needs.e2e-shard-3.result }}',
+    NEEDS_E2E_SHARD_4_RESULT: '${{ needs.e2e-shard-4.result }}',
+    PATHS_FILTER_RUN_E2E: '${{ needs.paths-filter.outputs.run-e2e }}',
+    GITHUB_EVENT_NAME: '${{ github.event_name }}',
+  };
+  for (const [key, value] of Object.entries(aggEnvMap)) {
+    assert.equal(ciStep.env[key], value, `ci step env ${key}`);
+  }
+
+  const pathsSteps = doc.jobs['paths-filter'].steps;
+  const resolveDocs = pathsSteps.find((s) => s.id === 'resolve-docs');
+  const resolveE2e = pathsSteps.find((s) => s.id === 'resolve-e2e');
+  assert.equal(resolveDocs.env.FILTER_DOCS_OUTCOME, '${{ steps.filter-docs.outcome }}');
+  assert.equal(resolveDocs.env.FILTER_DOCS_DOCS_ONLY, '${{ steps.filter-docs.outputs.docs-only }}');
+  assert.equal(resolveE2e.env.FILTER_E2E_OUTCOME, '${{ steps.filter-e2e.outcome }}');
+  assert.equal(resolveE2e.env.FILTER_E2E_RUN_E2E, '${{ steps.filter-e2e.outputs.run-e2e }}');
+  assert.equal(resolveE2e.env.GITHUB_EVENT_NAME, '${{ github.event_name }}');
 });
 
 function checkoutBeforeScript(steps, scriptIndex) {

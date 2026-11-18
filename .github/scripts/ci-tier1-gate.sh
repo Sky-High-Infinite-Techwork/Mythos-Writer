@@ -12,8 +12,9 @@ if [ -z "$tier1" ]; then
   fail "NEEDS_TIER1_RESULTS is missing or empty"
 fi
 
-# shellcheck disable=SC2206
-results=($tier1)
+set -f
+IFS=$' \t\n' read -r -a results <<<"$tier1"
+set +f
 if [ "${#results[@]}" -ne 7 ]; then
   fail "expected 7 Tier 1 results, got ${#results[@]}"
 fi
