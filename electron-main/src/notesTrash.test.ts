@@ -681,17 +681,16 @@ describe('notesTrash', () => {
   it('refuses restore while a force-flush has already claimed the group', async () => {
     writeNote(root, 'Hold.md');
     const { entries } = trashTargets(root, '', [{ kind: 'note', itemPath: 'Hold.md', label: 'Hold.md' }]);
-    let claimed = false;
+    let attemptedRestoreDuringFlush: ReturnType<typeof restoreEntry> | undefined;
     mockTrashItem.mockImplementation(async (target: string) => {
-      if (!claimed) {
-        claimed = true;
-        const refused = restoreEntry(entries[0]!.id);
-        expect(refused.restored).toBe(false);
+      if (attemptedRestoreDuringFlush === undefined) {
+        attemptedRestoreDuringFlush = restoreEntry(entries[0]!.id);
       }
       await new Promise<void>((resolve) => { process.nextTick(resolve); });
       fs.rmSync(target, { recursive: true, force: true });
     });
     await emptyTrash(root);
+    expect(attemptedRestoreDuringFlush).toEqual({ restored: false, restoredIds: [] });
     expect(listPendingForVault(root)).toEqual([]);
   });
 

@@ -212,6 +212,7 @@ export const sceneBodyWhitespaceSeams = {
   trailingWsLen,
 } as const;
 
+// Seam: HEADING_PREFIX_RE gates serialize/unwrap/layout; H1–H6 regex edges are not all observable via body bytes alone (#1911).
 export const sceneBodyMarkerSeams = {
   HEADING_PREFIX_RE,
 } as const;
