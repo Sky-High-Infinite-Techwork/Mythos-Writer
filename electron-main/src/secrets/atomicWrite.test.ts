@@ -94,9 +94,11 @@ describe('atomicWrite', () => {
     fs.writeFileSync(target, '{"ok":true}\n', 'utf-8');
     const goodTemp = `${target}.${process.pid}-abcabcabcabc.tmp`;
     const shortName = `${target}..tmp`;
+    const wrongPattern = path.join(dir, 'settings.wrongsuffix.tmp');
     const wrongBase = path.join(dir, 'other.json.1-abcabcabcabc.tmp');
     fs.writeFileSync(goodTemp, 'tmp', 'utf-8');
     fs.writeFileSync(shortName, 'tmp', 'utf-8');
+    fs.writeFileSync(wrongPattern, 'tmp', 'utf-8');
     fs.writeFileSync(wrongBase, 'tmp', 'utf-8');
     const subdir = `${target}.${process.pid}-dirnamed.tmp`;
     fs.mkdirSync(subdir);
@@ -105,6 +107,7 @@ describe('atomicWrite', () => {
       deleteLeftoverAtomicTemps([target]);
       expect(fs.existsSync(goodTemp)).toBe(false);
       expect(fs.existsSync(shortName)).toBe(true);
+      expect(fs.existsSync(wrongPattern)).toBe(true);
       expect(fs.existsSync(wrongBase)).toBe(true);
       expect(fs.existsSync(subdir)).toBe(true);
       expect(fs.lstatSync(sym).isSymbolicLink()).toBe(true);

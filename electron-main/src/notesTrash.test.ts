@@ -34,6 +34,7 @@ import {
   notesTrashGroupSeams,
   notesTrashFlushSeams,
 } from './notesTrash.js';
+import * as notesBoard from './notesBoard.js';
 import { getBoard, patchLayout, flushPendingNotesBoardWrites, furnitureCreate } from './notesBoard.js';
 import { readIconMap, writeIconMap } from './vaultIcons.js';
 
@@ -590,22 +591,51 @@ describe('notesTrash', () => {
     expect(isVaultRelPathPending(root, 'Board')).toBe(false);
   });
 
+  it('flush removes a root-board layout entry after trashing a vault-root note', async () => {
+    writeNote(root, 'Root.md');
+    const { id } = patchLayout(root, '', 'Root.md', { x: 3, y: 3 });
+    flushPendingNotesBoardWrites(root);
+    trashTargets(root, '', [{ kind: 'note', itemPath: 'Root.md', label: 'Root' }]);
+    await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
+    expect(getBoard(root, '').layout[`n:${id}`]).toBeUndefined();
+  });
+
+  it('flush removes a nested-board layout via split parent folder + item name', async () => {
+    writeNote(root, 'Board/Nested/Item.md');
+    const { id } = patchLayout(root, 'Board/Nested', 'Item.md', { x: 9, y: 9 });
+    flushPendingNotesBoardWrites(root);
+    const stubSpy = vi.spyOn(notesBoard, 'itemDeleteStub');
+    trashTargets(root, 'Board/Nested', [{ kind: 'note', itemPath: 'Item.md', label: 'Item' }]);
+    await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
+    expect(stubSpy).toHaveBeenCalledWith(root, 'Board/Nested', 'Item.md');
+    stubSpy.mockRestore();
+    expect(getBoard(root, 'Board/Nested').layout[`n:${id}`]).toBeUndefined();
+  });
+
+  it('restoreEntry returns false for an unknown id', () => {
+    expect(restoreEntry(crypto.randomUUID())).toEqual({ restored: false, restoredIds: [] });
+  });
+
   it('flushClaimedGroups sorts shallow groups before deeper overlapping ones', async () => {
     writeNote(root, 'Parent/Child.md');
     const deep = trashTargets(root, 'Parent', [{ kind: 'note', itemPath: 'Child.md', label: 'Child' }]);
     const shallow = trashTargets(root, '', [{ kind: 'folder', itemPath: 'Parent', label: 'Parent' }]);
-    const claimed = [deep, shallow].flatMap((r) =>
-      r.entries.map((e) => e.groupId),
-    ).filter((id, idx, arr) => arr.indexOf(id) === idx).map((id) => notesTrashFlushSeams.claimGroup(id)!).filter(Boolean);
+    const claimed = [deep, shallow]
+      .flatMap((r) => r.entries.map((e) => e.groupId))
+      .filter((id, idx, arr) => arr.indexOf(id) === idx)
+      .map((id) => notesTrashFlushSeams.claimGroup(id)!)
+      .filter(Boolean);
     let shallowFirst = true;
     mockTrashItem.mockImplementation(async (target: string) => {
       const rel = path.relative(root, target);
       if (!shallowFirst) return;
       if (rel !== 'Parent') shallowFirst = false;
-      await new Promise<void>((r) => { process.nextTick(r); });
+      await new Promise<void>((r) => {
+        process.nextTick(r);
+      });
       if (rel === 'Parent') fs.rmSync(target, { recursive: true, force: true });
     });
-    await notesTrashFlushSeams.flushClaimedGroups(claimed as never);
+    await notesTrashFlushSeams.flushClaimedGroups(claimed);
     expect(shallowFirst).toBe(true);
     resetNotesTrashForTests();
   });
@@ -620,28 +650,6 @@ describe('notesTrash', () => {
     expect(listPendingForVault(root)).toEqual([]);
     expect(isVaultRelPathPending(root, 'Claim.md')).toBe(false);
     resetNotesTrashForTests();
-  });
-
-  it('flush removes a root-board layout entry using parentRelPath \"\" (splitVaultRelPath)', async () => {
-    writeNote(root, 'Root.md');
-    const { id } = patchLayout(root, '', 'Root.md', { x: 3, y: 3 });
-    flushPendingNotesBoardWrites(root);
-    trashTargets(root, '', [{ kind: 'note', itemPath: 'Root.md', label: 'Root' }]);
-    await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
-    expect(getBoard(root, '').layout[`n:${id}`]).toBeUndefined();
-  });
-
-  it('flush removes a nested-board layout via split parent folder + item name', async () => {
-    writeNote(root, 'Board/Nested/Item.md');
-    const { id } = patchLayout(root, 'Board/Nested', 'Item.md', { x: 9, y: 9 });
-    flushPendingNotesBoardWrites(root);
-    trashTargets(root, 'Board/Nested', [{ kind: 'note', itemPath: 'Item.md', label: 'Item' }]);
-    await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
-    expect(getBoard(root, 'Board/Nested').layout[`n:${id}`]).toBeUndefined();
-  });
-
-  it('restoreEntry returns false for an unknown id', () => {
-    expect(restoreEntry(crypto.randomUUID())).toEqual({ restored: false, restoredIds: [] });
   });
 
   it('flush removes icon assignments for a trashed path (best-effort at flush time)', async () => {
@@ -701,6 +709,57 @@ describe('notesTrash', () => {
     const { entries } = trashTargets(root, '', [{ kind: 'note', itemPath: 'Plain.md', label: 'Plain' }]);
     expect(entries[0]!.key).toBe('');
     expect(entries[0]!.vaultRelPath).toBe('Plain.md');
+  });
+
+  it('listPendingForVault ignores pending entries in another vault root', () => {
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), 'vb-notestrash-other-'));
+    try {
+      writeNote(root, 'Here.md');
+      writeNote(other, 'There.md');
+      trashTargets(root, '', [{ kind: 'note', itemPath: 'Here.md', label: 'Here' }]);
+      trashTargets(other, '', [{ kind: 'note', itemPath: 'There.md', label: 'There' }]);
+      expect(listPendingForVault(root).map((e) => e.vaultRelPath)).toEqual(['Here.md']);
+      expect(listPendingForVault(other).map((e) => e.vaultRelPath)).toEqual(['There.md']);
+    } finally {
+      fs.rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it('uses a v: key when the trashed top-level target is a folder with an id', () => {
+    fs.mkdirSync(path.join(root, 'Dir'));
+    fs.writeFileSync(
+      path.join(root, 'Dir', '.mythos-board.json'),
+      JSON.stringify({ version: 2, id: 'dir-1', updated: '2020-01-01T00:00:00.000Z', layout: {} }),
+    );
+    const { entries } = trashTargets(root, '', [{ kind: 'folder', itemPath: 'Dir', label: 'Dir' }]);
+    expect(entries[0]!.key).toBe('v:dir-1');
+  });
+
+  it('isFurniturePending ignores furniture pending in a different vault', () => {
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), 'vb-notestrash-other-'));
+    try {
+      fs.mkdirSync(path.join(other, 'Desk'));
+      const item = furnitureCreate(other, 'Desk', { k: 'swatch', x: 0, y: 0 });
+      trashTargets(other, 'Desk', [{ kind: 'furniture', furnitureId: item.id, label: 'Swatch' }]);
+      expect(isFurniturePending(root, 'Desk', item.id)).toBe(false);
+      expect(isFurniturePending(other, 'Desk', item.id)).toBe(true);
+    } finally {
+      fs.rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it('tags nested folder descendants with v: keys and nested notes with n: keys', () => {
+    writeNote(root, 'Pack/Inner/Leaf.md', '---\nid: leaf-1\n---\n');
+    fs.mkdirSync(path.join(root, 'Pack/Sub'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'Pack/Sub', '.mythos-board.json'),
+      JSON.stringify({ version: 2, id: 'sub-folder', updated: '2020-01-01T00:00:00.000Z', layout: {} }),
+    );
+    const { entries } = trashTargets(root, '', [{ kind: 'folder', itemPath: 'Pack', label: 'Pack' }]);
+    const leaf = entries.find((e) => e.vaultRelPath === 'Pack/Inner/Leaf.md')!;
+    const sub = entries.find((e) => e.vaultRelPath === 'Pack/Sub')!;
+    expect(leaf.key).toBe('n:leaf-1');
+    expect(sub.key).toBe('v:sub-folder');
   });
 
   it('uses an x: furniture key for deferred furniture trash', () => {
@@ -787,6 +846,138 @@ describe('notesTrash', () => {
     invalidatePendingUnderPath(root, 'Board');
     expect(isVaultRelPathPending(root, 'Board')).toBe(false);
     expect(isVaultRelPathPending(root, 'Board/Card A.md')).toBe(false);
+  });
+
+  it('marks folder and note descendants differently while pending (folder trash)', () => {
+    fs.mkdirSync(path.join(root, 'Board/Sub'), { recursive: true });
+    writeNote(root, 'Board/Sub/Leaf.md', 'body\n');
+    const { entries } = trashTargets(root, '', [{ kind: 'folder', itemPath: 'Board', label: 'Board' }]);
+    expect(entries.find((e) => e.vaultRelPath === 'Board/Sub')?.kind).toBe('folder');
+    expect(entries.find((e) => e.vaultRelPath === 'Board/Sub/Leaf.md')?.kind).toBe('note');
+    expect(entries.find((e) => e.vaultRelPath === 'Board/Sub/Leaf.md')?.boardRelPath).toBe('Board/Sub');
+    expect(isVaultRelPathPending(root, 'Board/Sub')).toBe(true);
+    expect(isVaultRelPathPending(root, 'Board/Sub/Leaf.md')).toBe(true);
+  });
+
+  it('restoreEntry returns every entry id in the restore group', () => {
+    writeNote(root, 'A.md');
+    writeNote(root, 'B.md');
+    const { entries } = trashTargets(root, '', [
+      { kind: 'note', itemPath: 'A.md', label: 'A' },
+      { kind: 'note', itemPath: 'B.md', label: 'B' },
+    ]);
+    expect(entries).toHaveLength(2);
+    const restored = restoreEntry(entries[0]!.id);
+    expect(restored.restored).toBe(true);
+    expect(restored.restoredIds).toHaveLength(1);
+    expect(restored.restoredIds[0]).toBe(entries[0]!.id);
+    expect(isVaultRelPathPending(root, 'B.md')).toBe(true);
+  });
+
+  it('restoreEntry on a shared group restores every nested entry id', () => {
+    writeNote(root, 'Board/One.md');
+    writeNote(root, 'Board/Two.md');
+    const { entries } = trashTargets(root, '', [{ kind: 'folder', itemPath: 'Board', label: 'Board' }]);
+    const restored = restoreEntry(entries.find((e) => e.vaultRelPath === 'Board/One.md')!.id);
+    expect(restored.restored).toBe(true);
+    expect(restored.restoredIds.length).toBeGreaterThanOrEqual(3);
+    expect(isVaultRelPathPending(root, 'Board')).toBe(false);
+    expect(fs.existsSync(path.join(root, 'Board/Two.md'))).toBe(true);
+  });
+
+  it('emptyTrash only flushes the requested vault and leaves other vaults pending', async () => {
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), 'vb-notestrash-other-vault-'));
+    try {
+      writeNote(root, 'Here.md');
+      writeNote(other, 'There.md');
+      trashTargets(root, '', [{ kind: 'note', itemPath: 'Here.md', label: 'Here' }]);
+      trashTargets(other, '', [{ kind: 'note', itemPath: 'There.md', label: 'There' }]);
+      const { flushedGroupIds } = await emptyTrash(root);
+      expect(flushedGroupIds).toHaveLength(1);
+      expect(isVaultRelPathPending(root, 'Here.md')).toBe(false);
+      expect(isVaultRelPathPending(other, 'There.md')).toBe(true);
+      expect(mockTrashItem).toHaveBeenCalledTimes(1);
+      expect(mockTrashItem).toHaveBeenCalledWith(path.join(root, 'Here.md'));
+    } finally {
+      resetNotesTrashForTests();
+      fs.rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it('invalidatePendingUnderPath ignores changes in a different vault root', () => {
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), 'vb-notestrash-inval-other-'));
+    try {
+      writeNote(root, 'Solo.md');
+      const { entries } = trashTargets(root, '', [{ kind: 'note', itemPath: 'Solo.md', label: 'Solo' }]);
+      const touch = new Date(Date.parse(entries[0]!.deletedAt) + 60_000);
+      writeNote(other, 'Other.md');
+      fs.utimesSync(path.join(other, 'Other.md'), touch, touch);
+      invalidatePendingUnderPath(other, 'Other.md');
+      expect(isVaultRelPathPending(root, 'Solo.md')).toBe(true);
+    } finally {
+      fs.rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it('does not invalidate when the changed path is outside the pending subtree', () => {
+    writeNote(root, 'Board/Held.md');
+    writeNote(root, 'Loose.md');
+    trashTargets(root, '', [{ kind: 'folder', itemPath: 'Board', label: 'Board' }]);
+    const touch = new Date(Date.now() + 120_000);
+    fs.utimesSync(path.join(root, 'Loose.md'), touch, touch);
+    invalidatePendingUnderPath(root, 'Loose.md');
+    expect(isVaultRelPathPending(root, 'Board')).toBe(true);
+    expect(isVaultRelPathPending(root, 'Board/Held.md')).toBe(true);
+  });
+
+  it('flush drops only icons for the trashed subtree', async () => {
+    writeNote(root, 'Remove.md');
+    writeNote(root, 'Keep.md');
+    writeIconMap(root, { 'Remove.md': '🗑️', 'Keep.md': '📌' });
+    trashTargets(root, '', [{ kind: 'note', itemPath: 'Remove.md', label: 'Remove' }]);
+    await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
+    expect(readIconMap(root)).toEqual({ 'Keep.md': '📌' });
+  });
+
+  it('emptyTrash reports one flushed id per pending group in that vault', async () => {
+    writeNote(root, 'One.md');
+    writeNote(root, 'Two.md');
+    trashTargets(root, '', [{ kind: 'note', itemPath: 'One.md', label: 'One' }]);
+    trashTargets(root, '', [{ kind: 'note', itemPath: 'Two.md', label: 'Two' }]);
+    const { flushedGroupIds } = await emptyTrash(root);
+    expect(flushedGroupIds).toHaveLength(2);
+    expect(listPendingForVault(root)).toEqual([]);
+  });
+
+  it('after emptyTrash completes, restore is refused and the file is already gone from disk', async () => {
+    writeNote(root, 'Gone.md', 'bytes\n');
+    const { entries } = trashTargets(root, '', [{ kind: 'note', itemPath: 'Gone.md', label: 'Gone' }]);
+    await emptyTrash(root);
+    expect(restoreEntry(entries[0]!.id).restored).toBe(false);
+    expect(fs.existsSync(path.join(root, 'Gone.md'))).toBe(false);
+  });
+
+  it('trashTargets records folder vs note kind from disk type', () => {
+    fs.mkdirSync(path.join(root, 'CaseDir'), { recursive: true });
+    writeNote(root, 'CaseFile.md');
+    const folder = trashTargets(root, '', [{ kind: 'folder', itemPath: 'CaseDir', label: 'CaseDir' }]);
+    const note = trashTargets(root, '', [{ kind: 'note', itemPath: 'CaseFile.md', label: 'CaseFile' }]);
+    expect(folder.entries.some((e) => e.vaultRelPath === 'CaseDir' && e.kind === 'folder')).toBe(true);
+    expect(note.entries[0]!.kind).toBe('note');
+    resetNotesTrashForTests();
+  });
+
+  it('removes layout from the parent folder board when the nested item path spans segments', async () => {
+    writeNote(root, 'Arena/Set/Piece.md');
+    const { id } = patchLayout(root, 'Arena/Set', 'Piece.md', { x: 2, y: 2 });
+    flushPendingNotesBoardWrites(root);
+    writeNote(root, 'Arena/Other.md');
+    const otherId = patchLayout(root, 'Arena', 'Other.md', { x: 0, y: 0 }).id;
+    flushPendingNotesBoardWrites(root);
+    trashTargets(root, 'Arena/Set', [{ kind: 'note', itemPath: 'Piece.md', label: 'Piece' }]);
+    await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
+    expect(getBoard(root, 'Arena/Set').layout[`n:${id}`]).toBeUndefined();
+    expect(getBoard(root, 'Arena').layout[`n:${otherId}`]).toBeDefined();
   });
 
 });
