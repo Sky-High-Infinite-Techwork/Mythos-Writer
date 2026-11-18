@@ -15,10 +15,9 @@
  * On headless Linux (no real display), wrap with xvfb-run per PERFORMANCE.md §1:
  *   xvfb-run -a npm run perf:ui-runtime
  *
- * #1912: keystroke p95 and ambient fps floor gate when `UI_RUNTIME_GATE=1`
- * (budgets from CI calibration in PR PROOF). Default is report mode: log PASS/FAIL
- * vs PERFORMANCE.md but only sanity expects. Streaming-dropped-frame delta and
- * idle CPU stay report-first; PERF_UI_RUNTIME_BASELINE.json records all metrics.
+ * #1912 regression gates: keystroke p95 and ambient fps floor budgets from CI
+ * run 44326511710 (20× `--repeat-each`, `--retries=0`, shard 3). Streaming-dropped-
+ * frame delta and idle CPU stay report-first; PERF_UI_RUNTIME_BASELINE.json records all.
  */
 import fs from 'fs';
 import path from 'path';
@@ -48,9 +47,8 @@ import { writeMetricResult, printReportTable } from './ui-runtime/report';
 
 /** "Keystroke → paint under 16 ms with all panels open." — checked at p95 across N reps. */
 const KEYSTROKE_P95_TARGET_MS = 16;
-/** #1912 CI: max(2×p95, 1.25×max) over 20 shard-3 samples — set after calibration. */
-const KEYSTROKE_P95_BUDGET_MS = Number(process.env.UI_RUNTIME_KEYSTROKE_P95_MS ?? 120);
-const UI_RUNTIME_GATE = process.env.UI_RUNTIME_GATE === '1';
+/** CI #44326511710: max(2×p95, 1.25×max) over 20 keystroke samples → 135 ms. */
+const KEYSTROKE_P95_BUDGET_MS = 135;
 
 /**
  * "Idle CPU ~0%, GPU steady, no repaints while nothing moves." "~0%" isn't a
@@ -68,8 +66,8 @@ const IDLE_CPU_TARGET_PCT = 1;
  * i.e. at least 95% of sampled frames ran at 57fps or better.
  */
 const AMBIENT_FPS_FLOOR_TARGET = 57;
-/** #1912 CI: inverse budget from min fps floor over 20 shard-3 samples (see PR). */
-const AMBIENT_FPS_FLOOR_BUDGET = Number(process.env.UI_RUNTIME_AMBIENT_FLOOR_FPS ?? 27);
+/** CI #44326511710: inverse of min floor (20.0 fps) → min/1.25 → 16 fps. */
+const AMBIENT_FPS_FLOOR_BUDGET = 16;
 
 /**
  * "Typing with Writing Assistant + watcher live: no dropped frames." Read
@@ -127,9 +125,7 @@ test.describe('SKY-8217 metric 1 — keystroke-to-paint main-thread time', () =>
 
     expect(result.samples.length).toBeGreaterThan(0);
     expect(Number.isFinite(result.p95)).toBe(true);
-    if (UI_RUNTIME_GATE) {
-      expect(result.p95).toBeLessThan(KEYSTROKE_P95_BUDGET_MS);
-    }
+    expect(result.p95).toBeLessThan(KEYSTROKE_P95_BUDGET_MS);
   });
 });
 
@@ -238,9 +234,7 @@ test.describe('SKY-8217 metric 3 — ambient animation fps', () => {
 
     expect(stats.sampleCount).toBeGreaterThan(0);
     expect(Number.isFinite(stats.avgFps)).toBe(true);
-    if (UI_RUNTIME_GATE) {
-      expect(stats.p95Fps).toBeGreaterThanOrEqual(AMBIENT_FPS_FLOOR_BUDGET);
-    }
+    expect(stats.p95Fps).toBeGreaterThanOrEqual(AMBIENT_FPS_FLOOR_BUDGET);
   });
 });
 
