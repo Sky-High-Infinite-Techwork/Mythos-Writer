@@ -234,33 +234,36 @@ const BRIDGE_LISTENERS_PATH = path.join(FIXTURES_DIR, 'preload.bridge.listeners.
 
 type BridgeRecordedFixture = { recorded: Record<string, unknown>; singles: string[] };
 
-let bridgeRecordedCache: BridgeRecordedFixture | null = null;
+let bridgeRecordedSourcePath: string = BRIDGE_RECORDED_PATH;
+const bridgeRecordedCacheByPath = new Map<string, BridgeRecordedFixture>();
 let listenerFixtureCache: Record<string, ListenerFixtureRow> | null = null;
 
 function invalidateBridgeFixturesCache(): void {
-  bridgeRecordedCache = null;
+  bridgeRecordedCacheByPath.delete(BRIDGE_RECORDED_PATH);
   listenerFixtureCache = null;
 }
 
-function loadBridgeRecordedFixture(): BridgeRecordedFixture {
-  if (!fs.existsSync(BRIDGE_RECORDED_PATH)) {
+function loadBridgeRecordedFixture(recordedPath: string): BridgeRecordedFixture {
+  if (!fs.existsSync(recordedPath)) {
     return { recorded: {}, singles: [] };
   }
-  return JSON.parse(fs.readFileSync(BRIDGE_RECORDED_PATH, 'utf8')) as BridgeRecordedFixture;
+  return JSON.parse(fs.readFileSync(recordedPath, 'utf8')) as BridgeRecordedFixture;
 }
 
-function getBridgeRecordedPayloads(): Record<string, unknown> {
-  if (bridgeRecordedCache === null) {
-    bridgeRecordedCache = loadBridgeRecordedFixture();
-  }
-  return bridgeRecordedCache.recorded;
+function readBridgeRecordedFixtureAt(recordedPath: string): BridgeRecordedFixture {
+  const cached = bridgeRecordedCacheByPath.get(recordedPath);
+  if (cached !== undefined) return cached;
+  const loaded = loadBridgeRecordedFixture(recordedPath);
+  bridgeRecordedCacheByPath.set(recordedPath, loaded);
+  return loaded;
 }
 
-function getSingleArgInvokeSet(): Set<string> {
-  if (bridgeRecordedCache === null) {
-    bridgeRecordedCache = loadBridgeRecordedFixture();
-  }
-  return new Set(bridgeRecordedCache.singles);
+function getBridgeRecordedPayloads(recordedPath: string = bridgeRecordedSourcePath): Record<string, unknown> {
+  return readBridgeRecordedFixtureAt(recordedPath).recorded;
+}
+
+function getSingleArgInvokeSet(recordedPath: string = bridgeRecordedSourcePath): Set<string> {
+  return new Set(readBridgeRecordedFixtureAt(recordedPath).singles);
 }
 
 function getListenerFixture(): Record<string, ListenerFixtureRow> {
@@ -691,6 +694,11 @@ describe.skipIf(!!process.env.PRELOAD_BRIDGE_RECORD)('preload bridge', () => {
   });
 });
 
+function buildRecordedFixtureBody(entries: BridgeRecordedFixture): string {
+  const singles = [...entries.singles].sort((a, b) => a.localeCompare(b));
+  return JSON.stringify({ recorded: entries.recorded, singles }, null, 2);
+}
+
 async function writeBridgeListenerFixtureToDisk(
   targetPath: string = BRIDGE_LISTENERS_PATH,
 ): Promise<void> {
@@ -705,34 +713,46 @@ async function writeBridgeListenerFixtureToDisk(
 
 async function writeBridgeRecordedFixtureToDisk(
   targetPath: string = BRIDGE_RECORDED_PATH,
+  options?: { sourcePath?: string },
 ): Promise<string> {
-  const recorded: Record<string, unknown> = {};
-  const singles: string[] = [];
-  for (const row of FROZEN_CALLS) {
-    invokeMock.mockClear();
-    sendMock.mockClear();
-    const api = capturedWorlds[row.world];
-    const fn = getAtPath(api, row.path) as (...a: unknown[]) => unknown;
-    const spec = resolveCallSpec(row, fn);
-    const result = fn(...spec.args);
-    if (result && typeof (result as Promise<unknown>).then === 'function') await result;
-    const key = callKey(row);
-    if (sendMock.mock.calls.length) {
-      recorded[key] = firstIpcMockCall(sendMock)[1];
-    } else {
-      const invokeCall = firstIpcMockCall(invokeMock);
-      if (invokeCall.length === 1) {
-        singles.push(key);
+  const sourcePath = options?.sourcePath ?? targetPath;
+  const previousSourcePath = bridgeRecordedSourcePath;
+  bridgeRecordedSourcePath = sourcePath;
+  bridgeRecordedCacheByPath.delete(sourcePath);
+  try {
+    const recorded: Record<string, unknown> = {};
+    const singles: string[] = [];
+    for (const row of FROZEN_CALLS) {
+      invokeMock.mockClear();
+      sendMock.mockClear();
+      const api = capturedWorlds[row.world];
+      const fn = getAtPath(api, row.path) as (...a: unknown[]) => unknown;
+      const spec = resolveCallSpec(row, fn);
+      const result = fn(...spec.args);
+      if (result && typeof (result as Promise<unknown>).then === 'function') await result;
+      const key = callKey(row);
+      if (sendMock.mock.calls.length) {
+        recorded[key] = firstIpcMockCall(sendMock)[1];
       } else {
-        recorded[key] = invokeCall[1];
+        const invokeCall = firstIpcMockCall(invokeMock);
+        if (invokeCall.length === 1) {
+          singles.push(key);
+        } else {
+          recorded[key] = invokeCall[1];
+        }
       }
     }
+    const body = buildRecordedFixtureBody({ recorded, singles });
+    fs.writeFileSync(targetPath, body);
+    if (targetPath === BRIDGE_RECORDED_PATH) {
+      invalidateBridgeFixturesCache();
+    } else if (path.resolve(targetPath) === path.resolve(sourcePath)) {
+      bridgeRecordedCacheByPath.set(sourcePath, JSON.parse(body) as BridgeRecordedFixture);
+    }
+    return body;
+  } finally {
+    bridgeRecordedSourcePath = previousSourcePath;
   }
-  singles.sort();
-  const body = JSON.stringify({ recorded, singles }, null, 2);
-  fs.writeFileSync(targetPath, body);
-  if (targetPath === BRIDGE_RECORDED_PATH) invalidateBridgeFixturesCache();
-  return body;
 }
 
 describe('preload bridge recorder proofs', () => {
@@ -744,25 +764,46 @@ describe('preload bridge recorder proofs', () => {
       const second = await writeBridgeRecordedFixtureToDisk(outPath);
       expect(second).toBe(first);
       expect(fs.readFileSync(outPath, 'utf8')).toBe(first);
-      const parsed = JSON.parse(first) as BridgeRecordedFixture;
-      const singlesLex = [...parsed.singles].sort((a: string, b: string) => a.localeCompare(b));
-      expect(parsed.singles).toEqual(singlesLex);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
+  it('buildRecordedFixtureBody sorts singles regardless of input order', () => {
+    const recorded = { 'api.sttStart': null };
+    const forward = ['api.agentSessions.list', 'api.sttStart', 'api.voiceStop'];
+    const reverse = [...forward].reverse();
+    const forwardBody = buildRecordedFixtureBody({ recorded, singles: forward });
+    const reverseBody = buildRecordedFixtureBody({ recorded, singles: reverse });
+    expect(reverseBody).toBe(forwardBody);
+    expect(JSON.parse(forwardBody).singles).toEqual(
+      [...forward].sort((a, b) => a.localeCompare(b)),
+    );
+  });
+
   it('bootstraps recorded fixture when file is absent', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-bridge-record-'));
     const outPath = path.join(tmpDir, path.basename(BRIDGE_RECORDED_PATH));
+    const readSpy = vi.spyOn(fs, 'readFileSync');
     try {
       expect(fs.existsSync(outPath)).toBe(false);
-      const bootstrap = await writeBridgeRecordedFixtureToDisk(outPath);
+      readSpy.mockClear();
+      const bootstrap = await writeBridgeRecordedFixtureToDisk(outPath, { sourcePath: outPath });
+      const repoReads = readSpy.mock.calls.filter(
+        (call) => path.resolve(String(call[0])) === path.resolve(BRIDGE_RECORDED_PATH),
+      );
+      expect(repoReads).toHaveLength(0);
       expect(fs.existsSync(outPath)).toBe(true);
       expect(fs.readFileSync(outPath, 'utf8')).toBe(bootstrap);
-      const again = await writeBridgeRecordedFixtureToDisk(outPath);
+      readSpy.mockClear();
+      const again = await writeBridgeRecordedFixtureToDisk(outPath, { sourcePath: outPath });
+      const repoReadsAgain = readSpy.mock.calls.filter(
+        (call) => path.resolve(String(call[0])) === path.resolve(BRIDGE_RECORDED_PATH),
+      );
+      expect(repoReadsAgain).toHaveLength(0);
       expect(again).toBe(bootstrap);
     } finally {
+      readSpy.mockRestore();
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
