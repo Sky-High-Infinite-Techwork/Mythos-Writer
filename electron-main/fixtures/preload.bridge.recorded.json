@@ -180,7 +180,7 @@
     "api.chapterCreate": "bridge-sample",
     "api.chooseVaultFolder": {
       "title": "/tmp/bridge-sample",
-      "defaultPath": "bridge-id-b"
+      "defaultPath": "/tmp/bridge-sample-notes"
     },
     "api.continuityMatchSelection": {
       "selectedText": "bridge-id-a",
@@ -197,7 +197,7 @@
     },
     "api.createBlankVault": {
       "targetPath": "/tmp/bridge-sample",
-      "registrationToken": "bridge-id-b"
+      "registrationToken": "/tmp/bridge-sample-notes"
     },
     "api.createVaultFromOptions": "/tmp/bridge-sample",
     "api.customFieldsSet": {
@@ -369,7 +369,7 @@
     "api.importObsidianVault": "/tmp/bridge-sample",
     "api.importVault": {
       "sourcePath": "/tmp/bridge-sample",
-      "registrationToken": "bridge-id-b"
+      "registrationToken": "/tmp/bridge-sample-notes"
     },
     "api.importVaultCommit": {
       "sourcePath": {
@@ -435,11 +435,11 @@
     },
     "api.moveNotesVault": {
       "fromPath": "/tmp/bridge-sample",
-      "toPath": "bridge-id-b"
+      "toPath": "/tmp/bridge-sample-notes"
     },
     "api.moveVault": {
       "fromPath": "/tmp/bridge-sample",
-      "toPath": "bridge-id-b"
+      "toPath": "/tmp/bridge-sample-notes"
     },
     "api.navigatorReportScene": {
       "sceneId": {
@@ -530,11 +530,11 @@
     },
     "api.notesTagMerge": {
       "sourceTag": "/tmp/bridge-sample",
-      "targetTag": "bridge-id-b"
+      "targetTag": "/tmp/bridge-sample-notes"
     },
     "api.notesTagRename": {
       "oldTag": "/tmp/bridge-sample",
-      "newTag": "bridge-id-b"
+      "newTag": "/tmp/bridge-sample-notes"
     },
     "api.notesThumbGet": {
       "src": {
@@ -569,7 +569,7 @@
     "api.notesVaultRegistryCreate": "/tmp/bridge-sample",
     "api.notesVaultRegistryRename": {
       "id": "/tmp/bridge-sample",
-      "displayName": "bridge-id-b"
+      "displayName": "/tmp/bridge-sample-notes"
     },
     "api.notesVaultRegistrySetActive": {
       "id": {
@@ -583,19 +583,19 @@
     },
     "api.notesVaultSetIcon": {
       "path": "/tmp/bridge-sample",
-      "icon": "bridge-id-b",
+      "icon": "/tmp/bridge-sample-notes",
       "color": "bridge-id-c"
     },
     "api.obsidianDryRun": {
       "sourcePath": "/tmp/bridge-sample",
-      "registrationToken": "bridge-id-b"
+      "registrationToken": "/tmp/bridge-sample-notes"
     },
     "api.obsidianPickFolderByPath": {
       "sourcePath": "/tmp/bridge-sample"
     },
     "api.obsidianRegister": {
       "sourcePath": "/tmp/bridge-sample",
-      "registrationToken": "bridge-id-b"
+      "registrationToken": "/tmp/bridge-sample-notes"
     },
     "api.onboardingComplete": "bridge-sample",
     "api.onboardingDetectMythosVault": {
@@ -672,7 +672,7 @@
     },
     "api.reorderNotesVault": {
       "parentPath": "/tmp/bridge-sample",
-      "orderedPaths": "bridge-id-b"
+      "orderedPaths": "/tmp/bridge-sample-notes"
     },
     "api.restoreAppData": {
       "confirmed": {
@@ -731,7 +731,7 @@
     "api.sceneSetTags": "bridge-sample",
     "api.searchVault": {
       "query": "/tmp/bridge-sample",
-      "scope": "bridge-id-b",
+      "scope": "/tmp/bridge-sample-notes",
       "limit": "bridge-id-c",
       "filterTags": "bridge-id-d"
     },
@@ -810,11 +810,11 @@
     "api.storyVaultRegistryCreate": "/tmp/bridge-sample",
     "api.storyVaultRegistryPair": {
       "storyVaultId": "/tmp/bridge-sample",
-      "notesVaultId": "bridge-id-b"
+      "notesVaultId": "/tmp/bridge-sample-notes"
     },
     "api.storyVaultRegistryRename": {
       "id": "/tmp/bridge-sample",
-      "displayName": "bridge-id-b"
+      "displayName": "/tmp/bridge-sample-notes"
     },
     "api.storyVaultRegistrySetActive": {
       "id": {
@@ -1009,13 +1009,13 @@
     "api.vaultImportRun": "/tmp/bridge-sample",
     "api.vaultImportScan": {
       "kind": "/tmp/bridge-sample",
-      "srcPath": "bridge-id-b"
+      "srcPath": "/tmp/bridge-sample-notes"
     },
     "api.vaultLocalFolderMove": "/tmp/bridge-sample",
     "api.vaultSeedApplyBoth": "/tmp/bridge-sample",
     "api.vaultSetPaths": {
       "storyVaultPath": "/tmp/bridge-sample",
-      "notesVaultPath": "/tmp/bridge-sample",
+      "notesVaultPath": "/tmp/bridge-sample-notes",
       "seedMode": "default",
       "storyVaultToken": "bridge-token"
     },
@@ -1100,11 +1100,11 @@
     },
     "api.writeNotesVault": {
       "path": "/tmp/bridge-sample",
-      "content": "bridge-id-b"
+      "content": "/tmp/bridge-sample-notes"
     },
     "api.writeVault": {
       "path": "/tmp/bridge-sample",
-      "content": "bridge-id-b"
+      "content": "/tmp/bridge-sample-notes"
     },
     "api.writingAssistant": {
       "manuscript": "bridge-id-a",
@@ -1151,7 +1151,7 @@
     },
     "mythosIPC.writeVaultFile": {
       "path": "/tmp/bridge-sample",
-      "content": "bridge-id-b"
+      "content": "/tmp/bridge-sample-notes"
     },
     "mythosIPC.writingAssistant": {
       "manuscript": "bridge-id-a",

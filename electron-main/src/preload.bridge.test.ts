@@ -111,6 +111,7 @@ const SAMPLE = {
   str: 'bridge-sample',
   str2: 'bridge-sample-2',
   path: '/tmp/bridge-sample',
+  path2: '/tmp/bridge-sample-notes',
   id: 'bridge-id',
   /** Distinct positional ids — order-sensitive forwarding must not reuse the same value. */
   idA: 'bridge-id-a',
@@ -149,7 +150,7 @@ const BRIDGE_ARG_OVERRIDES: Record<string, BridgeArgOverride> = {
     args: [SAMPLE.str, [{ role: 'user' as const, content: 'hi' }]],
   },
   'api.vaultSetPaths': {
-    args: [SAMPLE.path, SAMPLE.path, { seedMode: 'default' as const, storyVaultToken: SAMPLE.token }],
+    args: [SAMPLE.path, SAMPLE.path2, { seedMode: 'default' as const, storyVaultToken: SAMPLE.token }],
   },
   'api.importHub.previewDropped': { args: [SAMPLE.file] },
   'api.importHub.commit': { args: [SAMPLE.token, { story: true }] },
@@ -276,6 +277,7 @@ function defaultArgsFor(row: ExposedRow, fn: (...args: unknown[]) => unknown): u
     row.channel.startsWith('notesThumb:');
   return Array.from({ length: n }, (_, i) => {
     if (pathFirst && i === 0) return SAMPLE.path;
+    if (pathFirst && i === 1) return SAMPLE.path2;
     return ORDERED_IDS[i] ?? SAMPLE.str;
   });
 }
@@ -303,9 +305,7 @@ function resolveCallSpec(row: ExposedRow, fn: (...args: unknown[]) => unknown): 
       : 'invoke');
   const singleArgInvoke =
     override?.singleArgInvoke ?? (op === 'send' ? SINGLE_ARG_SEND.has(key) : SINGLE_ARG_INVOKE.has(key));
-  const payload =
-    override?.payload ??
-    (singleArgInvoke ? undefined : op === 'send' ? BRIDGE_RECORDED_PAYLOADS[key] : BRIDGE_RECORDED_PAYLOADS[key]);
+  const payload = override?.payload ?? (singleArgInvoke ? undefined : BRIDGE_RECORDED_PAYLOADS[key]);
   return { args, payload, op, singleArgInvoke };
 }
 
@@ -476,6 +476,16 @@ describe('preload bridge', () => {
     expect((capturedWorlds.api as { isPackaged: boolean }).isPackaged).toBe(false);
   });
 
+  it('vaultSetPaths golden encodes distinct story vs notes paths (red-on-revert)', () => {
+    const golden = BRIDGE_RECORDED_PAYLOADS['api.vaultSetPaths'] as {
+      storyVaultPath: string;
+      notesVaultPath: string;
+    };
+    expect(golden.storyVaultPath).toBe(SAMPLE.path);
+    expect(golden.notesVaultPath).toBe(SAMPLE.path2);
+    expect(golden.storyVaultPath).not.toBe(golden.notesVaultPath);
+  });
+
   it('no-arg listener table rejects raw ipcRenderer.on(channel, cb) wiring (red-on-revert)', () => {
     const key = 'api.onFlushBeforeQuit';
     const cb = vi.fn<(arg?: unknown) => void>();
@@ -516,7 +526,7 @@ describe.skipIf(!process.env.PRELOAD_BRIDGE_RECORD)('preload bridge recorder', (
   });
 });
 
-let mutatedPreloadPathForCleanup: string | undefined;
+let mutatedPreloadDirForCleanup: string | undefined;
 
 function writeMutatedPreloadToTemp(channelNeedle: string, channelReplacement: string): string {
   const original = fs.readFileSync(path.join(SRC_DIR, 'preload.ts'), 'utf8');
@@ -527,12 +537,10 @@ function writeMutatedPreloadToTemp(channelNeedle: string, channelReplacement: st
       const abs = path.join(SRC_DIR, rel).split(path.sep).join('/');
       return `from '${abs}'`;
     });
-  const outPath = path.join(
-    os.tmpdir(),
-    `mythos-bridge-mutated-preload-${process.pid}-${Date.now()}.ts`,
-  );
-  fs.writeFileSync(outPath, mutated);
-  mutatedPreloadPathForCleanup = outPath;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-bridge-mut-'));
+  const outPath = path.join(dir, 'preload.mutated.ts');
+  fs.writeFileSync(outPath, mutated, { flag: 'wx' });
+  mutatedPreloadDirForCleanup = dir;
   return outPath;
 }
 
@@ -567,12 +575,8 @@ async function assertReadVaultChannelContractUnderPreload(moduleHref: string): P
 
 describe('preload bridge mutation sentinel', () => {
   afterAll(() => {
-    if (mutatedPreloadPathForCleanup && fs.existsSync(mutatedPreloadPathForCleanup)) {
-      fs.unlinkSync(mutatedPreloadPathForCleanup);
-    }
-    const staleFixture = path.join(FIXTURES_DIR, 'bridge-mutated-preload.ts');
-    if (fs.existsSync(staleFixture)) {
-      fs.unlinkSync(staleFixture);
+    if (mutatedPreloadDirForCleanup) {
+      fs.rmSync(mutatedPreloadDirForCleanup, { recursive: true, force: true });
     }
   });
 
