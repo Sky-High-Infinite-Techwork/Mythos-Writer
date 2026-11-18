@@ -109,7 +109,8 @@ test('past chats picker is a dropdown inside the hub header card', async () => {
       path: test.info().outputPath('plan058-fid-r3-past-open.png'),
     });
 
-    await page.keyboard.press('Escape');
+    // Escape is handled on the past-chats region (FD-9 #3), not document-wide.
+    await card.getByTestId('ahp-past-chats').press('Escape');
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');
     await expect(page.getByTestId('ahp-partner-history-link')).toHaveCount(0);
     await expect(toggle).toBeFocused();
