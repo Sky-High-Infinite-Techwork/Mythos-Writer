@@ -204,63 +204,7 @@ test('TC-PROV-02: Test connection with mocked local provider shows success', asy
 // Slice C Soft-FAIL: four classic per-agent Settings cards (and their
 // "Use different provider" overrides) are unmounted. Hand models live on
 // Writing partner; provider buckets live on Model & keys.
-test.skip('TC-PROV-03: "Use different provider for this agent" toggle shows inline provider form', async () => {
-  // Open settings
-  await page.locator('.app-menu-gear-btn').click();
-  await expect(page.locator('.settings-title')).toBeVisible({ timeout: 5_000 });
-  // SKY-10668: the panel now opens on Appearance — go to the AI Agents page.
-  await page.locator('[data-testid="settings-cat-agents"]').click();
 
-  // Find the Brainstorm agent's provider override toggle. The native
-  // checkbox itself is visually hidden (opacity:0; width/height:0) — the
-  // visible clickable control is the sibling `.settings-toggle-track` span
-  // inside the same `<label>` (SettingsPanel.css `.settings-toggle input`).
-  const toggleInput = page.getByLabel(/enable brainstorm provider override/i);
-  const toggleTrack = toggleInput.locator('xpath=following-sibling::span[contains(@class, "settings-toggle-track")]');
-  await expect(toggleInput).not.toBeChecked();
-
-  // Toggle it on
-  await toggleTrack.click();
-  await expect(toggleInput).toBeChecked();
-
-  // Inline provider form should now be visible
-  await expect(page.getByLabel('Provider for brainstorm')).toBeVisible();
-  await expect(page.getByLabel('Model for brainstorm')).toBeVisible();
-
-  // Toggle off
-  await toggleTrack.click();
-  await expect(toggleInput).not.toBeChecked();
-  await expect(page.getByLabel('Provider for brainstorm')).not.toBeVisible();
-
-  // Close settings
-  await page.click('.settings-close');
-});
-
-test.skip('TC-PROV-04: Non-Anthropic global provider shows text input for per-agent model', async () => {
-  // App was seeded with Ollama → per-agent model should be text input
-  await page.locator('.app-menu-gear-btn').click();
-  await expect(page.locator('.settings-title')).toBeVisible({ timeout: 5_000 });
-  // SKY-10668: the panel now opens on Appearance — go to the AI Agents page.
-  await page.locator('[data-testid="settings-cat-agents"]').click();
-
-  // Writing Assistant model input should be a text input (not a select)
-  const waModel = page.getByLabel('Writing Coach model');
-  await expect(waModel).toHaveAttribute('type', 'text');
-
-  // Brainstorm model input should be text input
-  const brainstormModel = page.getByLabel('Brainstorm Agent model');
-  await expect(brainstormModel).toHaveAttribute('type', 'text');
-
-  // S2-6: Archive Agent model picker removed with Archivist settings card.
-  await expect(page.getByLabel('Archive Agent model')).toHaveCount(0);
-
-  // Beta Reader model input should be text input
-  const betaModel = page.getByLabel('Beta Reader model');
-  await expect(betaModel).toHaveAttribute('type', 'text');
-
-  // Close settings
-  await page.click('.settings-close');
-});
 
 test('TC-PROV-05: switching global provider fills Base URL with that provider\'s default', async () => {
   // App was seeded with Ollama (http://127.0.0.1:11434/v1) — switch to llama.cpp
@@ -362,42 +306,6 @@ test('TC-PROV-07: legacy API Key section only renders for providers that need on
 });
 
 // Slice C Soft-FAIL: Writing Coach per-agent Model field removed with AgentsSection.
-test.skip('TC-PROV-08: no-override agent Model field inherits & live-tracks the provider Default model', async () => {
-  await page.locator('.app-menu-gear-btn').click();
-  await expect(page.locator('.settings-title')).toBeVisible({ timeout: 5_000 });
-  // SKY-10668: the panel now opens on Appearance — go to the AI Agents page.
-  await page.locator('[data-testid="settings-cat-agents"]').click();
-
-  await page.locator('[data-testid="mk-prov-ollama"]').click();
-
-  const providerModelInput = page.getByLabel('Default model for this provider');
-  const waModel = page.getByLabel('Writing Coach model');
-
-  // SKY-11355: "no override" is now an explicit empty-string "Default"
-  // sentinel, not a copy of the provider's model string — the visible value
-  // stays '' and the resolved model surfaces via the placeholder instead.
-  await waModel.fill('');
-  await expect(waModel).toHaveValue('');
-
-  // The field must reflect the provider's Default model instead of sitting
-  // blank/stale (SKY-11219 AC-3).
-  await providerModelInput.fill('llama3-70b-instruct');
-  await expect(waModel).toHaveValue('');
-  await expect(waModel).toHaveAttribute('placeholder', 'Default: llama3-70b-instruct');
-
-  // Live-tracks: editing the provider default again updates the agent field's
-  // placeholder, since no override was ever typed into it.
-  await providerModelInput.fill('mixtral-8x7b');
-  await expect(waModel).toHaveAttribute('placeholder', 'Default: mixtral-8x7b');
-
-  // Once the user types their own value into the agent field, it wins over
-  // the provider default and stops tracking further edits.
-  await waModel.fill('custom-agent-only-model');
-  await providerModelInput.fill('yet-another-provider-default');
-  await expect(waModel).toHaveValue('custom-agent-only-model');
-
-  await page.click('.settings-close');
-});
 
 // ─── TC-PROV-09: SKY-11219 AC-4 — Base URL edit debounce re-fetch ─────────────
 //
