@@ -68,7 +68,7 @@ function turnsForModelHistory(turns: AgentSessionTurn[], retryPrompt: string | n
   if (!retryPrompt) {
     return turns.slice(-MAX_HISTORY_TURNS);
   }
-  const trimmed = [...work];
+  const trimmed = [...turns];
   const last = trimmed.at(-1);
   if (last?.role === 'agent' && last.text.includes(RESPONSE_INCOMPLETE_SUFFIX)) {
     trimmed.pop();
