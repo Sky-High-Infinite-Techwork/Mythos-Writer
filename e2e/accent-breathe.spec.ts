@@ -435,10 +435,12 @@ test.describe.serial('#1774 Accent breathe', () => {
     await removeProxy();
     await client.detach().catch(() => {});
     const ticks = 4000 / TICK_MS;
-    const onRecalcMs = Math.min(on1.recalcStyleMs, on2.recalcStyleMs);
-    const offRecalcMs = Math.min(off1.recalcStyleMs, off2.recalcStyleMs);
-    const perTickRecalcMs = (onRecalcMs - offRecalcMs) / ticks;
-    const perChangeRecalcMs = (probe.recalcStyleMs - offRecalcMs) / ticks;
+    const recalcPair1Ms = on1.recalcStyleMs - off1.recalcStyleMs;
+    const recalcPair2Ms = on2.recalcStyleMs - off2.recalcStyleMs;
+    const onOffRecalcMs = Math.min(recalcPair1Ms, recalcPair2Ms);
+    const perTickRecalcMs = onOffRecalcMs / ticks;
+    // Probe runs immediately after the second OFF window (off2); pair it to off2.
+    const perChangeRecalcMs = (probe.recalcStyleMs - off2.recalcStyleMs) / ticks;
 
     // eslint-disable-next-line no-console
     console.log(
@@ -446,7 +448,7 @@ test.describe.serial('#1774 Accent breathe', () => {
         `RecalcStyle=${on1.recalcStyleMs.toFixed(1)}/${on2.recalcStyleMs.toFixed(1)}ms Layout=${on1.layoutCount}\n` +
       `[#1774 perf] OFF ${fmt(off1.stats)} | 2nd ${fmt(off2.stats)} distinct--b1=${off1.distinct}/${off2.distinct} ` +
         `RecalcStyle=${off1.recalcStyleMs.toFixed(1)}/${off2.recalcStyleMs.toFixed(1)}ms Layout=${off1.layoutCount}\n` +
-      `[#1774 perf] delta RecalcStyle=${(onRecalcMs - offRecalcMs).toFixed(1)}ms (best windows) ` +
+      `[#1774 perf] delta RecalcStyle=${onOffRecalcMs.toFixed(1)}ms (best pair on−off) ` +
         `(${perTickRecalcMs.toFixed(2)}ms/tick over ${ticks} ticks, +${PROXY_N} proxy elements) ` +
         `Layout=${on1.layoutCount - off1.layoutCount}\n` +
       `[#1774 perf] baseline one root-token change=${perChangeRecalcMs.toFixed(2)}ms ` +
