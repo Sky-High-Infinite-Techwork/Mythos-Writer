@@ -3899,8 +3899,8 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
     // Auto-navigate to the newly created scene so the editor opens immediately.
     handleSelectScene(scene, chapter, story);
     setViewDepth('scene');
-    window.api?.writeVault?.(scene.path, blocksToMarkdown(scene)).catch(() => {});
-  }, [updateManifest, requestText, handleSelectScene, setViewDepth]);
+    void persistSceneMarkdown(scene);
+  }, [updateManifest, requestText, handleSelectScene, setViewDepth, persistSceneMarkdown]);
 
   // SKY-11213: Scene Crafter "Create Scene" — creates a scene directly from
   // Setup fields without an AI draft. Uses the active story/chapter context.
@@ -3961,8 +3961,8 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
     handleSetView('kanban');
     // Select the scene so Structure / Scenes sidebar see it immediately.
     handleSelectScene(scene, { ...chapter, scenes: [...chapter.scenes, scene] }, workingStory);
-    window.api?.writeVault?.(scene.path, blocksToMarkdown(scene)).catch(() => {});
-  }, [selectedStory, selectedChapter, updateManifest, handleSelectScene, handleTabChange, handleSetView]);
+    void persistSceneMarkdown(scene);
+  }, [selectedStory, selectedChapter, updateManifest, handleSelectScene, handleTabChange, handleSetView, persistSceneMarkdown]);
 
   // SKY-10917: Story Navigator right-click "Delete scene…" — the tree had no
   // remove path at all before this. Scoped to story.chapters like
@@ -4069,9 +4069,7 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
       id: storyId, title: title.trim() || 'Untitled Story', path: `stories/${storyId}`,
       parts: [part], chapters: [chapter], createdAt: stamp, updatedAt: stamp,
     };
-    try {
-      await window.api?.writeVault?.(scene.path, blocksToMarkdown(scene));
-    } catch { /* the debounced manifest write proceeds; scene:save re-creates the file */ }
+    await persistSceneMarkdown(scene);
     if (linkedPlanNoteIds.length > 0) {
       const linkLines = linkedPlanNoteIds.map((id) => `[[${id}]]`).join('\n');
       try {
@@ -4086,7 +4084,7 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
     setViewDepth('book');
     caretSeqRef.current += 1;
     setManuscriptCaretRequest({ blockId, seq: caretSeqRef.current });
-  }, [stories, updateManifest, handleSelectScene, handleNavSectionChange, setViewDepth]);
+  }, [stories, updateManifest, handleSelectScene, handleNavSectionChange, setViewDepth, persistSceneMarkdown]);
 
   const createStory = useCallback(async () => {
     openNewStoryModal();

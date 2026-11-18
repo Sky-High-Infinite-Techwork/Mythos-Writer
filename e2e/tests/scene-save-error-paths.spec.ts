@@ -27,6 +27,10 @@ const SEED_PROSE_TWO = 'Harbor mist rolled in.';
 /** RichTextEditor debounce is 800ms; allow headroom under CI repetition load. */
 const AUTOSAVE_WAIT_MS = 1_500;
 const SAVE_ERROR_BANNER_TIMEOUT_MS = 12_000;
+const EDITOR_DEBOUNCE_MS = 800;
+const SAVE_INDICATOR_DELAY_MS = 1_200;
+/** Time after typing when a successful save would show \"Saved ✓\" in focus chrome. */
+const SAVE_OK_VISIBLE_WAIT_MS = EDITOR_DEBOUNCE_MS + SAVE_INDICATOR_DELAY_MS + 400;
 
 function seedUserData(userData: string, vaultDir: string, notesVaultDir: string): void {
   fs.mkdirSync(userData, { recursive: true });
@@ -164,7 +168,6 @@ function sceneBody(scenePath: string): string {
 test.describe('scene save error paths (#1904)', () => {
   test('TC-SE-01: read-only scene file surfaces save error, keeps editor text, recovers on retry', async () => {
     test.skip(process.platform === 'win32', 'read-only chmod assertion runs on Linux CI');
-    test.skip(typeof process.getuid === 'function' && process.getuid() === 0, 'chmod W_OK check cannot fail as root');
 
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-save-err-ro-'));
     const userData = path.join(tmpRoot, 'user-data');
@@ -199,6 +202,7 @@ test.describe('scene save error paths (#1904)', () => {
     await expect(banner).toBeVisible({ timeout: SAVE_ERROR_BANNER_TIMEOUT_MS });
     await expect(banner).toContainText(SCENE_ONE);
     await expect(banner).toContainText('Your text is still in the editor');
+    await page.waitForTimeout(SAVE_OK_VISIBLE_WAIT_MS);
     await expect(page.locator('.focus-save-ok')).toHaveCount(0);
     expect(sceneBody(sceneOnePath)).not.toContain(typed.trim());
 
@@ -206,6 +210,7 @@ test.describe('scene save error paths (#1904)', () => {
     fs.chmodSync(sceneOnePath, priorFileMode | 0o200);
     await banner.getByRole('button', { name: 'Retry' }).click();
     await expect(banner).toHaveCount(0, { timeout: 10_000 });
+    expect(sceneBody(sceneOnePath)).toContain(typed.trim());
 
     await surface.click();
     await page.keyboard.insertText(' Second pass.');
@@ -217,8 +222,35 @@ test.describe('scene save error paths (#1904)', () => {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  test('TC-SE-02: vault folder removed while scene is open — visible error, no crash', async () => {
+  test('TC-SE-02a: Story Vault folder removed while scene is open — vault rescaffolds, text saves, no banner', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-save-err-vault-gone-'));
+    const userData = path.join(tmpRoot, 'user-data');
+    const bundle = path.join(tmpRoot, 'Save Error Vault');
+    const { vaultRoot, sceneOnePath } = seedV2Vault(bundle);
+    seedUserData(userData, vaultRoot, path.join(bundle, 'Notes Vault'));
+
+    const app = await launchApp(userData);
+    const page = await firstWindow(app);
+    await openScene(page, SCENE_ONE, SEED_PROSE_ONE);
+
+    fs.rmSync(vaultRoot, { recursive: true, force: true });
+
+    const typed = ' Vault removed marker.';
+    const surface = page.locator('.ProseMirror').first();
+    await surface.click();
+    await page.keyboard.insertText(typed);
+    await page.waitForTimeout(AUTOSAVE_WAIT_MS + 500);
+    await expect(page.getByTestId('scene-save-warning')).toHaveCount(0);
+    expect(fs.existsSync(vaultRoot)).toBe(true);
+    expect(sceneBody(sceneOnePath)).toContain(typed.trim());
+    await expect(page.locator('.desktop-shell')).toBeVisible();
+
+    await app.close();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  test('TC-SE-02b: unwritable bundle parent while scene open — save error banner, no crash', async () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-save-err-bundle-ro-'));
     const userData = path.join(tmpRoot, 'user-data');
     const bundle = path.join(tmpRoot, 'Save Error Vault');
     const { vaultRoot } = seedV2Vault(bundle);
@@ -229,12 +261,11 @@ test.describe('scene save error paths (#1904)', () => {
     await openScene(page, SCENE_ONE, SEED_PROSE_ONE);
 
     fs.rmSync(vaultRoot, { recursive: true, force: true });
-    // Without this, ensureVaultDir can re-scaffold an empty vault on the next write.
     fs.chmodSync(bundle, 0o555);
 
     const surface = page.locator('.ProseMirror').first();
     await surface.click();
-    await page.keyboard.insertText(' After vault gone.');
+    await page.keyboard.insertText(' After bundle locked.');
     await page.waitForTimeout(900);
     const banner = page.getByTestId('scene-save-warning');
     await expect(banner).toBeVisible({ timeout: SAVE_ERROR_BANNER_TIMEOUT_MS });
