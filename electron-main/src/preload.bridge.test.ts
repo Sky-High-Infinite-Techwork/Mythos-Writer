@@ -40,10 +40,12 @@ const FROZEN_CALLS = FROZEN_IPC.filter((row) => !isListenerPath(row.path));
 // ─── Mock electron (capture bridge + record IPC) ─────────────────────────────
 
 const harness = vi.hoisted(() => {
-  const invokeMock = vi.fn(async (_channel: string, _payload?: unknown) => ({ ok: true, data: null }));
-  const sendMock = vi.fn((_channel: string, _payload?: unknown) => undefined);
-  const onMock = vi.fn((_channel: string, _handler: (...evt: unknown[]) => void) => undefined);
-  const removeListenerMock = vi.fn((_channel: string, _handler: (...evt: unknown[]) => void) => undefined);
+  const invokeMock = vi.fn<(...args: unknown[]) => Promise<{ ok: true; data: null }>>(
+    async () => ({ ok: true, data: null }),
+  );
+  const sendMock = vi.fn<(...args: unknown[]) => void>(() => undefined);
+  const onMock = vi.fn<(...args: unknown[]) => void>(() => undefined);
+  const removeListenerMock = vi.fn<(...args: unknown[]) => void>(() => undefined);
   const capturedWorlds: Record<string, unknown> = {};
   return { invokeMock, sendMock, onMock, removeListenerMock, capturedWorlds };
 });
@@ -57,11 +59,18 @@ vi.mock('electron', () => ({
     },
   },
   ipcRenderer: {
-    invoke: (channel: string, payload?: unknown) => harness.invokeMock(channel, payload),
-    send: (channel: string, payload?: unknown) => harness.sendMock(channel, payload),
-    on: (channel: string, handler: (...evt: unknown[]) => void) => harness.onMock(channel, handler),
-    removeListener: (channel: string, handler: (...evt: unknown[]) => void) =>
-      harness.removeListenerMock(channel, handler),
+    invoke: (...args: unknown[]) => {
+      harness.invokeMock(...args);
+    },
+    send: (...args: unknown[]) => {
+      harness.sendMock(...args);
+    },
+    on: (...args: unknown[]) => {
+      harness.onMock(...args);
+    },
+    removeListener: (...args: unknown[]) => {
+      harness.removeListenerMock(...args);
+    },
   },
   webUtils: {
     getPathForFile: (file: File) => `/mock/${file.name}`,
@@ -109,6 +118,13 @@ const SAMPLE = {
   str2: 'bridge-sample-2',
   path: '/tmp/bridge-sample',
   id: 'bridge-id',
+  /** Distinct positional ids — order-sensitive forwarding must not reuse the same value. */
+  idA: 'bridge-id-a',
+  idB: 'bridge-id-b',
+  idC: 'bridge-id-c',
+  idD: 'bridge-id-d',
+  idE: 'bridge-id-e',
+  idF: 'bridge-id-f',
   num: 7,
   bool: true,
   obj: { bridge: true },
@@ -191,6 +207,8 @@ const BRIDGE_ARG_OVERRIDES: Record<string, BridgeArgOverride> = {
   'api.tagsBulkApply': {
     args: [[SAMPLE.id], 'scene' as const, [SAMPLE.str], [SAMPLE.str2]],
   },
+  'api.obsidianPickFolderByPath': { args: [SAMPLE.path] },
+  'api.storyImportPickFile': { args: ['docx' as const] },
 };
 
 const SINGLE_ARG_SEND = new Set(['api.sttStart', 'api.sttStop', 'api.notifyFlushBeforeQuitDone']);
@@ -380,27 +398,27 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     "path": "/tmp/bridge-sample"
   },
   "api.draftsCreate": {
-    "sceneId": "bridge-id",
-    "content": "bridge-id",
-    "label": "bridge-id"
+    "sceneId": "bridge-id-a",
+    "content": "bridge-id-b",
+    "label": "bridge-id-c"
   },
   "api.draftsDelete": {
-    "snapshotId": "bridge-id"
+    "snapshotId": "bridge-id-a"
   },
   "api.draftsLabel": {
-    "snapshotId": "bridge-id",
-    "label": "bridge-id"
+    "snapshotId": "bridge-id-a",
+    "label": "bridge-id-b"
   },
   "api.draftsList": {
-    "sceneId": "bridge-id"
+    "sceneId": "bridge-id-a"
   },
   "api.draftsPreview": {
-    "snapshotId": "bridge-id"
+    "snapshotId": "bridge-id-a"
   },
   "api.draftsRestore": {
-    "snapshotId": "bridge-id",
-    "sceneId": "bridge-id",
-    "currentContent": "bridge-id"
+    "snapshotId": "bridge-id-a",
+    "sceneId": "bridge-id-b",
+    "currentContent": "bridge-id-c"
   },
   "api.dryRunObsidianImport": {
     "srcPath": "bridge-sample",
@@ -679,7 +697,9 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     "sourcePath": "/tmp/bridge-sample",
     "registrationToken": "bridge-sample"
   },
-  "api.obsidianPickFolderByPath": {},
+  "api.obsidianPickFolderByPath": {
+    "sourcePath": "/tmp/bridge-sample"
+  },
   "api.obsidianRegister": {
     "sourcePath": "/tmp/bridge-sample",
     "registrationToken": "bridge-sample"
@@ -867,30 +887,32 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     "id": "bridge-sample"
   },
   "api.snapshotDelete": {
-    "sceneId": "bridge-id",
-    "snapshotId": "bridge-id"
+    "sceneId": "bridge-id-a",
+    "snapshotId": "bridge-id-b"
   },
   "api.snapshotDeleteAll": {
-    "sceneId": "bridge-id"
+    "sceneId": "bridge-id-a"
   },
   "api.snapshotGet": {
-    "sceneId": "bridge-id",
-    "snapshotId": "bridge-id"
+    "sceneId": "bridge-id-a",
+    "snapshotId": "bridge-id-b"
   },
   "api.snapshotList": {
-    "sceneId": "bridge-id"
+    "sceneId": "bridge-id-a"
   },
   "api.snapshotRestore": {
-    "sceneId": "bridge-id",
-    "snapshotId": "bridge-id",
-    "scenePath": "bridge-id"
+    "sceneId": "bridge-id-a",
+    "snapshotId": "bridge-id-b",
+    "scenePath": "bridge-id-c"
   },
   "api.snapshotSave": {
-    "sceneId": "bridge-id",
-    "content": "bridge-id",
-    "label": "bridge-id"
+    "sceneId": "bridge-id-a",
+    "content": "bridge-id-b",
+    "label": "bridge-id-c"
   },
-  "api.storyImportPickFile": {},
+  "api.storyImportPickFile": {
+    "format": "docx"
+  },
   "api.storyImportRun": {
     "format": "bridge-sample",
     "filePath": "bridge-sample-2"
@@ -1101,20 +1123,20 @@ const BRIDGE_RECORDED_PAYLOADS: Record<string, unknown> = {
     "vaultRoot": "/tmp/bridge-sample"
   },
   "api.versionGet": {
-    "sceneId": "bridge-id",
-    "ts": "bridge-id"
+    "sceneId": "bridge-id-a",
+    "ts": "bridge-id-b"
   },
   "api.versionList": {
-    "sceneId": "bridge-id"
+    "sceneId": "bridge-id-a"
   },
   "api.versionRollback": {
-    "sceneId": "bridge-id",
-    "ts": "bridge-id"
+    "sceneId": "bridge-id-a",
+    "ts": "bridge-id-b"
   },
   "api.versionSave": {
-    "sceneId": "bridge-id",
-    "content": "bridge-id",
-    "intent": "bridge-id"
+    "sceneId": "bridge-id-a",
+    "content": "bridge-id-b",
+    "intent": "bridge-id-c"
   },
   "api.voiceAudioChunk": {
     "sessionId": "bridge-id",
@@ -1219,15 +1241,20 @@ const SINGLE_ARG_INVOKE = new Set<string>([
   'api.vaultAccessGetState',
   'api.vaultMigrateMultiInner',
 ]);
+const ORDERED_IDS = [SAMPLE.idA, SAMPLE.idB, SAMPLE.idC, SAMPLE.idD, SAMPLE.idE, SAMPLE.idF] as const;
+
 function defaultArgsFor(row: ExposedRow, fn: (...args: unknown[]) => unknown): unknown[] {
   const key = callKey(row);
   if (BRIDGE_ARG_OVERRIDES[key]?.args) return BRIDGE_ARG_OVERRIDES[key].args;
   const n = fn.length;
   if (n === 0) return [];
-  if (key.includes('Pick') || key.endsWith('Pick')) return [];
   if (row.channel.includes('voice:pickBinary')) return ['stt-binary'];
-  if (row.channel.includes('version:') || row.channel.includes('drafts') || row.channel.includes('snapshot:')) {
-    return Array.from({ length: n }, () => SAMPLE.id);
+  if (
+    row.channel.includes('version:') ||
+    row.channel.includes('drafts') ||
+    row.channel.includes('snapshot:')
+  ) {
+    return Array.from({ length: n }, (_, i) => ORDERED_IDS[i] ?? SAMPLE.str);
   }
   if (
     row.path.includes('Vault') ||
@@ -1350,24 +1377,20 @@ describe('preload bridge', () => {
       const op = spec.op ?? 'invoke';
       if (op === 'send') {
         expect(sendMock).toHaveBeenCalledTimes(1);
-        const sendCall = firstIpcMockCall(sendMock);
-        expect(sendCall[0]).toBe(row.channel);
         if (spec.singleArgInvoke) {
-          expect(sendCall[1]).toBeUndefined();
+          expect(sendMock).toHaveBeenCalledWith(row.channel);
         } else {
-          expect(sendCall[1]).toEqual(spec.payload);
+          expect(sendMock).toHaveBeenCalledWith(row.channel, spec.payload);
         }
         expect(invokeMock).not.toHaveBeenCalled();
         return;
       }
 
       expect(invokeMock).toHaveBeenCalledTimes(1);
-      const invokeCall = firstIpcMockCall(invokeMock);
-      expect(invokeCall[0]).toBe(row.channel);
       if (spec.singleArgInvoke) {
-        expect(invokeCall[1]).toBeUndefined();
+        expect(invokeMock).toHaveBeenCalledWith(row.channel);
       } else {
-        expect(invokeCall[1]).toEqual(spec.payload);
+        expect(invokeMock).toHaveBeenCalledWith(row.channel, spec.payload);
       }
       expect(sendMock).not.toHaveBeenCalled();
     },
