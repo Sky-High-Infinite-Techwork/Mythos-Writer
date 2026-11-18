@@ -20,6 +20,8 @@ const ALLOW_LIST: Readonly<Record<string, string>> = {
   'e2e/packaged-smoke.spec.ts': 'needs MYTHOS_PACKAGED_EXE built installer',
   // Temporary until #1923 merges (test:e2e:depth-slider); drop on rebase after that PR lands.
   'e2e/agent-hub-interaction-states.spec.ts': 'wired by #1923',
+  // Temporary until slice 03 (#1906) wires vault-settings; drop when that PR lands.
+  'e2e/tests/sky-11154-vault-settings-page.spec.ts': 'wired by slice 03 (#1906)',
 };
 
 const NPM_E2E_RUN = /npm run (test:e2e:[\w-]+)/g;
@@ -139,9 +141,12 @@ describe('e2e orphan guard (#1915)', () => {
   });
 
   it('allow-list stays within the issue cap plus temporary cross-slice entries', () => {
-    // #1915 cap is 4 binary/live specs; #1923 adds one temporary row until merged.
-    expect(Object.keys(ALLOW_LIST).length).toBeLessThanOrEqual(5);
+    // #1915 cap is 4 binary/live specs; cross-slice rows until sibling PRs land.
+    expect(Object.keys(ALLOW_LIST).length).toBeLessThanOrEqual(6);
     expect(ALLOW_LIST['e2e/agent-hub-interaction-states.spec.ts']).toBe('wired by #1923');
+    expect(ALLOW_LIST['e2e/tests/sky-11154-vault-settings-page.spec.ts']).toBe(
+      'wired by slice 03 (#1906)',
+    );
   });
 
   it('fails when a new unwired spec appears (synthetic orphan)', () => {
