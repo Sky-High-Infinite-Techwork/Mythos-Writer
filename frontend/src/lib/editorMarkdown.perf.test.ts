@@ -2,23 +2,11 @@
 // Anything it is unsure about returns null and the extension serializes it.
 import { describe, expect, it } from 'vitest';
 import { Editor } from '@tiptap/core';
-import StarterKit from '@tiptap/starter-kit';
-import TextAlign from '@tiptap/extension-text-align';
-import { Markdown } from 'tiptap-markdown';
-import { WikiLink } from '../WikiLinkExtension';
-import { AlignedHeading, AlignedParagraph } from './alignedBlocks';
-import { getEditorMarkdown } from './useRichEditor';
+import { getEditorMarkdown, richEditorExtensions } from './useRichEditor';
 
 function makeEditor(content: string): Editor {
   return new Editor({
-    extensions: [
-      StarterKit.configure({ paragraph: false, heading: false }),
-      AlignedParagraph,
-      AlignedHeading,
-      TextAlign.configure({ types: ['paragraph', 'heading'] }),
-      WikiLink,
-      Markdown,
-    ],
+    extensions: richEditorExtensions(),
     content,
   });
 }
@@ -48,6 +36,8 @@ const CASES: Array<[string, string]> = [
   ['escaped heading', '\\# not a heading'],
   ['escaped dash', '\\- not a list'],
   ['escaped ordered list', '1\\. not a list'],
+  ['escaped ordered list digit 2', '2\\. second item'],
+  ['escaped ordered list multi-digit', '10\\. tenth item'],
   ['escaped plus', '\\+ not a list'],
   ['escaped blockquote', '\\> not a quote'],
   ['raw greater-than', 'a < b and > c'],
@@ -81,7 +71,7 @@ describe('getEditorMarkdown matches tiptap-markdown', () => {
   });
 
   it('fuzzes 500 seeded docs of markdown-special characters', () => {
-    const alphabet = 'abcXYZ \n*_#->+[]`\\<&';
+    const alphabet = 'abcXYZ \n*_#->+[]`\\<&0123456789.~';
     let seed = 1914;
     const next = () => {
       seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
@@ -106,6 +96,25 @@ describe('getEditorMarkdown matches tiptap-markdown', () => {
     }
   });
 
+  it('serializes a destroyed editor from its last document', () => {
+    const editor = makeEditor('Keep this paragraph.');
+    const live = getEditorMarkdown(editor);
+    expect(live).toContain('Keep this paragraph.');
+    editor.destroy();
+    expect(editor.isDestroyed).toBe(true);
+    expect(getEditorMarkdown(editor)).toBe(live);
+  });
+
+  it('returns null when a destroyed editor no longer has a document', () => {
+    const editor = {
+      get state(): never {
+        throw new Error('editor destroyed');
+      },
+      storage: {},
+    } as unknown as Editor;
+    expect(getEditorMarkdown(editor)).toBeNull();
+  });
+
   it('serializes a 500KB plain doc at least 5x faster than getMarkdown', () => {
     const sentence = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit.';
     let body = '';
@@ -116,7 +125,7 @@ describe('getEditorMarkdown matches tiptap-markdown', () => {
     expect(fast()).toBe(withTrailingNewline(official()));
 
     const runs = 5;
-    const time = (fn: () => string): number[] => {
+    const time = (fn: () => string | null): number[] => {
       const samples: number[] = [];
       for (let i = 0; i < runs; i++) {
         const started = performance.now();

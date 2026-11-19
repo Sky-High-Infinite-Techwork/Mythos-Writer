@@ -151,7 +151,8 @@ import StorySubViewBar from './StorySubViewBar';
 import NotesTabPanel from './NotesTabPanel';
 import BrainstormPage from './BrainstormPage';
 import BetaReaderPage from './beta/BetaReaderPage';
-import { resolveCrossTabLink, resolveWikiLinkTarget, crossTabLinkMatchKey, buildWikiLinkTitleIndex, buildWikiLinkCandidates, buildSceneWikiLinkTitleIndex, storyLinkTitleSignature, notePathForUnresolvedLink, buildUnresolvedLinkNote, wikiLinkTargetStem, type CrossTabLinkMatch } from './crossTabLinkResolver';
+import { resolveCrossTabLink, resolveWikiLinkTarget, crossTabLinkMatchKey, notePathForUnresolvedLink, buildUnresolvedLinkNote, wikiLinkTargetStem, type CrossTabLinkMatch } from './crossTabLinkResolver';
+import { useWikiLinkIndexes } from './useWikiLinkIndexes';
 import type { WikiLinkPreviewData } from './WikiLinkHoverPreview';
 import {
   tabbedShellReducer,
@@ -5046,28 +5047,12 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
 
   // SKY-5702: normalized cross-vault title index feeding the editors'
   // resolved/unresolved [[wiki link]] styling, plus the flat candidate list
-  // for the `[[` autocomplete popup. Both rebuilt only when the underlying
-  // vault state actually changes.
-  // Body edits must not rebuild these sets: a new Set identity redecorates
-  // every block in the open editor. Titles and paths are the only story
-  // fields the indexes read.
-  const linkTitleSig = useMemo(() => storyLinkTitleSignature(stories), [stories]);
-  const wikiLinkTitleIndex = useMemo(
-    () => buildWikiLinkTitleIndex({ stories, entities: allEntities, notePaths: allNotePaths }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- linkTitleSig stands in for story titles
-    [linkTitleSig, allEntities, allNotePaths],
-  );
-  const wikiLinkCandidates = useMemo(
-    () => buildWikiLinkCandidates({ stories, entities: allEntities, notePaths: allNotePaths }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- linkTitleSig stands in for story titles
-    [linkTitleSig, allEntities, allNotePaths],
-  );
-  // M16: stems that resolve to story scenes — those [[links]] render gold in
-  // the notes editor (Liquid Neon mkLink parity).
-  const sceneWikiLinkTitleIndex = useMemo(
-    () => buildSceneWikiLinkTitleIndex(stories),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- linkTitleSig stands in for story titles
-    [linkTitleSig],
+  // for the `[[` autocomplete popup. The hook projects ids, titles, and
+  // paths, so a body edit does not rebuild the sets.
+  const { wikiLinkTitleIndex, wikiLinkCandidates, sceneWikiLinkTitleIndex } = useWikiLinkIndexes(
+    stories,
+    allEntities,
+    allNotePaths,
   );
 
   // M16 / F2#3: an unresolved [[link]] CREATES the note in the Notes Vault

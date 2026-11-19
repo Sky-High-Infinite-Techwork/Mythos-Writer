@@ -111,10 +111,17 @@ export const WikiLinkResolutionExtension = Extension.create({
             // existing decorations and rescan only when the edit touches a
             // wikiLink (create, delete, or type inside one).
             const changed = changedRanges(tr);
-            const touched = changed
-              ? expandToTextblocks(tr.doc, changed.from, changed.to)
-              : null;
-            if (!touched || !rangeHasWikiLink(tr.doc, touched.from, touched.to)) {
+            // An empty step map (setNodeAttribute, setNodeMarkup) still
+            // changes the doc. Mapping old decorations would keep a stale
+            // resolved/unresolved class. Rebuild when the range is unknown.
+            if (!changed) {
+              return {
+                ...prev,
+                decorations: buildDecorations(tr.doc, prev.resolvedTitles, prev.sceneTitles),
+              };
+            }
+            const touched = expandToTextblocks(tr.doc, changed.from, changed.to);
+            if (!rangeHasWikiLink(tr.doc, touched.from, touched.to)) {
               return { ...prev, decorations: prev.decorations.map(tr.mapping, tr.doc) };
             }
             return {

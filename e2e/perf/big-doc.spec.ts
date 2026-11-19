@@ -6,6 +6,12 @@
  * here; those stalls are a separate product issue. Boards stays: all 20
  * calibration runs on e2e-shard-3 were at most 1551 ms, under the 3000 ms
  * cap (run 44466707465).
+ *
+ * Coupling: `test:e2e:onboarding-four-paths` runs this file, then the
+ * onboarding specs. The script keeps both exit codes (`a=$?`, `b=$?`) and
+ * fails if either is non-zero, so a big-doc failure still runs onboarding.
+ * This file writes `test-results/big-doc` and `playwright-report/big-doc`.
+ * The onboarding run keeps the default report folders.
  */
 import fs from 'fs';
 import { test, expect, type Page } from '@playwright/test';

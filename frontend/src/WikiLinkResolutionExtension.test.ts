@@ -131,6 +131,25 @@ describe('WikiLinkResolutionExtension scene-kind decorations (M16)', () => {
     expect(wikiDecorationBuilds).toBe(before);
   });
 
+  it('rebuilds decorations when a wiki link target changes without a text edit', () => {
+    const editor = makeEditor('[[Elara Voss]]', new Set(['elara voss']));
+    expect(editor.view.dom.querySelector('span[data-wiki-link]')?.classList.contains('wiki-link-unresolved')).toBe(false);
+    let pos = -1;
+    editor.state.doc.descendants((node, nodePos) => {
+      if (node.type.name === 'wikiLink') {
+        pos = nodePos;
+        return false;
+      }
+      return true;
+    });
+    expect(pos).toBeGreaterThanOrEqual(0);
+    editor.view.dispatch(editor.state.tr.setNodeAttribute(pos, 'target', 'Nobody Here'));
+    const span = editor.view.dom.querySelector('span[data-wiki-link]');
+    editor.destroy();
+    expect(span?.getAttribute('data-wiki-link')).toBe('Nobody Here');
+    expect(span?.classList.contains('wiki-link-unresolved')).toBe(true);
+  });
+
   it('decorates a wiki link inserted after load', () => {
     const editor = makeEditor('Plain.', new Set(['elara voss']));
     editor.commands.focus('end');

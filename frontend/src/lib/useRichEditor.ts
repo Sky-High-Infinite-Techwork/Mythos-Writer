@@ -157,20 +157,39 @@ export function serializePlainParagraphs(doc: PMNode): string | null {
  * Always appends a trailing newline for tooling compatibility
  * (tiptap-markdown v0.9 omits the trailing newline).
  *
- * SKY-9404: callers may hold a ref to a `BlockEditorApi` whose underlying
- * editor was destroyed (scene depth unmounted the editor, then remounted it
- * before the ref was refreshed) — `storage.markdown` is gone post-destroy,
- * same destroyed-but-non-null hazard BlockEditor's own focus effect guards
- * against. Fall back to an empty doc rather than crashing the render.
+ * A destroyed editor often still holds `state` and `storage`. Reading those
+ * keeps the last scene. If they are gone, return null so a flush skips the
+ * save instead of writing an empty scene.
  */
-export function getEditorMarkdown(editor: Editor): string {
-  // Destroyed editor: storage.markdown and state are gone (SKY-9404).
-  if (editor.isDestroyed) return '\n';
-  const plain = serializePlainParagraphs(editor.state.doc);
-  // tiptap-markdown attaches storage.markdown at runtime — cast is unavoidable
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const raw = plain ?? (((editor.storage as any).markdown?.getMarkdown?.() ?? '') as string);
-  return raw.endsWith('\n') ? raw : `${raw}\n`;
+export function getEditorMarkdown(editor: Editor): string | null {
+  try {
+    const plain = serializePlainParagraphs(editor.state.doc);
+    // tiptap-markdown attaches storage.markdown at runtime — cast is unavoidable
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const raw = plain ?? (((editor.storage as any).markdown?.getMarkdown?.() ?? '') as string);
+    return raw.endsWith('\n') ? raw : `${raw}\n`;
+  } catch {
+    return null;
+  }
+}
+
+/** Extensions and Markdown options shared by every `useRichEditor` surface. */
+export function richEditorExtensions({
+  extraExtensions = [],
+  vaultInlineImages = false,
+}: Pick<UseRichEditorOptions, 'extraExtensions' | 'vaultInlineImages'> = {}): AnyExtension[] {
+  const imageExtension = vaultInlineImages ? createNoteVaultImageExtension() : InlineImageExtension;
+  return [
+    StarterKit.configure({ paragraph: false, heading: false }),
+    AlignedParagraph,
+    AlignedHeading,
+    TextAlign.configure({ types: ['paragraph', 'heading'] }),
+    WikiLink,
+    WikiLinkResolutionExtension,
+    imageExtension,
+    Markdown,
+    ...extraExtensions,
+  ];
 }
 
 export function useRichEditor({
@@ -185,19 +204,8 @@ export function useRichEditor({
   editorProps,
   vaultInlineImages = false,
 }: UseRichEditorOptions): Editor | null {
-  const imageExtension = vaultInlineImages ? createNoteVaultImageExtension() : InlineImageExtension;
   const editor = useEditor({
-    extensions: [
-      StarterKit.configure({ paragraph: false, heading: false }),
-      AlignedParagraph,
-      AlignedHeading,
-      TextAlign.configure({ types: ['paragraph', 'heading'] }),
-      WikiLink,
-      WikiLinkResolutionExtension,
-      imageExtension,
-      Markdown,
-      ...extraExtensions,
-    ],
+    extensions: richEditorExtensions({ extraExtensions, vaultInlineImages }),
     content,
     editable,
     autofocus,

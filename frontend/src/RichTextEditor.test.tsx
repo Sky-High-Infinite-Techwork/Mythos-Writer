@@ -142,7 +142,8 @@ describe('RichTextEditor markdown round-trip', () => {
     expect(out).toContain('**bold**');
     expect(out).toContain('*italic*');
     expect(out).toContain('[[Character: Elara]]');
-    expect(out.endsWith('\n')).toBe(true);
+    expect(out).toBeTruthy();
+    expect(out!.endsWith('\n')).toBe(true);
     unmount();
   });
 
@@ -176,7 +177,7 @@ describe('RichTextEditor markdown round-trip', () => {
     expect(saved).toContain('{.right}');
     unmount();
 
-    const { editor: reloaded, unmount: unmountReloaded } = await mountCore({ content: saved });
+    const { editor: reloaded, unmount: unmountReloaded } = await mountCore({ content: saved ?? '' });
     const reloadedJson = reloaded.getJSON();
     expect(reloadedJson.content?.[0]?.attrs?.textAlign).toBe('center');
     expect(reloadedJson.content?.[1]?.attrs?.textAlign).toBe('right');

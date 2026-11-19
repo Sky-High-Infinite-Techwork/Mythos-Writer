@@ -288,8 +288,10 @@ export default function RichTextEditor({
       const flush = () => {
         pendingFlushRef.current = null;
         changeTimerRef.current = null;
+        const markdown = getEditorMarkdown(ed);
+        if (markdown == null) return;
         onBeforeFlushRef.current?.(ed);
-        onChangeMarkdownRef.current?.(getEditorMarkdown(ed));
+        onChangeMarkdownRef.current?.(markdown);
       };
       pendingFlushRef.current = flush;
       changeTimerRef.current = setTimeout(flush, debounceMs);

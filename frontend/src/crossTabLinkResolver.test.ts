@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { resolveCrossTabLink, resolveWikiLinkTarget, parseWikiSegments, wikiLinkDisplayText, crossTabLinkMatchKey, buildWikiLinkTitleIndex, isWikiLinkTargetResolved, buildSceneWikiLinkTitleIndex, storyLinkTitleSignature, wikiLinkTargetStem, notePathForUnresolvedLink, buildUnresolvedLinkNote } from './crossTabLinkResolver';
+import { resolveCrossTabLink, resolveWikiLinkTarget, parseWikiSegments, wikiLinkDisplayText, crossTabLinkMatchKey, buildWikiLinkTitleIndex, isWikiLinkTargetResolved, buildSceneWikiLinkTitleIndex, storyLinkTitleSignature, projectStoryLinkFields, wikiLinkTargetStem, notePathForUnresolvedLink, buildUnresolvedLinkNote } from './crossTabLinkResolver';
 import type { EntityEntry, Story } from './types';
 
 const now = '2026-06-17T00:00:00.000Z';
@@ -353,6 +353,43 @@ describe('storyLinkTitleSignature', () => {
     expect(storyLinkTitleSignature([b])).toBe(storyLinkTitleSignature([a]));
     b.chapters[0]!.scenes[0]!.title = 'Renamed Scene';
     expect(storyLinkTitleSignature([b])).not.toBe(storyLinkTitleSignature([a]));
+  });
+
+  it('changes when the story title, chapter title, scene path, or ids change', () => {
+    const base = storyLinkTitleSignature([story()]);
+    const storyTitle = story();
+    storyTitle.title = 'Other Story';
+    const chapterTitle = story();
+    chapterTitle.chapters[0]!.title = 'Chapter Two';
+    const scenePath = story();
+    scenePath.chapters[0]!.scenes[0]!.path = 'Test Story/Manuscript/Chapter One/Other.md';
+    const storyId = story();
+    storyId.id = 'story-2';
+    const sceneId = story();
+    sceneId.chapters[0]!.scenes[0]!.id = 'scene-2';
+    expect(storyLinkTitleSignature([storyTitle])).not.toBe(base);
+    expect(storyLinkTitleSignature([chapterTitle])).not.toBe(base);
+    expect(storyLinkTitleSignature([scenePath])).not.toBe(base);
+    expect(storyLinkTitleSignature([storyId])).not.toBe(base);
+    expect(storyLinkTitleSignature([sceneId])).not.toBe(base);
+  });
+
+  it('projects only ids, titles, and paths', () => {
+    const projected = projectStoryLinkFields([story()]);
+    expect(projected).toEqual([{
+      id: 'story-1',
+      title: 'Test Story',
+      chapters: [{
+        title: 'Chapter One',
+        scenes: [{
+          id: 'scene-1',
+          title: 'Opening Scene',
+          path: 'Test Story/Manuscript/Chapter One/Opening Scene.md',
+        }],
+      }],
+    }]);
+    expect(projected[0]).not.toHaveProperty('path');
+    expect(projected[0]!.chapters[0]!.scenes[0]).not.toHaveProperty('blocks');
   });
 });
 
