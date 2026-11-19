@@ -258,7 +258,7 @@ test.describe.serial('#1774 Accent breathe', () => {
     fs.rmSync(downloadDir, { recursive: true, force: true });
   });
 
-  test('ticks start no transitions and never cut or skip a user transition (opacity + border-color)', async () => {
+  test('ticks start no transitions and never cut or skip a user transition (opacity + border-color + box-shadow)', async () => {
     // Settings is still open: its NeonToggles (`transition: all .2s`) and cards
     // read the breathing tokens, so a tick that let its own color step
     // transition would fire transitionrun here every 250 ms.
@@ -292,12 +292,16 @@ test.describe.serial('#1774 Accent breathe', () => {
       const mk = () => {
         const d = document.createElement('div');
         d.style.cssText = 'position:fixed;left:0;top:0;width:40px;height:40px;border:2px solid var(--b1);' +
-          'transition:opacity 1s linear,border-color 1s linear;';
+          'box-shadow:0 0 6px var(--g2);transition:opacity 1s linear,border-color 1s linear,box-shadow 1s linear;';
         document.body.appendChild(d);
         void getComputedStyle(d).opacity;
         return d;
       };
-      const change = (d: HTMLElement) => { d.style.opacity = '0'; d.style.borderColor = 'var(--b4)'; };
+      const change = (d: HTMLElement) => {
+        d.style.opacity = '0';
+        d.style.borderColor = 'var(--b4)';
+        d.style.boxShadow = '0 0 12px var(--g4)';
+      };
       const running = (d: HTMLElement) => d.getAnimations()
         .filter((x) => 'transitionProperty' in x && x.playState === 'running')
         .map((x) => (x as CSSTransition).transitionProperty).sort();
@@ -331,6 +335,8 @@ test.describe.serial('#1774 Accent breathe', () => {
     expect(after.b).toContain('opacity');
     expect(after.a.some((p) => p.includes('border'))).toBe(true);
     expect(after.b.some((p) => p.includes('border'))).toBe(true);
+    expect(after.a.some((p) => p.includes('box-shadow'))).toBe(true);
+    expect(after.b.some((p) => p.includes('box-shadow'))).toBe(true);
     expect(await readState(page)).toBe('running');
   });
 
