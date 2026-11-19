@@ -17,11 +17,11 @@ export interface ValidatePathResult {
  *   this module stays Electron-free).
  * - Does NOT create or modify anything on disk.
  */
-export function isExistingUsableVaultRoot(p: string): boolean {
+export function isExistingUsableVaultRoot(p: string | undefined | null): boolean {
   if (!p || typeof p !== 'string') return false;
   try {
-    const stat = fs.statSync(p);
-    if (!stat.isDirectory()) return false;
+    const stat = fs.lstatSync(p);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
     fs.accessSync(p, fs.constants.R_OK | fs.constants.W_OK);
     return true;
   } catch {

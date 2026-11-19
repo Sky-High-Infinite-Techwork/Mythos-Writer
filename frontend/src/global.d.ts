@@ -1184,7 +1184,7 @@ interface Window {
     readManifest: () => Promise<unknown>;
     writeManifest: (manifest: unknown) => Promise<unknown>;
     openVaultFolder: () => Promise<{ vaultRoot: string | null; cancelled: boolean; error?: string }>;
-    getVaultRoot: () => Promise<{ vaultRoot: string }>;
+    getVaultRoot: () => Promise<{ vaultRoot: string | null }>;
     /** SKY-5790: reveal the current Story Vault root in the OS file manager. */
     revealVaultFolder: () => Promise<{ opened: boolean }>;
     importVault: (sourcePath: string, registrationToken: string) => Promise<{ imported: number; skipped: number; errors: string[] }>;
@@ -1642,7 +1642,7 @@ interface Window {
     // Two-vault path management (MYT-608 / SKY-9) — Story Vault + Notes Vault
     // MYT-789: setPaths now requires a per-path registrationToken from
     // vault:pick-folder, or the path must already be in recent-projects.
-    vaultGetPaths: () => Promise<{ storyVaultPath: string; notesVaultPath: string; homeDir?: string; pathSeparator?: '/' | '\\'; defaultVaultsParentPath?: string; mythosRoot?: string | null; vaultsParentPath?: string }>;
+    vaultGetPaths: () => Promise<{ storyVaultPath: string; notesVaultPath: string; homeDir?: string; pathSeparator?: '/' | '\\'; defaultVaultsParentPath?: string; mythosRoot?: string | null; vaultsParentPath?: string; persistedVaultSettings?: boolean }>;
     vaultGetSystemPaths: () => Promise<{
       homeDir: string;
       documentsDir: string;

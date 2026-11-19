@@ -51,6 +51,7 @@ function App() {
 
       try {
         const vaults = await window.api.vaultGetPaths();
+        const activeRoot = await window.api.getVaultRoot?.().catch(() => ({ vaultRoot: null as string | null }));
         const [storyResult, notesResult] = await Promise.all([
           window.api.validatePath(vaults.storyVaultPath).catch(() => ({ valid: false })),
           window.api.validatePath(vaults.notesVaultPath).catch(() => ({ valid: false })),
@@ -59,10 +60,23 @@ function App() {
         const notesValid = isVaultPathValid(notesResult);
 
         if (!storyValid && !notesValid) {
+          // F3#9 / no-vault: no persisted vault-settings yet — land on the shell
+          // (Welcome Skip, post-trash zero survivors). Persisted paths that no
+          // longer exist use VaultNotFoundScreen (SKY-152).
+          if (!vaults.persistedVaultSettings && !activeRoot?.vaultRoot) {
+            setView({ kind: 'shell', settings: nextSettings });
+            return;
+          }
           setView({ kind: 'missing-vault', settings: nextSettings, vaultPath: vaults.storyVaultPath });
           return;
         }
       } catch {
+        const activeRoot = await window.api.getVaultRoot?.().catch(() => ({ vaultRoot: null as string | null }));
+        const vaults = await window.api.vaultGetPaths().catch(() => ({ persistedVaultSettings: false }));
+        if (!vaults.persistedVaultSettings && !activeRoot?.vaultRoot) {
+          setView({ kind: 'shell', settings: nextSettings });
+          return;
+        }
         setView({ kind: 'missing-vault', settings: nextSettings });
         return;
       }

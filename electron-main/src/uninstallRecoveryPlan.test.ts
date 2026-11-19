@@ -77,12 +77,9 @@ describe('planUninstallRecovery', () => {
     });
   });
 
-  // Integration-style: drive the real cleanUninstall() against split custom
-  // vault locations (outside the default <userData>/vaults/ parent, so each
-  // root is deleted independently — see uninstallHelper.ts resolveDeletePaths)
-  // with one delete forced to fail, mirroring the SKY-9730 repro: story vault
-  // delete fails (still exists), notes vault delete succeeds (gone).
-  it('plans recovery for only the surviving side after a real split-custom-path partial delete', () => {
+  // Custom vault roots are warn-only (not in toDelete). Drive cleanUninstall and
+  // assert both sides survive, then plan recovery as fully uncleared.
+  it('plans recovery when cleanUninstall keeps user-chosen vault folders outside default parent', () => {
     const customStory = path.join(tmp, 'custom-story');
     const customNotes = path.join(tmp, 'custom-notes');
     fs.mkdirSync(customStory, { recursive: true });
@@ -90,32 +87,63 @@ describe('planUninstallRecovery', () => {
     fs.mkdirSync(customNotes, { recursive: true });
     fs.writeFileSync(path.join(customNotes, 'note.md'), '# Note');
 
+    const result = cleanUninstall({
+      storyVaultRoot: customStory,
+      notesVaultRoot: customNotes,
+      userDataPath: tmp,
+    });
+
+    expect(result.customPathsWarning).toContain(customStory);
+    expect(result.customPathsWarning).toContain(customNotes);
+    expect(fs.existsSync(customStory)).toBe(true);
+    expect(fs.existsSync(customNotes)).toBe(true);
+
+    const plan = planUninstallRecovery(customStory, customNotes);
+    expect(plan.storyVaultSurvived).toBe(true);
+    expect(plan.notesVaultSurvived).toBe(true);
+    expect(plan.fullyCleared).toBe(false);
+  });
+
+  // Integration-style: default bundle delete with a forced rm failure on the vaults
+  // parent mirrors a locked bundle while settings still clear — SKY-9730-style partial.
+  it('plans recovery for only the surviving side after default-bundle rm fails on story half', () => {
+    const vaultsParent = path.join(tmp, 'vaults');
+    const storyVault = path.join(vaultsParent, 'Story Vault');
+    const notesVault = path.join(vaultsParent, 'Notes Vault');
+    fs.mkdirSync(storyVault, { recursive: true });
+    fs.writeFileSync(path.join(storyVault, 'scene.md'), '# Scene');
+    fs.mkdirSync(notesVault, { recursive: true });
+    fs.writeFileSync(path.join(notesVault, 'note.md'), '# Note');
+
     const originalRmSync = fs.rmSync.bind(fs);
     const rmSpy = vi.spyOn(fs, 'rmSync').mockImplementation((p, opts) => {
-      if (p === customStory) return undefined; // simulate a locked file: rm is a silent no-op
+      if (p === vaultsParent) {
+        // Simulate partial deletion during the same cleanUninstall call: notes
+        // vanish while the parent rm fails (story half survives).
+        if (fs.existsSync(notesVault)) {
+          originalRmSync(notesVault, { recursive: true, force: true });
+        }
+        return undefined;
+      }
       return originalRmSync(p as fs.PathLike, opts as fs.RmOptions);
     });
 
     try {
       const result = cleanUninstall({
-        storyVaultRoot: customStory,
-        notesVaultRoot: customNotes,
+        storyVaultRoot: storyVault,
+        notesVaultRoot: notesVault,
         userDataPath: tmp,
       });
 
-      expect(result.errors.some((e) => e.startsWith(customStory))).toBe(true);
-      expect(result.deleted).toContain(customNotes);
-      expect(fs.existsSync(customStory)).toBe(true);
-      expect(fs.existsSync(customNotes)).toBe(false);
+      expect(result.errors.some((e) => e.startsWith(vaultsParent))).toBe(true);
+      expect(fs.existsSync(storyVault)).toBe(true);
+      expect(fs.existsSync(notesVault)).toBe(false);
 
-      const plan = planUninstallRecovery(customStory, customNotes);
+      const plan = planUninstallRecovery(storyVault, notesVault);
       expect(plan.storyVaultSurvived).toBe(true);
       expect(plan.notesVaultSurvived).toBe(false);
       expect(plan.fullyCleared).toBe(false);
-
-      // The notes side must NOT be re-scaffolded: no file should reappear
-      // under the deleted root just from planning the recovery.
-      expect(fs.existsSync(customNotes)).toBe(false);
+      expect(fs.existsSync(notesVault)).toBe(false);
     } finally {
       rmSpy.mockRestore();
     }
