@@ -9,7 +9,7 @@ This document is the design contract for implementation and grading. The prototy
 | PR | Title | Delivers |
 | --- | --- | --- |
 | 1 | `unattended: Phase 2 dispatcher core (atomic claims, cap, dry run)` | Plan doc, claim/lane/cap/sweep modules, build-order discovery, dry-run dispatcher workflow, unit tests including 20-way claim simulation |
-| 2 | Plan gate + build lanes | Opus plan + Fable grade loop, Claude Code / Codex lanes, trusted write job with path guard, fix-round orchestration stubs |
+| 2 | Plan gate + build lanes | `mythos-plan-gate.yml`, `mythos-build-lane.yml`, grade binding in `dispatch-run.js` (act, PR **#1888**) and `dispatch-cli.js` → `plan-gate.js`, `build-lane.js` path guard + fix-round helpers, transport stubs to arm in canary |
 
 PR 1 must not mint provider tokens or run model steps. PR 2 must not relax PR 1 claim invariants.
 
@@ -141,13 +141,14 @@ Rules:
 3. Revise loop until `PASS` or max rounds (`MYTHOS_PLAN_GRADE_MAX_ROUNDS`, default 3).
 4. Store PASS as issue comment with `PLAN GRADE PASS @ comment=<id> sha=<hex>` from gate bot or trusted template; dispatcher reads it before slice claim.
 
-No build job starts without PASS bound to `(planCommentId, planBodySha256)`.
+No build job starts without PASS bound to `(planCommentId, planBodySha256)`. **`mythos-dispatch.yml` `act` and `dry-run` both hold** (continue/skip) when `findBoundPlanPass` fails — there is no claim without a bound grade pass.
 
 ## Build lanes (PR 2)
 
 - Lead: **Claude Code** official action pinned by full commit SHA; use native Anthropic model IDs in env (not OpenRouter slugs).
 - Alternate: **Codex** in `mythos-codex`.
-- Provider and write credentials stay in **separate jobs**; build job outputs artifact (patch/plan/log), trusted job applies.
+- **The model job never pushes.** After the provider step, a trusted **`push-build`** job (write App, `mythos-writer`) commits any model worktree changes and updates `refs/mythos/build/<provider>`, outputting `build_head`. **`publish`** checks out the guard scripts at the claim base `MAIN_SHA`, fetches that build ref, and runs `git diff --name-status -M <base>...<build_head>` (fail closed). While build transport is still a stub, push/publish **hold** (exit 1); they never pass.
+- Provider and write credentials stay in **separate jobs**; build job uploads transport stdout only; trusted jobs apply and verify.
 - **Fix rounds:** rerun only failed required check subsets; before merge queue, full required set on tip (align with `MERGE_GATE.md`).
 
 ## Fix rounds

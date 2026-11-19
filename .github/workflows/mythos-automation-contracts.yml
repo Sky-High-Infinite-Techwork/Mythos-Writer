@@ -29,5 +29,7 @@ jobs:
         run: node .github/scripts/unattended.test.js
       - name: Test Phase 2 dispatch modules
         run: node .github/scripts/unattended/dispatch.test.js && node .github/scripts/unattended/dispatch/dispatch-client.test.js && node .github/scripts/unattended/dispatch/dispatch-gate.test.js && node .github/scripts/unattended/dispatch/dispatch-cli.test.js && node .github/scripts/unattended/dispatch/canary-artifacts.test.js && node .github/scripts/unattended/dispatch/slice-progress.test.js
+      - name: Test plan gate and build lane modules
+        run: node .github/scripts/unattended/dispatch/plan-gate.test.js && node .github/scripts/unattended/dispatch/build-lane.test.js
       - name: Test workflow rules
         run: node .github/scripts/workflow-rules.test.js

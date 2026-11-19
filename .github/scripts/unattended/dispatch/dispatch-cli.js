@@ -10,6 +10,11 @@ const { sweepDispatchRefs } = require('./claim');
 const { readDispatchSwitches, actWritesEnabled } = require('./switch');
 const { activeClaimsFromRefs } = require('./dispatch-helpers');
 const { runCanaryVerify } = require('./canary-verify');
+const { findBoundPlanPass } = require('./plan-gate');
+
+if (typeof findBoundPlanPass !== 'function') {
+  throw new Error('plan-gate findBoundPlanPass must be a function');
+}
 
 function parseGithubRunIds() {
   const runId = Number.parseInt(process.env.GITHUB_RUN_ID || '', 10);
@@ -150,6 +155,7 @@ async function main(options = {}) {
       MAIN_SHA: process.env.MAIN_SHA || '',
       client,
       activeClaimsFromRefs: (refs) => activeClaimsFromRefs(refs),
+      findBoundPlanPass,
     };
     return runDispatchPlanFn(env);
   }
