@@ -2,11 +2,17 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { pathToFileURL } from 'url';
 import { describe, expect, it } from 'vitest';
-import { runSuites } from '../../scripts/run-e2e-wallpaper-picker.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '../..');
 const wrapper = path.join(repoRoot, 'scripts', 'run-e2e-wallpaper-picker.mjs');
+
+interface SuiteRunner {
+  runSuites(argv: string[], options?: { playwrightCli?: string }): Promise<number>;
+}
+
+const { runSuites } = await (import(pathToFileURL(wrapper).href) as Promise<SuiteRunner>);
 
 interface RecordedRun {
   argv: string[];
