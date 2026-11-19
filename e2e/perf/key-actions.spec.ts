@@ -10,9 +10,10 @@
  *
  * Big-doc typing, switch-back to Story Writer, and Boards are slice 11.
  *
- * Report mode (ENFORCE_BUDGETS = false) logs `[perf] metric=<name> ms=<n>`
- * and does not fail on time. After 20 CI samples, budgets become
- * max(2× CI p95, 1.25× CI max) and never above BOX_CAPS_MS.
+ * Report mode logged `[perf] metric=<name> ms=<n>` for 20 CI runs.
+ * Budgets are max(2× CI p95, 1.25× CI max), nearest-rank p95, and never
+ * above BOX_CAPS_MS. ENFORCE_BUDGETS fails the test when a sample exceeds
+ * its budget.
  */
 import path from 'path';
 import os from 'os';
@@ -42,14 +43,20 @@ const BOX_CAPS_MS = {
 
 type PerfMetric = keyof typeof BOX_CAPS_MS;
 
-/**
- * Flip to true only after the calibration table is in the PR.
- * While false, every action still has to complete; only the time check is off.
- */
-const ENFORCE_BUDGETS = false;
+/** 20 CI samples on shard 4, nearest-rank p95 (index ceil(0.95*n)-1). */
+const ENFORCE_BUDGETS = true;
 
-/** Placeholder until calibration. Must stay <= BOX_CAPS_MS. */
-const BUDGETS_MS: { [K in PerfMetric]: number } = { ...BOX_CAPS_MS };
+const BUDGETS_MS: { [K in PerfMetric]: number } = {
+  launch_empty_to_story_tree_ms: 2_682,
+  launch_300_to_story_tree_ms: 3_550,
+  open_big_scene_500kb_ms: 5_500,
+  switch_timeline_ms: 286,
+  switch_mythos_ms: 298,
+  switch_notes_editor_ms: 4_500,
+  export_docx_301_ms: 1_418,
+  export_epub_301_ms: 800,
+  export_pdf_301_ms: 7_482,
+};
 
 const METRICS = Object.keys(BOX_CAPS_MS) as PerfMetric[];
 
