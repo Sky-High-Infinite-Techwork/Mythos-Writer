@@ -570,7 +570,7 @@ export default function BlockEditor({ scene, onBlocksChange, onDraftStateChange,
         wrapRef={editorWrapRef}
         toolbarActions={toolbarActions}
         wrapClassName="tiptap-editor-wrap"
-        contentClassName="tiptap-content"
+        contentClassName={scene.blocks.some((block) => block.content.length > 80_000) ? 'tiptap-content tiptap-content--long' : 'tiptap-content'}
         onWrapMouseOver={handleHintMouseOver}
         onWrapMouseLeave={handleHintMouseLeave}
       >
