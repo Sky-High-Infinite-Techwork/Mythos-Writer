@@ -10,7 +10,8 @@
  * Coupling: `test:e2e:onboarding-four-paths` runs this file, then the
  * onboarding specs. The script keeps both exit codes (`a=$?`, `b=$?`) and
  * fails if either is non-zero, so a big-doc failure still runs onboarding.
- * This file writes `test-results/big-doc` and `playwright-report/big-doc`.
+ * This file writes `test-results-big-doc` and `playwright-report-big-doc`,
+ * siblings of the onboarding report folders so that run does not delete them.
  * The onboarding run keeps the default report folders.
  */
 import fs from 'fs';

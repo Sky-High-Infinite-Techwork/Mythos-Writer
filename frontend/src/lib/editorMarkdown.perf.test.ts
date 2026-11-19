@@ -1,6 +1,6 @@
 // The fast path must be byte-identical to tiptap-markdown's getMarkdown().
 // Anything it is unsure about returns null and the extension serializes it.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Editor } from '@tiptap/core';
 import { getEditorMarkdown, richEditorExtensions } from './useRichEditor';
 
@@ -112,7 +112,17 @@ describe('getEditorMarkdown matches tiptap-markdown', () => {
       },
       storage: {},
     } as unknown as Editor;
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(getEditorMarkdown(editor)).toBeNull();
+    expect(logged).toHaveBeenCalled();
+    logged.mockRestore();
+  });
+
+  it('returns null for a heading when the markdown serializer is gone', () => {
+    const editor = makeEditor('# Kept heading');
+    delete (editor.storage as { markdown?: unknown }).markdown;
+    expect(getEditorMarkdown(editor)).toBeNull();
+    editor.destroy();
   });
 
   it('serializes a 500KB plain doc at least 5x faster than getMarkdown', () => {

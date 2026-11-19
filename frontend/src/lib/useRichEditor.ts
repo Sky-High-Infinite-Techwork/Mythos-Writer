@@ -164,11 +164,18 @@ export function serializePlainParagraphs(doc: PMNode): string | null {
 export function getEditorMarkdown(editor: Editor): string | null {
   try {
     const plain = serializePlainParagraphs(editor.state.doc);
+    if (plain !== null) return plain.endsWith('\n') ? plain : `${plain}\n`;
+    // A heading or marked doc cannot use the plain path. With no markdown
+    // serializer there is nothing to save — '' would become "\n" and wipe the scene.
     // tiptap-markdown attaches storage.markdown at runtime — cast is unavoidable
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const raw = plain ?? (((editor.storage as any).markdown?.getMarkdown?.() ?? '') as string);
+    const getMarkdown = (editor.storage as any).markdown?.getMarkdown as (() => unknown) | undefined;
+    if (typeof getMarkdown !== 'function') return null;
+    const raw = getMarkdown();
+    if (typeof raw !== 'string') return null;
     return raw.endsWith('\n') ? raw : `${raw}\n`;
-  } catch {
+  } catch (err) {
+    console.error('getEditorMarkdown failed; skipping autosave', err);
     return null;
   }
 }
