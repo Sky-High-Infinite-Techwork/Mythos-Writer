@@ -14,8 +14,10 @@
  *
  * Report mode logged `[perf] metric=<name> ms=<n>` for 20 CI runs.
  * Budgets are max(2× CI p95, 1.25× CI max), nearest-rank p95, and never
- * above BOX_CAPS_MS. ENFORCE_BUDGETS fails the test when a sample exceeds
- * its budget.
+ * above BOX_CAPS_MS. The three switch budgets were collected again after
+ * the clock moved to destination content (20 repeats in one CI job).
+ * Mythos and Notes Editor landed on their caps. ENFORCE_BUDGETS fails
+ * the test when a sample exceeds its budget.
  */
 import path from 'path';
 import os from 'os';
@@ -48,16 +50,16 @@ const BOX_CAPS_MS = {
 
 type PerfMetric = keyof typeof BOX_CAPS_MS;
 
-/** Frame-accurate re-baseline. Switch budgets are collected again in this commit (content-visible stop); enforce is off until those 20 CI samples are in. */
-const ENFORCE_BUDGETS = false;
+/** Switch numbers are the content-visible re-baseline (20 CI repeats). Mythos and Notes Editor are the cap; the formula was higher. */
+const ENFORCE_BUDGETS = true;
 
 const BUDGETS_MS: { [K in PerfMetric]: number } = {
   launch_empty_to_story_tree_ms: 1_860,
   launch_300_to_story_tree_ms: 2_334,
   open_big_scene_500kb_ms: 5_472,
-  switch_timeline_ms: 158,
-  switch_mythos_ms: 198,
-  switch_notes_editor_ms: 4_334,
+  switch_timeline_ms: 238,
+  switch_mythos_ms: 300,
+  switch_notes_editor_ms: 4_500,
   export_docx_301_ms: 876,
   export_epub_301_ms: 730,
   export_pdf_301_ms: 4_234,

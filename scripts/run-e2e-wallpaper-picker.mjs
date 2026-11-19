@@ -21,8 +21,6 @@ const keyActions = await run(process.execPath, [
   'e2e/perf/key-actions.spec.ts',
   '--output=test-results/key-actions',
   '--retries=0',
-  // Sample pass only: 20 content-visible switch timings in one CI job. Removed once budgets are set.
-  '--repeat-each=20',
   '--reporter=list,html',
 ], { PLAYWRIGHT_HTML_REPORT: 'playwright-report/key-actions' });
 const wallpaper = await run(process.execPath, [
