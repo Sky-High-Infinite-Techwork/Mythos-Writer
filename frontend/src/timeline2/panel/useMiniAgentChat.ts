@@ -5,7 +5,7 @@
 // same for Archive. Mirrors useCoachConversation: optimistic pending bubble,
 // origin-session pinning, and turns persisted to the vault session file.
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAgentSessions, type UseAgentSessionsResult } from '../../lib/useAgentSessions';
 import { cancelAiActivity } from '../../agents/aiActivity';
 import { historyContentForModel, neutralizeLeadingCoachCardMarker } from '../../coach/coachMessages';
@@ -55,29 +55,44 @@ export const STALL_WARNING_MS = 20_000;
 /** Hard timeout — abort the provider stream in MAIN. */
 export const HARD_TIMEOUT_MS = 90_000;
 
-const RESPONSE_INCOMPLETE_SUFFIX = '(response incomplete)';
+export const RESPONSE_INCOMPLETE_SUFFIX = '(response incomplete)';
 
 type FailedExchange = {
   prompt: string;
-  /** User turn from the failed attempt is already in the session feed. */
-  userInFeed: boolean;
+  originSessionId: string | undefined;
+  /** User turn is already in the vault feed for originSessionId. */
+  userPersisted: boolean;
 };
 
-/** Drop the failed exchange tail so retry invoke(history, prompt) does not duplicate the user turn. */
-function turnsForModelHistory(turns: AgentSessionTurn[], retryPrompt: string | null): AgentSessionTurn[] {
-  if (!retryPrompt) {
-    return turns.slice(-MAX_HISTORY_TURNS);
+function sessionHasUserPrompt(turns: AgentSessionTurn[], prompt: string): boolean {
+  return turns.some((t) => t.role === 'user' && t.text === prompt);
+}
+
+/** Model history: drop incomplete agent turns and collapse orphan consecutive user turns. */
+export function turnsForModelHistory(turns: AgentSessionTurn[], retryPrompt: string | null): AgentSessionTurn[] {
+  const withoutIncomplete = turns.filter(
+    (t) => !(t.role === 'agent' && t.text.includes(RESPONSE_INCOMPLETE_SUFFIX)),
+  );
+  const collapsed: AgentSessionTurn[] = [];
+  for (const turn of withoutIncomplete) {
+    const prev = collapsed.at(-1);
+    if (turn.role === 'user' && prev?.role === 'user') {
+      collapsed.pop();
+    }
+    collapsed.push(turn);
   }
-  const trimmed = [...turns];
-  const last = trimmed.at(-1);
-  if (last?.role === 'agent' && last.text.includes(RESPONSE_INCOMPLETE_SUFFIX)) {
-    trimmed.pop();
+  if (retryPrompt) {
+    const last = collapsed.at(-1);
+    if (last?.role === 'user' && last.text === retryPrompt) {
+      collapsed.pop();
+    }
   }
-  const lastUser = trimmed.at(-1);
-  if (lastUser?.role === 'user' && lastUser.text === retryPrompt) {
-    trimmed.pop();
+  // Orphan user at end (failed send / partial stripped) is re-sent as `prompt`.
+  const trailingUser = collapsed.at(-1);
+  if (trailingUser?.role === 'user') {
+    collapsed.pop();
   }
-  return trimmed.slice(-MAX_HISTORY_TURNS);
+  return collapsed.slice(-MAX_HISTORY_TURNS);
 }
 
 function getEffectiveTimerMs(fallback: number, key: 'stallWarningMs' | 'hardTimeoutMs'): number {
@@ -109,6 +124,25 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
   const hardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const streamStartUnsubRef = useRef<(() => void) | null>(null);
   const chunkUnsubRef = useRef<(() => void) | null>(null);
+  const prevActiveSessionIdRef = useRef<string | null | undefined>(undefined);
+  /** Skip one activeSessionId bounce from pending-session materialization after appendTurns. */
+  const ignoreNextSessionChangeRef = useRef(false);
+
+  useEffect(() => {
+    if (ignoreNextSessionChangeRef.current) {
+      ignoreNextSessionChangeRef.current = false;
+      prevActiveSessionIdRef.current = store.activeSessionId ?? null;
+      return;
+    }
+    const prev = prevActiveSessionIdRef.current;
+    prevActiveSessionIdRef.current = store.activeSessionId ?? null;
+    if (prev !== undefined && prev !== null && (store.activeSessionId ?? null) !== prev) {
+      lastFailedPromptRef.current = null;
+      lastFailedExchangeRef.current = null;
+      setCanRetry(false);
+      setError(null);
+    }
+  }, [store.activeSessionId]);
 
   const clearTimers = useCallback(() => {
     if (stallTimerRef.current) {
@@ -165,17 +199,24 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
     abortInMain(mainRequestIdRef.current);
     generationGenRef.current += 1;
     resetInFlight();
+    const prior = lastFailedExchangeRef.current;
+    const userPersisted = prior?.prompt === cancelledPrompt && prior.userPersisted;
     lastFailedPromptRef.current = cancelledPrompt;
-    lastFailedExchangeRef.current = { prompt: cancelledPrompt, userInFeed: false };
+    lastFailedExchangeRef.current = {
+      prompt: cancelledPrompt,
+      originSessionId: store.activeSessionId ?? undefined,
+      userPersisted,
+    };
     setCanRetry(true);
     setError('Generation cancelled. You can retry now.');
-  }, [pendingPrompt, resetInFlight]);
+  }, [pendingPrompt, resetInFlight, store.activeSessionId]);
 
   const send = useCallback(async (prompt: string) => {
     const trimmed = prompt.trim();
     if (!trimmed || pendingPrompt !== null) return;
     const failedExchange = lastFailedExchangeRef.current;
-    const isRetryOfFailed = failedExchange?.prompt === trimmed;
+    const isRetryOfFailed = failedExchange?.prompt === trimmed
+      && failedExchange.originSessionId === (store.activeSessionId ?? undefined);
     setError(null);
     setCanRetry(false);
     setStalled(false);
@@ -222,11 +263,9 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
     // if the user switches sessions before the reply lands, the turns still
     // belong to the session they were asked from.
     const originSessionId = store.activeSessionId ?? undefined;
+    const liveTurns = store.activeSession?.turns ?? [];
     // Critic N2: never send raw card JSON / markers as model history.
-    const historySource = turnsForModelHistory(
-      store.activeSession?.turns ?? [],
-      isRetryOfFailed ? trimmed : null,
-    );
+    const historySource = turnsForModelHistory(liveTurns, isRetryOfFailed ? trimmed : null);
     const history = historySource.map((t) => ({
       role: t.role === 'agent' ? ('assistant' as const) : ('user' as const),
       content: historyContentForModel(t, { sessionAgent: store.activeSession?.agent }),
@@ -260,10 +299,8 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
       if (!agentTurn.cardKind) {
         agentTurn.text = neutralizeLeadingCoachCardMarker(agentTurn.text);
       }
-      const lastTurn = store.activeSession?.turns.at(-1);
-      const userAlreadyInFeed =
-        (isRetryOfFailed && failedExchange?.userInFeed)
-        || (lastTurn?.role === 'user' && lastTurn.text === trimmed);
+      const userAlreadyInFeed = (isRetryOfFailed && failedExchange?.userPersisted)
+        || sessionHasUserPrompt(liveTurns, trimmed);
       await store.appendTurns(
         userAlreadyInFeed
           ? [agentTurn]
@@ -273,6 +310,7 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
           ],
         originSessionId,
       );
+      ignoreNextSessionChangeRef.current = true;
       lastFailedPromptRef.current = null;
       lastFailedExchangeRef.current = null;
       streamAccumRef.current = '';
@@ -280,34 +318,43 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
       if (generationGenRef.current !== gen) return;
       const msg = err instanceof Error ? err.message : String(err);
       const now = new Date().toISOString();
-      const partial = streamAccumRef.current.trim();
-      const lastExisting = store.activeSession?.turns.at(-1);
-      const failedTurns: AgentSessionTurn[] = lastExisting?.role === 'user' && lastExisting.text === trimmed
+      const partialRaw = streamAccumRef.current.trim();
+      const partialSafe = partialRaw
+        ? neutralizeLeadingCoachCardMarker(partialRaw)
+        : '';
+      const userPersistedAlready = (isRetryOfFailed && failedExchange?.userPersisted)
+        || sessionHasUserPrompt(liveTurns, trimmed);
+      const failedTurns: AgentSessionTurn[] = userPersistedAlready
         ? []
         : [{ role: 'user', text: trimmed, at: now }];
-      if (partial) {
+      if (partialSafe) {
         failedTurns.push({
           role: 'agent',
-          text: `${partial} (response incomplete)`,
+          text: `${partialSafe} ${RESPONSE_INCOMPLETE_SUFFIX}`,
           at: new Date().toISOString(),
         });
       }
+      let userPersisted = userPersistedAlready;
       if (failedTurns.length > 0) {
         try {
           await store.appendTurns(failedTurns, originSessionId);
+          ignoreNextSessionChangeRef.current = true;
+          userPersisted = userPersistedAlready
+            || failedTurns.some((t) => t.role === 'user' && t.text === trimmed);
         } catch {
-          // Feed stays usable even if vault persist fails.
+          userPersisted = sessionHasUserPrompt(liveTurns, trimmed);
         }
       }
-      const userInFeed =
-        (lastExisting?.role === 'user' && lastExisting.text === trimmed)
-        || failedTurns.some((t) => t.role === 'user' && t.text === trimmed);
       streamAccumRef.current = '';
       lastFailedPromptRef.current = trimmed;
-      lastFailedExchangeRef.current = { prompt: trimmed, userInFeed };
+      lastFailedExchangeRef.current = {
+        prompt: trimmed,
+        originSessionId: store.activeSessionId ?? originSessionId,
+        userPersisted,
+      };
       setCanRetry(true);
       const base = msg || 'Agent unavailable — check your provider settings.';
-      setError(partial ? `${base} (partial reply kept above)` : base);
+      setError(partialSafe ? `${base} (partial reply kept above)` : base);
     } finally {
       if (generationGenRef.current === gen) {
         resetInFlight();
