@@ -259,7 +259,8 @@ test.describe.serial('#1774 Accent breathe', () => {
   });
 
   test('ticks start no transitions and never cut or skip a user transition (opacity + border-color + box-shadow)', async () => {
-    // Settings is still open: its NeonToggles (`transition: all .2s`) and cards
+    await openAppearance(page);
+    // Settings open: NeonToggles (`transition: all .2s`) and cards
     // read the breathing tokens, so a tick that let its own color step
     // transition would fire transitionrun here every 250 ms.
     await expect.poll(() => readState(page), { timeout: 3_000 }).toBe('running');
@@ -382,6 +383,14 @@ test.describe.serial('#1774 Accent breathe', () => {
     const soakRep = testInfo.repeatEachIndex;
     const soakVariant = process.env.ACCENT_BREATHE_PERF_SOAK ?? 'steady';
     test.setTimeout(soakVariant !== 'steady' ? 150_000 : 90_000);
+    if (process.env.CI && soakRep === 0) {
+      // Functional cases above stack visibility hacks, downloads, and settings
+      // chrome; relaunch so ABBA sees a cold renderer like a fresh profile.
+      await app.close();
+      app = await launchApp(userData);
+      page = await firstWindow(app);
+      await expect.poll(() => readState(page), { timeout: 10_000 }).toBe('running');
+    }
     type Metrics = Record<string, number>;
     const client = await page.context().newCDPSession(page);
     await client.send('Performance.enable');
@@ -582,5 +591,6 @@ test.describe.serial('#1774 Accent breathe', () => {
     // A tick costs about one root-token change: no extra whole-tree recalc.
     expect(perChangeRecalcMs).toBeGreaterThan(0);
     expect(perTickRecalcMs).toBeLessThanOrEqual(perChangeRecalcMs * PER_TICK_RECALC_RATIO_MAX);
+    await toggleBreathe(true);
   });
 });
