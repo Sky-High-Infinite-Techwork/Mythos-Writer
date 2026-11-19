@@ -262,7 +262,11 @@ test.describe('SKY-11154 — dot-linking pairing (§2 / §4)', () => {
     try {
       const page = await app.firstWindow();
       await openVaultFilesSettings(page);
-      await expect(page.locator('.app-menu-bar')).toBeVisible({ timeout: 5_000 });
+
+      await expect(
+        page.locator('[data-testid*="pair-dot" i], [aria-label*="pair" i][aria-label*="notes vault" i]').first(),
+        'no dot-linking / pairing control found between Notes and Story vault columns (SKY-11141 §2/§4)',
+      ).toBeVisible({ timeout: 3_000 });
     } finally {
       await app.close();
     }

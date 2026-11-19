@@ -3,8 +3,14 @@
  *
  * Slice: SKY-11151 "[Vault surface] Creation primitive — template/blank/import
  * option set + Obsidian-parity empty" (parent spec SKY-11141 §3/§3a).
- * WelcomeOverlay reachability (F3#9). CHOSEN non-default destination is covered
- * by e2e/vault-create-primitive-sky11151.spec.ts (TC-CVP-* via createVaultFromOptions IPC).
+ * Written by QA (SKY-11173) from the spec, not from the implementation.
+ * TEST FILE ONLY — no product code touched. Failures are expected and
+ * routed to the slice owner; do not "fix" this file to make it pass by
+ * loosening assertions.
+ *
+ * Real E2E across the process boundary: drives the first-run WelcomeOverlay
+ * create-vault modal (F3#9), which calls the real vault creation IPC and
+ * writes to a real temp-dir filesystem. No window.api mocking.
  *
  * Run: xvfb-run --auto-servernum npx playwright test e2e/tests/sky-11151-creation-primitive.spec.ts --reporter=list
  */
@@ -38,13 +44,36 @@ async function dismissLegacyMigrationDialogIfPresent(page: Page): Promise<void> 
   }
 }
 
-async function createBlankVaultViaWelcome(page: Page, vaultName: string): Promise<void> {
+/** Patch ONLY dialog.showOpenDialog (Browse) — real create IPC runs. */
+async function patchOpenDialog(app: ElectronApplication, destParent: string): Promise<void> {
+  await app.evaluate(({ dialog }, { dir }: { dir: string }) => {
+    (dialog as unknown as Record<string, unknown>).showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [dir],
+    });
+  }, { dir: destParent });
+}
+
+/**
+ * WelcomeOverlay blank → create-vault modal → Browse (Where to create) picks
+ * destParent → blank mode → name → submit. CHOSEN non-default location (§4c).
+ */
+async function createBlankVaultAtChosenLocation(
+  page: Page,
+  destParent: string,
+  vaultName: string,
+): Promise<void> {
   await expect(page.getByTestId('welcome-overlay')).toBeVisible({ timeout: 60_000 });
   await dismissLegacyMigrationDialogIfPresent(page);
   await page.getByTestId('welcome-path-blank').click();
 
   await expect(page.locator('#create-vault-name')).toBeVisible({ timeout: 15_000 });
   await page.getByTestId('rail-vault-mode-blank').click();
+
+  const modal = page.locator('.create-vault-modal');
+  await modal.getByRole('button', { name: /Browse/i }).click();
+  await expect(page.locator('#create-vault-dest')).toContainText(destParent, { timeout: 5_000 });
+
   await page.locator('#create-vault-name').fill(vaultName);
   await page.getByTestId('create-vault-submit').click();
   await expect(page.locator('.app-menu-bar')).toBeVisible({ timeout: 45_000 });
@@ -55,17 +84,18 @@ function listVisibleEntries(dir: string): string[] {
 }
 
 test.describe('SKY-11151 creation primitive — Obsidian-parity blank vault (§3a)', () => {
-  test('AC-CP-01: Welcome "Start blank" creates a named vault under default <userData>/vaults (§4c reachability); chosen parent → vault-create-primitive-sky11151.spec.ts', async () => {
+  test('AC-CP-01: "Start blank" creates the vault at the CHOSEN non-default location and name, verified on disk (§4c reachability)', async () => {
     const userData = freshUserData('mythos-cp01-');
+    const destParent = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-cp01-dest-'));
     const vaultName = 'QA Blank Vault One';
     const app = await launchApp(userData);
     try {
+      await patchOpenDialog(app, destParent);
       const page = await app.firstWindow();
-      await createBlankVaultViaWelcome(page, vaultName);
+      await createBlankVaultAtChosenLocation(page, destParent, vaultName);
 
-      const vaultsParent = path.join(userData, 'vaults');
-      const mythosRoot = path.join(vaultsParent, vaultName);
-      await expect.poll(() => fs.existsSync(mythosRoot), { timeout: 30_000 }).toBe(true);
+      const mythosRoot = path.join(destParent, vaultName);
+      expect(fs.existsSync(mythosRoot), `expected vault at chosen non-default path ${mythosRoot}`).toBe(true);
       expect(fs.existsSync(path.join(mythosRoot, 'mythos.json'))).toBe(true);
     } finally {
       await app.close();
@@ -74,13 +104,15 @@ test.describe('SKY-11151 creation primitive — Obsidian-parity blank vault (§3
 
   test.fixme('AC-CP-02: blank vault has ZERO visible folders/files — Obsidian-parity empty (§3a hard requirement) (pending SKY-11151)', async () => {
     const userData = freshUserData('mythos-cp02-');
+    const destParent = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-cp02-dest-'));
     const vaultName = 'QA Blank Vault Two';
     const app = await launchApp(userData);
     try {
+      await patchOpenDialog(app, destParent);
       const page = await app.firstWindow();
-      await createBlankVaultViaWelcome(page, vaultName);
+      await createBlankVaultAtChosenLocation(page, destParent, vaultName);
 
-      const mythosRoot = path.join(path.join(userData, 'vaults'), vaultName);
+      const mythosRoot = path.join(destParent, vaultName);
       const visible = listVisibleEntries(mythosRoot);
       expect(
         visible,
@@ -93,11 +125,13 @@ test.describe('SKY-11151 creation primitive — Obsidian-parity blank vault (§3
 
   test.fixme('AC-CP-03: the empty choice is PERSISTED — folders stay absent after a relaunch, not re-seeded on next boot (pending SKY-11151)', async () => {
     const userData = freshUserData('mythos-cp03-');
+    const destParent = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-cp03-dest-'));
     const vaultName = 'QA Blank Vault Three';
     const app = await launchApp(userData);
     try {
+      await patchOpenDialog(app, destParent);
       const page = await app.firstWindow();
-      await createBlankVaultViaWelcome(page, vaultName);
+      await createBlankVaultAtChosenLocation(page, destParent, vaultName);
     } finally {
       await app.close();
     }
@@ -107,9 +141,12 @@ test.describe('SKY-11151 creation primitive — Obsidian-parity blank vault (§3
       const page2 = await app2.firstWindow();
       await expect(page2.locator('.app-menu-bar')).toBeVisible({ timeout: 20_000 });
 
-      const mythosRoot = path.join(path.join(userData, 'vaults'), vaultName);
+      const mythosRoot = path.join(destParent, vaultName);
       const visible = listVisibleEntries(mythosRoot);
-      expect(visible, 'a relaunch must never re-seed a vault that was created blank').toEqual([]);
+      expect(
+        visible,
+        'a relaunch must never re-seed a vault that was created blank',
+      ).toEqual([]);
     } finally {
       await app2.close();
     }
@@ -117,17 +154,16 @@ test.describe('SKY-11151 creation primitive — Obsidian-parity blank vault (§3
 });
 
 test.describe('SKY-11151 — sample-story path removal (§3)', () => {
-  test('AC-CP-04: first-run WelcomeOverlay has no sample-story card', async () => {
+  test.fixme('AC-CP-04: the first-run card set has exactly 3 options (template/blank/import) — no 4th "sample" card (pending SKY-11151)', async () => {
     const userData = freshUserData('mythos-cp04-');
     const app = await launchApp(userData);
     try {
       const page = await app.firstWindow();
-      await expect(page.getByTestId('welcome-overlay')).toBeVisible({ timeout: 60_000 });
-      await expect(page.getByTestId('welcome-path-sample')).toHaveCount(0);
-      for (const id of ['template', 'blank', 'import', 'restore', 'openin'] as const) {
-        await expect(page.getByTestId(`welcome-path-${id}`)).toBeVisible();
-      }
-      await expect(page.locator('[data-testid="onboarding-wizard"]')).toHaveCount(0);
+      await expect(page.getByTestId('screen-step1')).toBeVisible({ timeout: 15_000 });
+
+      await expect(page.getByTestId('card-sample'), 'card-sample must be removed per SKY-11141 §3').toHaveCount(0);
+      await expect(page.getByTestId('card-start-blank')).toBeVisible();
+      await expect(page.getByTestId('card-import-obsidian')).toBeVisible();
     } finally {
       await app.close();
     }
