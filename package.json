@@ -37,7 +37,7 @@
     "test:e2e:auto-update": "MYTHOS_AUTO_UPDATE=1 playwright test e2e/auto-update-beta.spec.ts --reporter=list,html",
     "test:e2e:accent-breathe": "playwright test e2e/accent-breathe.spec.ts --reporter=list,html",
     "test:e2e:crud": "npm run test:e2e:accent-breathe:perf-soak && playwright test e2e/vault-crud.spec.ts e2e/tests/first-run-dead-end.spec.ts e2e/vault-not-found.spec.ts e2e/settings-vault-path.spec.ts e2e/settings-new-vault.spec.ts e2e/tests/sky-906-default-vault-and-switcher.spec.ts e2e/navigator-popout.spec.ts e2e/story-import.spec.ts e2e/story-import-epub.spec.ts e2e/tests/sky-11008-delete-scene-chapter.spec.ts e2e/tests/sky-11048-nav-rail-vault-tiles.spec.ts e2e/tests/sky-11238-vault-rail-stable-order.spec.ts e2e/tests/sky-11815-vaults-parent-move-stale-state.spec.ts e2e/ivy-r6-vault-park-close.spec.ts --reporter=list,html",
-    "test:e2e:accent-breathe:perf-soak": "playwright test e2e/accent-breathe.spec.ts -g \"perf: Accent breathe holds frame rate\" --repeat-each=10 --retries=0 --reporter=list,html",
+    "test:e2e:accent-breathe:perf-soak": "playwright test e2e/accent-breathe.spec.ts --grep-invert \"perf: Accent breathe holds frame rate\" --reporter=list,html && playwright test e2e/accent-breathe.spec.ts -g \"perf: Accent breathe holds frame rate\" --repeat-each=10 --retries=0 --reporter=list,html",
     "test:e2e:ivy-r6-vault-park-close": "playwright test e2e/ivy-r6-vault-park-close.spec.ts --reporter=list,html",
     "test:e2e:vault-rail-stable-order": "playwright test e2e/tests/sky-11238-vault-rail-stable-order.spec.ts --reporter=list,html",
     "test:e2e:archive-quickadd": "playwright test e2e/timeline-archive-quickadd.spec.ts --reporter=list,html",
