@@ -99,7 +99,9 @@ describe('App — onboarding gate (SKY-152)', () => {
       vaultGetPaths: vi.fn().mockResolvedValue({
         storyVaultPath: '/Volumes/Cloud/Mythos/Story Vault',
         notesVaultPath: '/Volumes/Cloud/Mythos/Notes Vault',
+        persistedVaultSettings: true,
       }),
+      getVaultRoot: vi.fn().mockResolvedValue({ vaultRoot: null }),
       validatePath: vi.fn().mockResolvedValue({ exists: false, isEmpty: true, writable: false }),
     });
 

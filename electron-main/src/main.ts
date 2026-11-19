@@ -6933,6 +6933,7 @@ export const handlers: IpcHandlers = {
       defaultVaultsParentPath: defaultMythosVaultsParent(),
       mythosRoot: mythosRootForStoryVault(getVaultRoot()),
       vaultsParentPath: getVaultsParentPath(),
+      persistedVaultSettings: fs.existsSync(getVaultSettingsPath()),
     };
   },
 

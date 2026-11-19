@@ -60,10 +60,10 @@ function App() {
         const notesValid = isVaultPathValid(notesResult);
 
         if (!storyValid && !notesValid) {
-          // F3#9 / no-vault: Skip or cleared vaultRoot — land on the shell, not
-          // VaultNotFoundScreen (Probe #33). A configured root that is missing
-          // on disk also surfaces as null from vault:get-root.
-          if (!activeRoot?.vaultRoot) {
+          // F3#9 / no-vault: no persisted vault-settings yet — land on the shell
+          // (Welcome Skip, post-trash zero survivors). Persisted paths that no
+          // longer exist use VaultNotFoundScreen (SKY-152).
+          if (!vaults.persistedVaultSettings && !activeRoot?.vaultRoot) {
             setView({ kind: 'shell', settings: nextSettings });
             return;
           }
@@ -72,7 +72,8 @@ function App() {
         }
       } catch {
         const activeRoot = await window.api.getVaultRoot?.().catch(() => ({ vaultRoot: null as string | null }));
-        if (!activeRoot?.vaultRoot) {
+        const vaults = await window.api.vaultGetPaths().catch(() => ({ persistedVaultSettings: false }));
+        if (!vaults.persistedVaultSettings && !activeRoot?.vaultRoot) {
           setView({ kind: 'shell', settings: nextSettings });
           return;
         }
