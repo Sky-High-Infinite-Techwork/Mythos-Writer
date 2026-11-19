@@ -9,6 +9,9 @@
 // consumers with `transition: all`/box-shadow/border transitions (7 on a fresh
 // window, 49 with Settings open) would otherwise restart on every color step
 // and keep repainting (measured: 5–9% dropped frames ON vs 0% OFF under xvfb).
+// `getAnimations()` is filtered to token-consumer transition properties so busy
+// documents (e.g. perf proxy DOM) do not spend two full animation scans per
+// 250 ms tick on unrelated transitions.
 // Transitions already running or pending before the tick (user hover, toggle,
 // panel) are never touched, and no global transition override is used.
 //
@@ -173,11 +176,20 @@ function write(c: Controller, t: Record<string, string>): void {
   }
 }
 
+/** True when a transition is on token-driven paint (skip unrelated animations in the tick scan). */
+function isTokenConsumerTransition(a: Animation): boolean {
+  const prop = (a as CSSTransition).transitionProperty;
+  if (typeof prop !== 'string') return false;
+  if (prop === 'all') return true;
+  return /border|box-shadow|color|background|outline|filter/i.test(prop);
+}
+
 /** `target|pseudo|property` of a running CSS transition, or null for any other animation. */
 function transitionKey(a: Animation, ids: Map<Element, number>): string | null {
   const prop = (a as CSSTransition).transitionProperty;
   const fx = a.effect as KeyframeEffect | null;
   if (typeof prop !== 'string' || !fx?.target) return null;
+  if (!isTokenConsumerTransition(a)) return null;
   let id = ids.get(fx.target);
   if (id === undefined) ids.set(fx.target, (id = ids.size));
   return id + '|' + (fx.pseudoElement ?? '') + '|' + prop;

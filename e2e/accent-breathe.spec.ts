@@ -157,6 +157,8 @@ let vaultDir: string;
 let notesVaultDir: string;
 
 test.describe.serial('#1774 Accent breathe', () => {
+  test.describe.configure({ retries: 0 });
+
   test.beforeAll(async () => {
     userData = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-breathe-user-'));
     vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-breathe-vault-'));
@@ -377,6 +379,8 @@ test.describe.serial('#1774 Accent breathe', () => {
       return Object.fromEntries(list.map((m) => [m.name, m.value]));
     };
     const measure = async () => {
+      // Let toggle/proxy style changes finish so the 4 s window measures steady ON/OFF breathe.
+      await page.waitForTimeout(400);
       const before = await metrics();
       const sampler = distinctB1Over(page, 4000, 100);
       const stats = summarizeFrames(await sampleFrameDeltas(page, 4000));
