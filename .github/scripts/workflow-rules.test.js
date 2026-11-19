@@ -93,7 +93,7 @@ test('ci needs includes diff-guard and tier1-gate', () => {
 
 test('ci aggregator tier1 includes needs.diff-guard.result (not oracle-sweeps)', () => {
   const doc = loadWorkflow('ci.yml');
-  const step = doc.jobs.ci.steps.find((s) => /ci-aggregator\.sh/.test(String(s.run || '')));
+  const step = doc.jobs.ci.steps.find((s) => String(s.name || '') === 'All checks passed');
   assert.ok(step, 'ci aggregator step');
   assert.match(step.run, /ci-aggregator\.sh/);
   assert.equal(step.env.NEEDS_DIFF_GUARD_RESULT, '${{ needs.diff-guard.result }}');
@@ -131,7 +131,7 @@ test('tier1-gate needs every Tier 1 job plus setup', () => {
   for (const job of ['setup', ...TIER1_JOBS]) {
     assert.ok(gate.needs.includes(job), `tier1-gate needs ${job}`);
   }
-  const gateStep = gate.steps.find((step) => /ci-tier1-gate\.sh/.test(String(step.run || '')));
+  const gateStep = gate.steps.find((step) => String(step.name || '').includes('Tier 1 checks passed'));
   assert.ok(gateStep, 'tier1-gate bash step');
   const envBlob = JSON.stringify(gateStep.env || {});
   for (const job of ['setup', ...TIER1_JOBS]) {
@@ -218,8 +218,8 @@ test('paths-filter resolve steps call extracted bash scripts with env (not inlin
   const resolveE2e = steps.find((step) => step.id === 'resolve-e2e');
   assert.match(resolveDocs.run, /ci-paths-filter-resolve-docs\.sh/);
   assert.match(resolveE2e.run, /ci-paths-filter-resolve-e2e\.sh/);
-  assert.match(resolveDocs.run, /stage-gate-resolvers\.outputs\.gate_dir/);
-  assert.match(resolveE2e.run, /stage-gate-resolvers\.outputs\.gate_dir/);
+  assert.match(resolveDocs.run, /mythos-gate-trusted/);
+  assert.match(resolveE2e.run, /mythos-gate-trusted/);
   assert.ok(resolveDocs.env.FILTER_DOCS_OUTCOME);
   assert.ok(resolveE2e.env.FILTER_E2E_RUN_E2E);
   const docsRun = fs.readFileSync(path.join(REPO, '.github', 'scripts', 'ci-paths-filter-resolve-docs.sh'), 'utf8');
@@ -247,8 +247,10 @@ function bashScriptSteps(doc) {
 
 test('tier1-gate and ci aggregator call extracted bash scripts', () => {
   const doc = loadWorkflow('ci.yml');
-  const tierStep = doc.jobs['tier1-gate'].steps.find((step) => /ci-tier1-gate\.sh/.test(String(step.run || '')));
-  const ciStep = doc.jobs.ci.steps.find((step) => /ci-aggregator\.sh/.test(String(step.run || '')));
+  const tierStep = doc.jobs['tier1-gate'].steps.find((step) =>
+    String(step.name || '').includes('Tier 1 checks passed'),
+  );
+  const ciStep = doc.jobs.ci.steps.find((step) => String(step.name || '') === 'All checks passed');
   assert.ok(tierStep, 'tier1-gate script step');
   assert.ok(ciStep, 'ci aggregator script step');
   assert.match(tierStep.run, /ci-tier1-gate\.sh/);
@@ -259,8 +261,10 @@ test('tier1-gate and ci aggregator call extracted bash scripts', () => {
 
 test('ci.yml gate scripts: env vars map to needs.*.result and paths-filter run-e2e', () => {
   const doc = loadWorkflow('ci.yml');
-  const tierStep = doc.jobs['tier1-gate'].steps.find((s) => /ci-tier1-gate\.sh/.test(String(s.run || '')));
-  const ciStep = doc.jobs.ci.steps.find((s) => /ci-aggregator\.sh/.test(String(s.run || '')));
+  const tierStep = doc.jobs['tier1-gate'].steps.find((s) =>
+    String(s.name || '').includes('Tier 1 checks passed'),
+  );
+  const ciStep = doc.jobs.ci.steps.find((s) => String(s.name || '') === 'All checks passed');
   assert.ok(tierStep?.env, 'tier1-gate step env');
   assert.ok(ciStep?.env, 'ci aggregator step env');
 
@@ -328,28 +332,74 @@ test('bash .github/scripts steps are preceded by sparse checkout of .github/scri
   }
 });
 
-test('gate scripts run outside workspace without PR-base bootstrap fallback', () => {
+test('gate scripts load only from pinned base ref (candidate .github/scripts unused)', () => {
   const text = fs.readFileSync(path.join(WORKFLOWS, 'ci.yml'), 'utf8');
-  assert.doesNotMatch(text, /missing on PR base/);
-  assert.doesNotMatch(text, /_gate-base/);
-  assert.doesNotMatch(text, /Install trusted gate scripts/);
-  assert.match(text, /mythos-gate-scripts/);
-  assert.match(text, /\$GITHUB_WORKSPACE\/mythos-gate-scripts\/\.github\/scripts\/ci-tier1-gate\.sh/);
-  assert.match(text, /\$GITHUB_WORKSPACE\/mythos-gate-scripts\/\.github\/scripts\/ci-aggregator\.sh/);
-  assert.match(text, /Stage gate resolver scripts/);
-  assert.match(text, /git show "HEAD:\.github\/scripts\//);
+  assert.match(text, /pull_request\.base\.sha/);
+  assert.match(text, /merge_group\.base_sha/);
+  assert.match(text, /mythos-gate-trusted/);
+  assert.match(text, /fail closed \(no candidate fallback\)/);
+  assert.doesNotMatch(text, /_gate-candidate|missing on PR base|git show "HEAD:/);
+  assert.doesNotMatch(text, /Install trusted gate scripts \(PR\)/);
   const doc = loadWorkflow('ci.yml');
-  for (const jobName of ['tier1-gate', 'ci']) {
-    const checkout = doc.jobs[jobName].steps.find((s) =>
-      String(s.name || '').includes('Checkout gate scripts'),
-    );
-    assert.match(String(checkout.with.path), /mythos-gate-scripts/);
-    assert.equal(checkout.with['persist-credentials'], false);
-  }
-  const stage = doc.jobs['paths-filter'].steps.find((s) => s.id === 'stage-gate-resolvers');
-  assert.ok(stage, 'paths-filter stages resolvers via git show');
+  const trustedCheckout = doc.jobs['tier1-gate'].steps.find((s) =>
+    String(s.name || '').includes('Checkout trusted gate scripts'),
+  );
+  assert.match(String(trustedCheckout.with.ref), /pull_request\.base\.sha/);
+  assert.match(String(trustedCheckout.with.ref), /merge_group\.base_sha/);
+  assert.equal(trustedCheckout.with.path, 'mythos-gate-trusted');
+  const tierRun = doc.jobs['tier1-gate'].steps.find((s) => /ci-tier1-gate\.sh/.test(String(s.run || '')));
+  const ciRun = doc.jobs.ci.steps.find((s) => /ci-aggregator\.sh/.test(String(s.run || '')));
   const resolveDocs = doc.jobs['paths-filter'].steps.find((s) => s.id === 'resolve-docs');
-  assert.match(String(resolveDocs.run), /stage-gate-resolvers\.outputs\.gate_dir/);
+  assert.match(String(tierRun.run), /mythos-gate-trusted/);
+  assert.match(String(ciRun.run), /mythos-gate-trusted/);
+  assert.match(String(resolveDocs.run), /mythos-gate-trusted/);
+  assert.doesNotMatch(String(ciRun.run), /bash \.github\/scripts\//);
+  assert.ok(
+    doc.jobs['tier1-gate'].steps.some((s) => String(s.name || '').includes('Verify trusted gate scripts')),
+  );
+  assert.ok(
+    doc.jobs['paths-filter'].steps.some((s) => String(s.name || '').includes('Verify trusted gate resolvers')),
+  );
+});
+
+test('mutating candidate aggregator in workspace cannot satisfy ci wiring', () => {
+  const ciStep = loadWorkflow('ci.yml').jobs.ci.steps.find((s) => String(s.name || '') === 'All checks passed');
+  assert.match(String(ciStep.run), /mythos-gate-trusted\/\.github\/scripts\/ci-aggregator\.sh/);
+  const poisoned = "set -euo pipefail\necho ok\nexit 0\n";
+  const poisonPath = path.join(REPO, '.github', 'scripts', 'ci-aggregator.sh');
+  const saved = fs.readFileSync(poisonPath, 'utf8');
+  try {
+    fs.writeFileSync(poisonPath, poisoned);
+    const failEnv = {
+      NEEDS_TIER1_GATE_RESULT: 'failure',
+      NEEDS_LINT_RESULT: 'success',
+      NEEDS_TYPECHECK_RESULT: 'success',
+      NEEDS_UNIT_RESULT: 'success',
+      NEEDS_DIFF_GUARD_RESULT: 'success',
+      NEEDS_ORACLE_SWEEPS_RESULT: 'success',
+      NEEDS_E2E_SHARD_1_RESULT: 'success',
+      NEEDS_E2E_SHARD_2_RESULT: 'success',
+      NEEDS_E2E_SHARD_3_RESULT: 'success',
+      NEEDS_E2E_SHARD_4_RESULT: 'success',
+      PATHS_FILTER_RUN_E2E: 'true',
+      GITHUB_EVENT_NAME: 'pull_request',
+    };
+    const { spawnSync } = require('node:child_process');
+    const poisonedRun = spawnSync('bash', [poisonPath], {
+      env: { ...process.env, ...failEnv },
+      encoding: 'utf8',
+    });
+    assert.equal(poisonedRun.status, 0, 'poisoned in-tree copy would incorrectly pass');
+    fs.writeFileSync(poisonPath, saved);
+    const trustedRun = spawnSync('bash', [poisonPath], {
+      env: { ...process.env, ...failEnv },
+      encoding: 'utf8',
+    });
+    assert.equal(trustedRun.status, 1, 'restored trusted script must fail closed');
+    assert.notEqual(poisonedRun.status, trustedRun.status);
+  } finally {
+    fs.writeFileSync(poisonPath, saved);
+  }
 });
 
 test('ci aggregator regression: e2e skip logic lives in ci-aggregator.sh', () => {

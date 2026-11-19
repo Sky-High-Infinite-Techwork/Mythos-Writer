@@ -40,6 +40,7 @@ function withGithubOutput(fn) {
   const outFile = path.join(dir, 'out');
   try {
     const result = fn(outFile);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
     return { result, lines: fs.readFileSync(outFile, 'utf8').trim() };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -79,16 +80,23 @@ test('ci-tier1-gate: all Tier 1 success exits 0', () => {
   assert.equal(r.status, 0, r.stderr);
 });
 
-test('ci-tier1-gate: success tokens not expanded against cwd filenames', () => {
+test('ci-tier1-gate: glob token matching cwd decoys fails closed', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tier1-glob-'));
   try {
     fs.writeFileSync(path.join(dir, 'success'), 'decoy');
-    const r = spawnSync('bash', [TIER1_SCRIPT], {
-      cwd: dir,
-      env: { ...process.env, NEEDS_TIER1_RESULTS: ALL_TIER1_OK },
-      encoding: 'utf8',
-    });
-    assert.equal(r.status, 0, r.stderr);
+    const env = {
+      NEEDS_TIER1_RESULTS: 'success success success success success success *',
+    };
+    const prod = spawnSync('bash', [TIER1_SCRIPT], { cwd: dir, env: { ...process.env, ...env }, encoding: 'utf8' });
+    assert.equal(prod.status, 1, 'literal * token must not succeed');
+    const src = fs.readFileSync(TIER1_SCRIPT, 'utf8');
+    const mutant = src.replace(
+      /set -f\nIFS=' ' read -r -a results <<<"\$flat"\nset \+f/,
+      '# shellcheck disable=SC2206\nresults=($flat)\n',
+    );
+    const broken = spawnSync('bash', ['-c', mutant], { cwd: dir, env: { ...process.env, ...env }, encoding: 'utf8' });
+    assert.equal(broken.status, 0, 'mutant must incorrectly pass via glob expansion');
+    assert.notEqual(prod.status, broken.status);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
