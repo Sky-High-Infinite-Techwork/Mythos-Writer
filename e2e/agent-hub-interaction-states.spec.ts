@@ -251,13 +251,18 @@ test('keyboard: Enter opens coach tips from the Open tips control; Close returns
   await page.getByTestId('ahp-close-writer').click();
   await expect(page.getByTestId('ahp-writer-tips')).toHaveCount(0);
   await expect(page.getByTestId('ahp-partner-chat-input')).toBeVisible();
+  await expect(openTips).toBeFocused();
 });
 
-test('regression guard: partner chat composer stays visible at normal panel width', async () => {
+// `.wa-panel-root` previously had `display: contents` (AC-WA-20), which
+// stripped an element's own box — the SAME element AC-WA-20's ResizeObserver
+// measures for its 280px collapse check. Guards against a re-introduction of
+// `display: contents` on that element.
+test('regression guard: the Writing Coach mini-chat does not permanently collapse at a normal panel width', async () => {
   await openAgentsHub(page);
   await openPartnerChat(page);
-  const composer = page.locator('[data-testid="ahp-partner-chat"]');
-  const width = await composer.evaluate((el) => el.getBoundingClientRect().width);
-  expect(width).toBeGreaterThan(200);
-  await expect(page.getByTestId('ahp-partner-chat-input')).toBeVisible();
+
+  await expect(page.locator('.wa-collapsed-btn')).not.toBeVisible();
+  const width = await page.locator('.wa-panel-root').evaluate((el) => el.getBoundingClientRect().width);
+  expect(width).toBeGreaterThan(280);
 });

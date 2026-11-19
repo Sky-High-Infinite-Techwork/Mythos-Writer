@@ -86,7 +86,7 @@ function writeSettings(userData: string, vaultDir: string, notesDir: string, fak
       provider: customProviderSeed(fake.port),
       agents: {
         writingAssistant: {
-          enabled: true,
+          enabled: false,
           model: 'e2e-fake-model',
           scanIntervalSeconds: 60,
           autoApply: false,

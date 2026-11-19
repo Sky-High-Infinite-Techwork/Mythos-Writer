@@ -1282,8 +1282,69 @@ describe('SettingsPanel', () => {
 
   // ── Beta 4 M28 (B4-8): per-category certainty sliders ──
 
+  it.skip('B4-8: category rows carry a certainty slider that defaults to the agent threshold', async () => {
+    const settingsWithAutoApply = {
+      ...defaultSettings,
+      agents: {
+        ...defaultSettings.agents,
+        writingAssistant: { ...defaultSettings.agents.writingAssistant, autoApply: true, confidenceThreshold: 0.8 },
+      },
+    };
+    mockSettingsGet.mockResolvedValueOnce(settingsWithAutoApply);
+    await renderSettings(<SettingsPanel onClose={mockOnClose} />);
+    await waitFor(() => screen.getByTestId('wa-category-toggles'));
 
+    const slider = screen.getByTestId('wa-cat-spelling-threshold') as HTMLInputElement;
+    expect(slider.value).toBe('0.8');
+  });
 
+  it.skip('B4-8: changing a category certainty slider persists autoApplyThresholds via IPC', async () => {
+    const settingsWithAutoApply = {
+      ...defaultSettings,
+      agents: {
+        ...defaultSettings.agents,
+        writingAssistant: { ...defaultSettings.agents.writingAssistant, autoApply: true },
+      },
+    };
+    mockSettingsGet.mockResolvedValueOnce(settingsWithAutoApply);
+    await renderSettings(<SettingsPanel onClose={mockOnClose} />);
+    await waitFor(() => screen.getByTestId('wa-category-toggles'));
+
+    fireEvent.change(screen.getByTestId('wa-cat-grammar-threshold'), { target: { value: '0.95' } });
+    fireEvent.click(screen.getByRole('button', { name: /close settings/i }));
+    await waitFor(() => expect(mockSettingsSet).toHaveBeenCalledTimes(1));
+
+    const saved: AppSettings = mockSettingsSet.mock.calls[0][0];
+    expect(saved.agents.writingAssistant.autoApplyThresholds?.grammar).toBeCloseTo(0.95);
+  });
+
+  it.skip('B4-8: a disabled category toggle disables its certainty slider', async () => {
+    const settingsAllOff = {
+      ...defaultSettings,
+      agents: {
+        ...defaultSettings.agents,
+        writingAssistant: {
+          ...defaultSettings.agents.writingAssistant,
+          autoApply: true,
+          autoApplyCategories: {
+            punctuation: false, spelling: false, grammar: false,
+            'sentence-structure': false, 'style-tone': false, other: false,
+          },
+        },
+      },
+    };
+    mockSettingsGet.mockResolvedValueOnce(settingsAllOff);
+    await renderSettings(<SettingsPanel onClose={mockOnClose} />);
+    await waitFor(() => screen.getByTestId('wa-category-toggles'));
+
+    const spellingToggle = screen.getByRole('checkbox', { name: /writing coach auto-apply spelling/i }) as HTMLInputElement;
+    expect(spellingToggle.checked).toBe(false);
+    const slider = screen.getByTestId('wa-cat-spelling-threshold') as HTMLInputElement;
+    expect(slider.disabled).toBe(true);
+
+    await act(async () => { fireEvent.click(spellingToggle); });
+    expect((screen.getByTestId('wa-cat-spelling-threshold') as HTMLInputElement).disabled).toBe(false);
+  });
 
   it('shows API key field for cloud providers', async () => {
     await renderSettings(<SettingsPanel onClose={mockOnClose} />);
@@ -1522,6 +1583,7 @@ describe('Archive Agent settings section removed (S2-6) — Slice C', () => {
   it('does not render Archive Agent heading, continuity master, or scene-crafter suggestion controls', async () => {
     await renderSettings(<SettingsPanel onClose={mockOnClose} />);
     await waitFor(() => screen.getByRole('switch', { name: 'All AI features' }));
+    expect(screen.getByTestId('model-keys-page')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /archive agent/i })).not.toBeInTheDocument();
     expect(screen.queryByTestId('archive-agent-section')).not.toBeInTheDocument();
     expect(screen.queryByTestId('archive-continuity-enabled')).not.toBeInTheDocument();

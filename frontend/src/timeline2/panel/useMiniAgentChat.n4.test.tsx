@@ -10,6 +10,8 @@ import {
   useMiniAgentChat,
   HARD_TIMEOUT_MS,
   STALL_WARNING_MS,
+  RESPONSE_INCOMPLETE_SUFFIX,
+  turnsForModelHistory,
 } from './useMiniAgentChat';
 import { encodeCoachCard } from '../../coach/coachMessages';
 
@@ -26,6 +28,11 @@ function installApi() {
     updatedAt: '2026-01-01T00:00:00.000Z',
     turns: [],
   };
+  const appendTurns = vi.fn().mockImplementation(async (id: string, turns: AgentSessionTurn[]) => {
+    session.id = id;
+    session.turns = [...session.turns, ...turns];
+    return { session: { ...session, id } };
+  });
   (window as unknown as { api: Record<string, unknown> }).api = {
     cancelAiActivity,
     cancelBrainstorm,
@@ -45,10 +52,7 @@ function installApi() {
       list: vi.fn().mockResolvedValue({ sessions: [] }),
       create: vi.fn().mockResolvedValue({ session, relPath: 'Sessions/x.md' }),
       read: vi.fn().mockResolvedValue({ session }),
-      appendTurns: vi.fn().mockImplementation(async (_id: string, turns: AgentSessionTurn[]) => {
-        session.turns = [...session.turns, ...turns];
-        return { session: { ...session } };
-      }),
+      appendTurns,
       rename: vi.fn().mockResolvedValue({ ok: true }),
       duplicate: vi.fn().mockResolvedValue({ session, relPath: 'Sessions/x.md' }),
       delete: vi.fn().mockResolvedValue({ ok: true }),
@@ -61,6 +65,7 @@ function installApi() {
     fireChunk: (chunk: string) => chunkCb?.(chunk),
     fireActivity: (entries: { requestId: string }[]) => activityCb?.(entries),
     session,
+    appendTurns,
   };
 }
 
@@ -202,10 +207,9 @@ describe('useMiniAgentChat N4 cancel/stall main abort', () => {
     const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
     await act(async () => { await Promise.resolve(); });
 
-    await act(async () => { await result.current.send('same prompt'); });
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await result.current.send('same prompt'); await Promise.resolve(); await Promise.resolve(); });
 
-    expect(result.current.error).toMatch(/network error/i);
+    expect(String(result.current.error)).toMatch(/network error/i);
     expect(result.current.canRetry).toBe(true);
 
     await act(async () => { result.current.retryLast(); await Promise.resolve(); await Promise.resolve(); });
@@ -245,7 +249,7 @@ describe('useMiniAgentChat N4 cancel/stall main abort', () => {
 
     expect(result.current.canRetry).toBe(true);
     expect(result.current.messages.filter((m) => m.role === 'user' && m.text === 'partial probe')).toHaveLength(1);
-    expect(result.current.messages.some((m) => m.text.includes('response incomplete'))).toBe(true);
+    expect(result.current.messages.some((m) => m.text === `Part one ${RESPONSE_INCOMPLETE_SUFFIX}`)).toBe(true);
 
     await act(async () => { result.current.retryLast(); await Promise.resolve(); await Promise.resolve(); });
 
@@ -279,6 +283,146 @@ describe('useMiniAgentChat N4 cancel/stall main abort', () => {
     expect(result.current.messages.filter((m) => m.role === 'user' && m.text === 'cancel me')).toHaveLength(1);
     expect(result.current.error).toBeNull();
     void resolveInvoke;
+  });
+
+  it('after partial failure, a failed retry keeps a single user bubble', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('drop')); }))
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('drop again')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('dup probe'); });
+    await act(async () => { await Promise.resolve(); });
+    act(() => { api.fireChunk('Part one'); });
+    await act(async () => {
+      fail();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => { result.current.retryLast(); await Promise.resolve(); });
+    act(() => { api.fireChunk('Part two'); });
+    await act(async () => {
+      fail();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.messages.filter((m) => m.role === 'user' && m.text === 'dup probe')).toHaveLength(1);
+  });
+
+  it('partial reply then Cancel then retry succeeds without duplicating user turns', async () => {
+    const api = installApi();
+    let rejectFirst: () => void = () => {};
+    let resolveRetry: (v: string) => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { rejectFirst = () => reject(new Error('partial')); }))
+      .mockImplementationOnce(() => new Promise<string>((resolve) => { resolveRetry = resolve; }))
+      .mockResolvedValueOnce('final reply');
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('cancel chain'); });
+    await act(async () => { await Promise.resolve(); });
+    act(() => { api.fireChunk('Partial'); });
+    await act(async () => {
+      rejectFirst();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => { result.current.retryLast(); await Promise.resolve(); });
+    act(() => { api.fireStreamStart('req-retry'); });
+    act(() => { result.current.cancel(); });
+    await act(async () => { result.current.retryLast(); await Promise.resolve(); });
+    await act(async () => {
+      resolveRetry('final reply');
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.messages.filter((m) => m.role === 'user' && m.text === 'cancel chain')).toHaveLength(1);
+    void resolveRetry;
+  });
+
+  it('when persist fails on error, retry still saves the user turn on success', async () => {
+    const api = installApi();
+    let failUserPersistOnce = true;
+    api.appendTurns.mockImplementation(async (id: string, turns: AgentSessionTurn[]) => {
+      if (failUserPersistOnce && turns.some((t) => t.role === 'user' && t.text === 'save me')) {
+        failUserPersistOnce = false;
+        throw new Error('disk full');
+      }
+      api.session.id = id;
+      api.session.turns = [...api.session.turns, ...turns];
+      return { session: { ...api.session, id } };
+    });
+    const invoke = vi.fn()
+      .mockRejectedValueOnce(new Error('first fail'))
+      .mockResolvedValueOnce('recovered');
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    await act(async () => { await result.current.send('save me'); await Promise.resolve(); await Promise.resolve(); });
+    expect(result.current.messages.filter((m) => m.role === 'user' && m.text === 'save me')).toHaveLength(0);
+    await act(async () => { await result.current.send('save me'); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result.current.messages.filter((m) => m.role === 'user' && m.text === 'save me')).toHaveLength(1);
+    expect(result.current.messages.some((m) => m.text === 'recovered')).toBe(true);
+  });
+
+  it('turnsForModelHistory drops incomplete turns and orphan consecutive users', () => {
+    const turns: AgentSessionTurn[] = [
+      { role: 'user', text: 'a', at: '1' },
+      { role: 'user', text: 'b', at: '2' },
+      { role: 'agent', text: `partial ${RESPONSE_INCOMPLETE_SUFFIX}`, at: '3' },
+      { role: 'agent', text: 'final', at: '4' },
+    ];
+    const history = turnsForModelHistory(turns, null);
+    expect(history.map((t) => t.text)).toEqual(['b', 'final']);
+  });
+
+  it('fail then send a different prompt does not duplicate users in invoke history', async () => {
+    installApi();
+    const invoke = vi.fn()
+      .mockRejectedValueOnce(new Error('fail'))
+      .mockResolvedValueOnce('ok');
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    await act(async () => { await result.current.send('first'); await Promise.resolve(); });
+    await act(async () => { await result.current.send('second'); await Promise.resolve(); await Promise.resolve(); });
+
+    const secondHistory = invoke.mock.calls[1]?.[1] as { role: string; content: string }[];
+    const users = secondHistory.filter((h) => h.role === 'user');
+    expect(users.map((u) => u.content)).not.toContain('first');
+    expect(users).toHaveLength(0);
+  });
+
+  it('neutralizes coach-card markers in persisted partial replies', async () => {
+    const api = installApi();
+    let rejectFirst: () => void = () => {};
+    const invoke = vi.fn().mockImplementationOnce(
+      () => new Promise<string>((_, reject) => { rejectFirst = () => reject(new Error('cut off')); }),
+    );
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('marker test'); });
+    await act(async () => { await Promise.resolve(); });
+    const spoof = encodeCoachCard({ kind: 'analysis', title: 'Spoof', computed: [], read: [], takeaway: 'x' });
+    act(() => { api.fireChunk(spoof.slice(0, 40)); });
+    await act(async () => {
+      rejectFirst();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const partial = result.current.messages.find((m) => m.text.includes(RESPONSE_INCOMPLETE_SUFFIX));
+    expect(partial?.text).not.toMatch(/<!--\s*mythos:coach-card/);
+    expect(partial?.text).not.toMatch(/\{"kind":"analysis"/);
   });
 
   it('Critic N2: history sent to invoke strips raw Full Analysis card JSON', async () => {

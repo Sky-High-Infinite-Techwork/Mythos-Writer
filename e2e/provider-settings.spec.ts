@@ -201,11 +201,6 @@ test('TC-PROV-02: Test connection with mocked local provider shows success', asy
   await page.click('.settings-close');
 });
 
-// Slice C Soft-FAIL: four classic per-agent Settings cards (and their
-// "Use different provider" overrides) are unmounted. Hand models live on
-// Writing partner; provider buckets live on Model & keys.
-
-
 test('TC-PROV-05: switching global provider fills Base URL with that provider\'s default', async () => {
   // App was seeded with Ollama (http://127.0.0.1:11434/v1) — switch to llama.cpp
   // and confirm the Base URL updates to llama.cpp's own default rather than
@@ -304,8 +299,6 @@ test('TC-PROV-07: legacy API Key section only renders for providers that need on
 
   await page.click('.settings-close');
 });
-
-// Slice C Soft-FAIL: Writing Coach per-agent Model field removed with AgentsSection.
 
 // ─── TC-PROV-09: SKY-11219 AC-4 — Base URL edit debounce re-fetch ─────────────
 //
