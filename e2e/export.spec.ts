@@ -519,3 +519,126 @@ test('AC-EXQ-5: EPUB radio is disabled when scope is Current chapter', async () 
   await dialog.locator('button[aria-label="Close"]').click();
   await dialog.waitFor({ state: 'detached', timeout: 4_000 });
 });
+
+// ─── AC-EXQ-10–12: real MD/TXT exports and read-only failure (prod handlers) ─
+
+async function patchSaveDialogOnly(app: ElectronApplication, exportDirectory: string): Promise<void> {
+  await app.evaluate(({ dialog }, { dir }: { dir: string }) => {
+    let counter = 0;
+    (dialog as unknown as Record<string, unknown>).showSaveDialog = async (
+      options: { filters?: Array<{ extensions?: string[] }> },
+    ) => {
+      const ext = options?.filters?.[0]?.extensions?.[0] ?? 'bin';
+      const getBuiltinModule = (process as unknown as {
+        getBuiltinModule: (id: string) => unknown;
+      }).getBuiltinModule;
+      const nodePath = getBuiltinModule('path') as typeof import('path');
+      return { canceled: false, filePath: nodePath.join(dir, `export-real-${counter++}.${ext}`) };
+    };
+  }, { dir: exportDirectory });
+}
+
+let realUserData: string;
+let realVaultDir: string;
+let realNotesDir: string;
+let realExportDir: string;
+let realApp: ElectronApplication | undefined;
+let realPage: Page;
+
+test.describe('real markdown/plaintext export pipelines', () => {
+  test.beforeAll(async () => {
+    realUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-export-real-ud-'));
+    realVaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-export-real-vault-'));
+    realNotesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-export-real-notes-'));
+    realExportDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-export-real-out-'));
+    seedVault(realVaultDir);
+    seedUserData(realUserData, realVaultDir, realNotesDir);
+    realApp = await launchApp(realUserData);
+    realPage = await firstWindow(realApp);
+    await patchSaveDialogOnly(realApp, realExportDir);
+  });
+
+  test.afterAll(async () => {
+    await realApp?.close().catch(() => {});
+    for (const dir of [realUserData, realVaultDir, realNotesDir, realExportDir]) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('AC-EXQ-10: MD export writes scene prose to a .md file', async () => {
+    await openExportDialog(realPage);
+    const dialog = realPage.locator('[role="dialog"][aria-labelledby="export-dialog-title"]');
+    await dialog.locator('input[type="radio"][value="markdown"]').click();
+    await dialog.getByRole('button', { name: /^Export/ }).click();
+    await expect(dialog.getByText('Export complete')).toBeVisible({ timeout: 30_000 });
+    await dialog.getByRole('button', { name: 'Done' }).click();
+    await dialog.waitFor({ state: 'detached', timeout: 4_000 });
+
+    const mdFile = fs.readdirSync(realExportDir).find((f) => f.endsWith('.md'));
+    expect(mdFile, 'expected a .md export on disk').toBeTruthy();
+    const text = fs.readFileSync(path.join(realExportDir, mdFile!), 'utf-8');
+    expect(text).toContain(SCENE_PROSE);
+  });
+
+  test('AC-EXQ-11: TXT export writes scene prose to a .txt file', async () => {
+    await openExportDialog(realPage);
+    const dialog = realPage.locator('[role="dialog"][aria-labelledby="export-dialog-title"]');
+    await dialog.locator('input[type="radio"][value="plaintext"]').click();
+    await dialog.getByRole('button', { name: /^Export/ }).click();
+    await expect(dialog.getByText('Export complete')).toBeVisible({ timeout: 30_000 });
+    await dialog.getByRole('button', { name: 'Done' }).click();
+    await dialog.waitFor({ state: 'detached', timeout: 4_000 });
+
+    const txtFile = fs.readdirSync(realExportDir).find((f) => f.endsWith('.txt'));
+    expect(txtFile, 'expected a .txt export on disk').toBeTruthy();
+    const text = fs.readFileSync(path.join(realExportDir, txtFile!), 'utf-8');
+    expect(text).toContain(SCENE_PROSE);
+  });
+
+  test('AC-EXQ-12: export to a read-only directory surfaces failure and writes no file', async () => {
+    test.skip(process.platform === 'win32', 'chmod 0o555 does not reliably deny writes on Windows CI');
+    test.skip(process.getuid?.() === 0, 'root can write chmod 0o555 directories; read-only export cannot be asserted');
+
+    const lockedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-export-ro-'));
+    try {
+      fs.chmodSync(lockedDir, 0o555);
+      let probeWriteSucceeded = false;
+      try {
+        fs.writeFileSync(path.join(lockedDir, 'probe.txt'), 'nope');
+        probeWriteSucceeded = true;
+      } catch {
+        /* probe correctly failed */
+      }
+      expect(
+        probeWriteSucceeded,
+        'precondition: directory must not be writable (probe write succeeded)',
+      ).toBe(false);
+
+      await realApp!.evaluate(({ dialog }, { dir }: { dir: string }) => {
+        const nodePath = (process as unknown as {
+          getBuiltinModule: (id: string) => { join: (...p: string[]) => string };
+        }).getBuiltinModule('path');
+        (dialog as unknown as Record<string, unknown>).showSaveDialog = async () => ({
+          canceled: false,
+          filePath: nodePath.join(dir, 'blocked-export.md'),
+        });
+      }, { dir: lockedDir });
+
+      await openExportDialog(realPage);
+      const dialog = realPage.locator('[role="dialog"][aria-labelledby="export-dialog-title"]');
+      await dialog.locator('input[type="radio"][value="markdown"]').click();
+      const alertPromise = realPage.waitForEvent('dialog');
+      await dialog.getByRole('button', { name: /^Export/ }).click({ noWaitAfter: true });
+      const alert = await alertPromise;
+      expect(alert.message()).toMatch(/Export failed/i);
+      await alert.accept();
+      await expect(dialog.getByRole('button', { name: /^Export MD/ })).toBeVisible({ timeout: 30_000 });
+      expect(fs.existsSync(path.join(lockedDir, 'blocked-export.md'))).toBe(false);
+      await dialog.locator('button[aria-label="Close"]').click();
+      await dialog.waitFor({ state: 'detached', timeout: 4_000 });
+    } finally {
+      fs.chmodSync(lockedDir, 0o700);
+      fs.rmSync(lockedDir, { recursive: true, force: true });
+    }
+  });
+});
