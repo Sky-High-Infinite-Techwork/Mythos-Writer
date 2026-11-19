@@ -181,7 +181,11 @@ test('createLeaseCommit aborts when switch flips after parent tree fetch', async
 test('refExists is exact message only; other graphql errors are fatal', async () => {
   const gh = (args) => {
     if (args.includes('graphql')) {
-      return { status: 0, stdout: JSON.stringify({ errors: [{ message: UPDATE_REFS_REF_EXISTS }] }) };
+      return {
+        status: 1,
+        stdout: JSON.stringify({ errors: [{ message: UPDATE_REFS_REF_EXISTS }] }),
+        stderr: 'gh: GraphQL error',
+      };
     }
     return { status: 0, stdout: '"R_x"\n' };
   };
@@ -192,7 +196,11 @@ test('refExists is exact message only; other graphql errors are fatal', async ()
 
   const gh2 = (args) => {
     if (args.includes('graphql')) {
-      return { status: 0, stdout: JSON.stringify({ errors: [{ message: 'Something else' }] }) };
+      return {
+        status: 1,
+        stdout: JSON.stringify({ errors: [{ message: 'Something else' }] }),
+        stderr: 'gh: GraphQL error',
+      };
     }
     return { status: 0, stdout: '"R_x"\n' };
   };

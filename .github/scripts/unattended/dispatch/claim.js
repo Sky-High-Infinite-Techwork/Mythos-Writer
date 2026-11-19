@@ -100,7 +100,35 @@ async function tryCreateRefPair(client, { laneRef, claimRef: claimRefName, lease
     }
     return { ok: false, reason: REF_EXISTS, refExists: true };
   }
-  if (result.fatal) return { ok: false, fatal: true, reason: result.error || 'update_refs_failed' };
+  if (result.fatal) {
+    const laneOurs = await refOwnedBySha(client, laneRef, leaseSha);
+    const claimOurs = await refOwnedBySha(client, claimRefName, leaseSha);
+    const rolledBack = [];
+    if (laneOurs) {
+      const rel = await releaseOursIfHeld(client, laneRef, leaseSha, reReadSwitch);
+      if (rel.ok && !rel.skipped) rolledBack.push(laneRef);
+    }
+    if (claimOurs) {
+      const rel = await releaseOursIfHeld(client, claimRefName, leaseSha, reReadSwitch);
+      if (rel.ok && !rel.skipped) rolledBack.push(claimRefName);
+    }
+    if (rolledBack.length > 0) {
+      // eslint-disable-next-line no-console
+      console.error(JSON.stringify({
+        kind: 'dispatch_ref_pair_rollback',
+        laneRef,
+        claimRef: claimRefName,
+        rolledBack,
+        error: result.error || 'update_refs_failed',
+      }));
+    }
+    return {
+      ok: false,
+      fatal: true,
+      reason: result.error || 'update_refs_failed',
+      rolledBack,
+    };
+  }
   const laneOurs = await refOwnedBySha(client, laneRef, leaseSha);
   const claimOurs = await refOwnedBySha(client, claimRefName, leaseSha);
   if (recoverSameSha && laneOurs && claimOurs) {
@@ -131,14 +159,16 @@ async function claimLaneAndSlice(client, { cap, leaseSha, payload, recoverSameSh
   const parsed = parseLaneCap(cap);
   if (!parsed.ok) return { ok: false, fatal: true, reason: 'invalid_lane_cap' };
   const limit = parsed.value;
-  const listed = await client.listRefs({ prefix: 'refs/mythos/dispatch/' });
-  if (!listed.ok) return { ok: false, fatal: true, reason: 'list_failed' };
-  const allLive = activeLeasesAll(listed.refs);
-  if (allLive.length >= limit) return { ok: false, reason: 'lane_full' };
-  const disjoint = assertFilesDisjoint(payload.files, allLive);
-  if (!disjoint.ok) return { ok: false, reason: disjoint.reason };
-  const usedSlots = new Set(allLive.map((row) => row.slot));
   for (let index = 0; index < limit; index += 1) {
+    // Re-list before each slot attempt so overlap checks match concurrent holders.
+    // eslint-disable-next-line no-await-in-loop
+    const freshListed = await client.listRefs({ prefix: 'refs/mythos/dispatch/' });
+    if (!freshListed.ok) return { ok: false, fatal: true, reason: 'list_failed' };
+    const allLive = activeLeasesAll(freshListed.refs);
+    if (allLive.length >= limit) return { ok: false, reason: 'lane_full' };
+    const disjoint = assertFilesDisjoint(payload.files, allLive);
+    if (!disjoint.ok) return { ok: false, reason: disjoint.reason };
+    const usedSlots = new Set(allLive.map((row) => row.slot));
     if (usedSlots.has(index)) continue;
     const laneRef = slotRef(index);
     const claimRefName = claimRef(payload.issue, payload.slice);

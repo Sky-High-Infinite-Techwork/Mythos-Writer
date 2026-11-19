@@ -233,6 +233,37 @@ test('lane cap five', async () => {
   assert.equal(activeLeasesAll(listed.refs).length, 5);
 });
 
+test('concurrent overlapping file claims yield one winner', async () => {
+  const client = createMockRefClient();
+  const future = new Date(Date.now() + 3600000).toISOString();
+  const files = ['frontend/shared-overlap.ts'];
+  const basePayload = buildLeasePayload({
+    issue: 1,
+    slice: 0,
+    planCommentId: 1,
+    planBodySha256: 'c'.repeat(64),
+    files,
+    runId: 1,
+    runAttempt: 1,
+  });
+  const claimOne = async (issue, n) => {
+    const leaseSha = workerLeaseSha(n, 'e');
+    const r = await claimLaneAndSlice(client, {
+      cap: 5,
+      leaseSha,
+      payload: { ...basePayload, issue },
+    });
+    if (r.ok) {
+      client.setRefMessage(r.ref, leaseMessage({ ...r.payload, expiresAt: future }));
+    }
+    return r;
+  };
+  const [a, b] = await Promise.all([claimOne(10, 10), claimOne(11, 11)]);
+  const winners = [a, b].filter((r) => r.ok);
+  assert.equal(winners.length, 1);
+  assert.equal([a, b].filter((r) => r.reason === 'files_overlap').length, 1);
+});
+
 test('identity ref is issue-slice only', () => {
   assert.equal(claimRef(42, 0), 'refs/mythos/dispatch/claim/42-0');
 });
@@ -744,6 +775,65 @@ test('canary verify bad indexes keeps scratch ref on failure', async () => {
   } finally {
     console.error = origErr;
   }
+  assert.equal(client.exists(CANARY_SCRATCH_REF), true);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('canary verify rejects foreign runId binding and keeps scratch', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { runCanaryVerify } = require('./dispatch/canary-verify');
+  const main = 'a'.repeat(40);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-bind-'));
+  for (let i = 0; i < 6; i += 1) {
+    fs.writeFileSync(
+      path.join(dir, `canary-outcome-${i}.json`),
+      JSON.stringify(bindCanaryOutcome({
+        kind: i === 0 ? 'canary_win' : 'canary_lose',
+        index: i,
+        runId: 99999,
+      })),
+    );
+  }
+  const client = createMockRefClient();
+  await client.createRef({ ref: CANARY_SCRATCH_REF, sha: main });
+  const logs = [];
+  const origErr = console.error;
+  console.error = (...args) => { logs.push(args.join(' ')); };
+  try {
+    const code = await runCanaryVerify(client, canaryVerifyOpts(client, { mainSha: main, artifactsDir: dir }));
+    assert.equal(code, 1);
+    assert.ok(logs.some((l) => l.includes('run_binding_mismatch')));
+  } finally {
+    console.error = origErr;
+  }
+  assert.equal(client.exists(CANARY_SCRATCH_REF), true);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('canary verify rejects wrong scratchRef binding and keeps scratch', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { runCanaryVerify } = require('./dispatch/canary-verify');
+  const { canaryScratchRef } = require('./dispatch/constants');
+  const main = 'a'.repeat(40);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-scratch-bind-'));
+  for (let i = 0; i < 6; i += 1) {
+    fs.writeFileSync(
+      path.join(dir, `canary-outcome-${i}.json`),
+      JSON.stringify(bindCanaryOutcome({
+        kind: i === 0 ? 'canary_win' : 'canary_lose',
+        index: i,
+        scratchRef: canaryScratchRef(1, 99),
+      })),
+    );
+  }
+  const client = createMockRefClient();
+  await client.createRef({ ref: CANARY_SCRATCH_REF, sha: main });
+  const code = await runCanaryVerify(client, canaryVerifyOpts(client, { mainSha: main, artifactsDir: dir }));
+  assert.equal(code, 1);
   assert.equal(client.exists(CANARY_SCRATCH_REF), true);
   fs.rmSync(dir, { recursive: true, force: true });
 });

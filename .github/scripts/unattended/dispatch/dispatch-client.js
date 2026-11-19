@@ -313,16 +313,6 @@ function createDispatchClients({
       const errors = parseGraphqlErrors(result.stdout);
       const httpStatus = httpStatusFromGh(result.stderr, result.status);
       const statusCode = httpStatus ?? (result.status === 0 ? 201 : result.status);
-      if (result.status !== 0) {
-        return {
-          ok: false,
-          fatal: true,
-          status: statusCode,
-          ghStatus: result.status,
-          error: result.stderr || result.stdout,
-          errors,
-        };
-      }
       if (errors && errors.length > 0) {
         if (errors.length === 1 && isRefExistsError(errors)) {
           return {
@@ -334,6 +324,16 @@ function createDispatchClients({
             errors,
           };
         }
+        return {
+          ok: false,
+          fatal: true,
+          status: statusCode,
+          ghStatus: result.status,
+          error: result.stderr || result.stdout,
+          errors,
+        };
+      }
+      if (result.status !== 0) {
         return {
           ok: false,
           fatal: true,

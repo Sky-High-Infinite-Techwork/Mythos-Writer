@@ -296,6 +296,28 @@ test('tryCreateRefPair fatal auth error is not ref_exists', async () => {
   assert.equal(attempt.refExists, undefined);
 });
 
+test('tryCreateRefPair fatal transport rolls back lane half we hold', async () => {
+  const client = createMockRefClient();
+  const lane = 'refs/mythos/dispatch/lane-00';
+  const claim = 'refs/mythos/dispatch/claim/1-0';
+  client.createRefPair = async ({ laneRef, afterOid }) => {
+    await client.createRef({ ref: laneRef, sha: afterOid });
+    return { ok: false, fatal: true, error: 'transport_timeout' };
+  };
+  const logs = [];
+  const origErr = console.error;
+  console.error = (...a) => logs.push(a.join(' '));
+  try {
+    const attempt = await tryCreateRefPair(client, { laneRef: lane, claimRef: claim, leaseSha: MAIN });
+    assert.equal(attempt.fatal, true);
+    assert.equal(client.exists(lane), false);
+    assert.equal(client.exists(claim), false);
+    assert.ok(logs.some((l) => l.includes('dispatch_ref_pair_rollback')));
+  } finally {
+    console.error = origErr;
+  }
+});
+
 test('canary verify returns 1 when switch off after scratch match', async () => {
   const client = createMockRefClient();
   const dir = require('node:fs').mkdtempSync(`${require('node:os').tmpdir()}/canary-`);
@@ -660,7 +682,11 @@ test('fake gh e2e dry-run act claim and encoded ref paths', { timeout: 15000 }, 
           const cur = store.get(row.name);
           const zero = '0000000000000000000000000000000000000000';
           if (row.beforeOid === zero && cur) {
-            return { status: 0, stdout: JSON.stringify({ errors: [{ message: 'Reference already exists' }] }) };
+            return {
+              status: 1,
+              stdout: JSON.stringify({ errors: [{ message: 'Reference already exists' }] }),
+              stderr: 'gh: GraphQL error',
+            };
           }
           if (row.afterOid === zero) store.delete(row.name);
           else store.set(row.name, row.afterOid);

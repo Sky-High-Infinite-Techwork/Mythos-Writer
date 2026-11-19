@@ -50,17 +50,18 @@ async function main(options = {}) {
   const readToken = process.env.READ_TOKEN || process.env.GITHUB_TOKEN || '';
   const writeToken = process.env.WRITE_TOKEN || '';
   const controlToken = process.env.CONTROL_TOKEN || '';
+  const reReadSwitch = async () => readDispatchSwitchesFn(repo, controlToken);
   const { combined: client } = createDispatchClientsFn({
     repo,
     readToken,
     writeToken,
+    reReadSwitch,
+    actWritesEnabledFn,
   });
   if (!client) {
     console.error('dispatch: invalid repo');
     return 1;
   }
-
-  const reReadSwitch = async () => readDispatchSwitchesFn(repo, controlToken);
 
   if (command === 'sweep') {
     const switches = await reReadSwitch();

@@ -114,12 +114,11 @@ async function recordDispatchAttempt(client, issue, slice, options = {}) {
     if (!swMint.enabled) return { ok: false, reason: 'switch_off' };
   }
   let oid;
-  if (typeof options.mintLeaseSha === 'function') {
-    oid = await options.mintLeaseSha(message);
-    if (!oid) return { ok: false, reason: 'attempts_commit_failed' };
-  } else {
-    oid = `a${String(count).padStart(39, '0')}`;
+  if (typeof options.mintLeaseSha !== 'function') {
+    return { ok: false, reason: 'attempts_commit_failed' };
   }
+  oid = await options.mintLeaseSha(message);
+  if (!oid) return { ok: false, reason: 'attempts_commit_failed' };
   if (reReadSwitch) {
     const sw2 = await reReadSwitch();
     if (!sw2.ok) return { ok: false, reason: 'switch_read' };

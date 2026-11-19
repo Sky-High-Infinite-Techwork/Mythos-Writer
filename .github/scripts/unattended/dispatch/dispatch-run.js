@@ -283,7 +283,15 @@ async function runDispatchPlan(env) {
       reReadSwitch,
     });
     if (!claim.ok) {
-      if (claim.fatal) return 1;
+      if (claim.fatal) {
+        console.error(JSON.stringify({
+          kind: 'dispatch_fail',
+          issue: issueNumber,
+          reason: claim.reason || 'claim_fatal',
+          rolledBack: claim.rolledBack || [],
+        }));
+        return 1;
+      }
       if (claim.reason === 'files_overlap' || claim.reason === 'slice_already_claimed') {
         console.log(JSON.stringify({ kind: 'dispatch_skip', issue: issueNumber, reason: claim.reason }));
         continue;
