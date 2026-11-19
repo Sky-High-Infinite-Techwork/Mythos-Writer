@@ -338,6 +338,7 @@ test.describe.serial('#1774 Accent breathe', () => {
     expect(after.a.some((p) => p.includes('box-shadow'))).toBe(true);
     expect(after.b.some((p) => p.includes('box-shadow'))).toBe(true);
     expect(await readState(page)).toBe('running');
+    await closeSettings(page);
   });
 
   test('red-on-revert: pre-#1774 drop deltas fail fail-closed ABBA gate (+2 pp bar)', () => {
