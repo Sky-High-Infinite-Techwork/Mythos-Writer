@@ -322,6 +322,30 @@ describe('ExportDialog steps (M14)', () => {
     expect(screen.getByRole('button', { name: /export docx/i })).toBeInTheDocument();
     expect(mockOnClose).not.toHaveBeenCalled();
   });
+
+  it('alerts when main resolves an IPC error envelope (e.g. permission denied)', async () => {
+    mockExportMarkdown.mockResolvedValue({ error: 'Permission denied.' });
+    renderDialog({ kind: 'story', storyId: 'story-1' });
+
+    fireEvent.click(screen.getByRole('radio', { name: /markdown \(\.md\)/i }));
+    fireEvent.click(screen.getByRole('button', { name: /export md/i }));
+
+    await waitFor(() => expect(mockAlert).toHaveBeenCalledWith('Export failed: Permission denied.'));
+    expect(screen.getByRole('button', { name: /export md/i })).toBeInTheDocument();
+    expect(mockOnClose).not.toHaveBeenCalled();
+  });
+
+  it('alerts when EPUB resolves success without a path (empty export)', async () => {
+    mockExportEpub.mockResolvedValue({ path: null, cancelled: false });
+    renderDialog({ kind: 'story', storyId: 'story-1' });
+
+    fireEvent.click(screen.getByRole('radio', { name: /epub/i }));
+    fireEvent.click(screen.getByRole('button', { name: /export epub/i }));
+
+    await waitFor(() => expect(mockAlert).toHaveBeenCalledWith('Export failed: Export failed.'));
+    expect(screen.getByRole('button', { name: /export epub/i })).toBeInTheDocument();
+    expect(mockOnClose).not.toHaveBeenCalled();
+  });
 });
 
 // ─── SKY-7108 — missing scene .md file warning on the Done state ───
