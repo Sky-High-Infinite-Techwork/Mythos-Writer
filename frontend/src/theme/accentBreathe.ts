@@ -240,9 +240,12 @@ function writeTick(c: Controller, t: Record<string, string>): void {
   }
   ensureTickSuppressStyle(doc);
   c.el.setAttribute(TICK_ATTR, '');
-  write(c, t);
-  void getComputedStyle(c.el).getPropertyValue('--b1');
-  c.el.removeAttribute(TICK_ATTR);
+  try {
+    write(c, t);
+    void getComputedStyle(c.el).getPropertyValue('--b1');
+  } finally {
+    c.el.removeAttribute(TICK_ATTR);
+  }
 }
 
 function clearTimer(c: Controller): void {
@@ -326,5 +329,6 @@ export function stopAccentBreathe(): void {
   c.observer?.disconnect();
   if (c.mq) for (const m of Object.values(c.mq)) m.removeEventListener('change', reconcile);
   if (c.onVis) c.el.ownerDocument.removeEventListener('visibilitychange', c.onVis);
+  c.el.removeAttribute(TICK_ATTR);
   ctl = null;
 }

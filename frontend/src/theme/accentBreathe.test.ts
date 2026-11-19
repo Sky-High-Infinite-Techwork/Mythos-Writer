@@ -12,6 +12,7 @@ import {
   ACCENT_BREATHE_LOOP_MS,
   ACCENT_BREATHE_TICK_MS,
   accentBreatheTokens,
+  stopAccentBreathe,
   type AccentBreatheInput,
 } from './accentBreathe';
 import {
@@ -316,7 +317,7 @@ describe('driver via applyLiquidNeonV2Tokens', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('a tick suppresses token-consumer transitions without document.getAnimations()', async () => {
+  it('steady tick: suppress path, one getAnimations flush; TICK_ATTR cleared', async () => {
     stubMatchMedia();
     applyLiquidNeonV2Tokens(undefined, COSMIC, el);
     const consumer = document.createElement('div');
@@ -336,6 +337,94 @@ describe('driver via applyLiquidNeonV2Tokens', () => {
       delete (document as unknown as Record<string, unknown>).getAnimations;
       consumer.remove();
     }
+  });
+
+  it('a tick cancels only the transitions its own write started (descendant transition active)', async () => {
+    stubMatchMedia();
+    applyLiquidNeonV2Tokens(undefined, COSMIC, el);
+    const target = document.createElement('div');
+    const anim = (transitionProperty?: string) => ({
+      ...(transitionProperty ? { transitionProperty } : {}),
+      effect: { target, pseudoElement: null },
+      cancel: vi.fn(),
+    }) as unknown as Animation;
+    const userOpacity = anim('opacity');
+    const userBorder = anim('border-top-color');
+    const retargeted = anim('border-top-color');
+    const own = anim('box-shadow');
+    const keyframes = anim();
+    let written = false;
+    const real = el.style.setProperty.bind(el.style);
+    vi.spyOn(el.style, 'setProperty').mockImplementation((k: string, v: string | null, p?: string) => {
+      written = true;
+      real(k, v, p);
+    });
+    const flushes: boolean[] = [];
+    Object.defineProperty(document, 'getAnimations', {
+      configurable: true,
+      value: () => {
+        flushes.push(written);
+        return written
+          ? [userOpacity, retargeted, own, keyframes]
+          : [userOpacity, userBorder];
+      },
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(TICK);
+      expect(flushes).toEqual([false, false, true]);
+      expect(own.cancel).toHaveBeenCalledTimes(1);
+      for (const a of [userOpacity, userBorder, retargeted, keyframes]) expect(a.cancel).not.toHaveBeenCalled();
+      expect(el.hasAttribute('data-ln-breathe-tick')).toBe(false);
+      flushes.length = 0;
+      applyLiquidNeonV2Tokens(preset('cyber'), COSMIC, el);
+      expect(flushes).toEqual([]);
+    } finally {
+      delete (document as unknown as Record<string, unknown>).getAnimations;
+    }
+  });
+
+  // Red-on-revert pin: without try/finally in writeTick, these fail (stuck TICK_ATTR).
+  it('data-ln-breathe-tick is cleared if write throws', async () => {
+    stubMatchMedia();
+    applyLiquidNeonV2Tokens(undefined, COSMIC, el);
+    vi.spyOn(el.style, 'setProperty').mockImplementation(() => {
+      throw new Error('write failed');
+    });
+    const realGa = document.getAnimations?.bind(document);
+    const ga = vi.fn(() => [] as Animation[]);
+    Object.defineProperty(document, 'getAnimations', { configurable: true, value: ga });
+    try {
+      await expect(vi.advanceTimersByTimeAsync(TICK)).rejects.toThrow('write failed');
+      expect(el.hasAttribute('data-ln-breathe-tick')).toBe(false);
+    } finally {
+      if (realGa) Object.defineProperty(document, 'getAnimations', { configurable: true, value: realGa });
+      else delete (document as unknown as Record<string, unknown>).getAnimations;
+    }
+  });
+
+  it('data-ln-breathe-tick is cleared if getComputedStyle throws', async () => {
+    stubMatchMedia();
+    applyLiquidNeonV2Tokens(undefined, COSMIC, el);
+    const ga = vi.fn(() => [] as Animation[]);
+    Object.defineProperty(document, 'getAnimations', { configurable: true, value: ga });
+    const gcs = vi.spyOn(window, 'getComputedStyle').mockImplementation(() => {
+      throw new Error('gcs failed');
+    });
+    try {
+      await expect(vi.advanceTimersByTimeAsync(TICK)).rejects.toThrow('gcs failed');
+      expect(el.hasAttribute('data-ln-breathe-tick')).toBe(false);
+    } finally {
+      gcs.mockRestore();
+      delete (document as unknown as Record<string, unknown>).getAnimations;
+    }
+  });
+
+  it('stopAccentBreathe clears data-ln-breathe-tick', () => {
+    stubMatchMedia();
+    applyLiquidNeonV2Tokens(undefined, COSMIC, el);
+    el.setAttribute('data-ln-breathe-tick', '');
+    stopAccentBreathe();
+    expect(el.hasAttribute('data-ln-breathe-tick')).toBe(false);
   });
 
   it('short palette (slots 4–6 empty) breathes through the padded colors the tokens show', async () => {
