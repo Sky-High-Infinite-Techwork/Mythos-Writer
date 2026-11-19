@@ -5,7 +5,7 @@ describe('applySceneSaveIndicatorAfterPersist', () => {
   it('clears pending indicator on failure instead of scheduling saved', () => {
     const clearPending = vi.fn();
     const scheduleSaved = vi.fn();
-    applySceneSaveIndicatorAfterPersist(false, { clearPending, scheduleSaved });
+    applySceneSaveIndicatorAfterPersist('failed', { clearPending, scheduleSaved });
     expect(clearPending).toHaveBeenCalledTimes(1);
     expect(scheduleSaved).not.toHaveBeenCalled();
   });
@@ -13,7 +13,7 @@ describe('applySceneSaveIndicatorAfterPersist', () => {
   it('schedules saved only on success', () => {
     const clearPending = vi.fn();
     const scheduleSaved = vi.fn();
-    applySceneSaveIndicatorAfterPersist(true, { clearPending, scheduleSaved });
+    applySceneSaveIndicatorAfterPersist('success', { clearPending, scheduleSaved });
     expect(scheduleSaved).toHaveBeenCalledTimes(1);
     expect(clearPending).not.toHaveBeenCalled();
   });

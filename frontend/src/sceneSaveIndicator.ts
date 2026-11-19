@@ -1,9 +1,11 @@
+import type { ScenePersistStatus } from './scenePersist';
+
 /** Apply save-indicator side effects after a scene vault persist attempt (#1904 gate). */
 export function applySceneSaveIndicatorAfterPersist(
-  saved: boolean,
+  status: Exclude<ScenePersistStatus, 'stale'>,
   timers: { clearPending: () => void; scheduleSaved: () => void },
 ): void {
-  if (!saved) {
+  if (status === 'failed') {
     timers.clearPending();
     return;
   }

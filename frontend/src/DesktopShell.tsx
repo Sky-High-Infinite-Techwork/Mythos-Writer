@@ -30,19 +30,20 @@ import { BookSyncNotice, failedManifestRead, isLoadedManifest, manifestSaveOutco
 import { SceneSaveNotice } from './components/SceneSaveNotice';
 import {
   beginSceneWriteGeneration,
+  clearSceneFailuresOnSuccess,
   markSceneFailureMissing,
-  removeSceneFailure,
   sceneFailuresForVault,
+  type ScenePersistOutcome,
   type SceneSaveFailureEntry,
   shouldApplyScenePersistOutcome,
   upsertSceneFailure,
   writeSceneVault,
 } from './scenePersist';
+import { applyAfterSceneVaultPersist } from './sceneSaveAfterPersist';
 import {
   findSceneForFailureEntry,
   resolveStoryIdForScene,
 } from './sceneSceneLookup';
-import { applySceneSaveIndicatorAfterPersist } from './sceneSaveIndicator';
 import {
   parseSceneNotes,
   serializeSceneNotes,
@@ -3468,7 +3469,7 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
 
   // ─── Story/scene management ───
 
-  const persistSceneMarkdown = useCallback(async (scene: Scene): Promise<boolean> => {
+  const persistSceneMarkdown = useCallback(async (scene: Scene): Promise<ScenePersistOutcome> => {
     const storyId = resolveStoryIdForScene(storiesRef.current, scene);
     const vaultRootAtStart = activeVaultRootRef.current;
     const vaultGenAtStart = vaultSwitchGenRef.current;
@@ -3492,7 +3493,7 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
       sceneWriteGenerationRef.current,
       scene.id,
     );
-    if (!applyOutcome) return ok;
+    if (!applyOutcome) return { status: 'stale', started: startedContext };
     if (!ok) {
       setSceneSaveFailures((prev) => upsertSceneFailure(prev, {
         storyId,
@@ -3503,10 +3504,10 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
       }));
       // eslint-disable-next-line no-console
       console.error('Failed to write scene markdown:', scene.id);
-      return false;
+      return { status: 'failed', started: startedContext };
     }
-    setSceneSaveFailures((prev) => removeSceneFailure(prev, storyId, scene.id));
-    return true;
+    setSceneSaveFailures((prev) => clearSceneFailuresOnSuccess(prev, storyId, scene.id));
+    return { status: 'success', started: startedContext };
   }, []);
 
   const retrySceneSave = useCallback(() => {
@@ -3571,25 +3572,36 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
         return editedStory.chapters.find((ch) => ch.id === targetChapterId) ?? prev;
       });
     }
-    void persistSceneMarkdown(updatedScene).then((saved) => {
-      window.api.snapshotSave?.(sceneId, content).catch(() => {});
-      applySceneSaveIndicatorAfterPersist(saved, {
-        clearPending: () => {
-          if (saveIndicatorTimer.current) clearTimeout(saveIndicatorTimer.current);
-          setSaveState('idle');
+    void persistSceneMarkdown(updatedScene).then((outcome) => {
+      applyAfterSceneVaultPersist(
+        outcome,
+        {
+          vaultRoot: activeVaultRootRef.current,
+          vaultSwitchGeneration: vaultSwitchGenRef.current,
+          generations: sceneWriteGenerationRef.current,
+          sceneId,
         },
-        scheduleSaved: () => {
-          if (content.trim()) {
-            checkGettingStartedItem('write-scene');
-            setSeenEmptySceneHints((prev) => new Set(prev).add(sceneId));
-          }
-          if (saveIndicatorTimer.current) clearTimeout(saveIndicatorTimer.current);
-          saveIndicatorTimer.current = setTimeout(() => {
-            setSaveState('saved');
-            saveIndicatorTimer.current = setTimeout(() => setSaveState('idle'), 1500);
-          }, 1200);
+        {
+          snapshotSave: () => {
+            window.api.snapshotSave?.(sceneId, content).catch(() => {});
+          },
+          clearPending: () => {
+            if (saveIndicatorTimer.current) clearTimeout(saveIndicatorTimer.current);
+            setSaveState('idle');
+          },
+          scheduleSaved: () => {
+            if (content.trim()) {
+              checkGettingStartedItem('write-scene');
+              setSeenEmptySceneHints((prev) => new Set(prev).add(sceneId));
+            }
+            if (saveIndicatorTimer.current) clearTimeout(saveIndicatorTimer.current);
+            saveIndicatorTimer.current = setTimeout(() => {
+              setSaveState('saved');
+              saveIndicatorTimer.current = setTimeout(() => setSaveState('idle'), 1500);
+            }, 1200);
+          },
         },
-      });
+      );
     });
     if (isProvisional && provisionalScene) {
       const committedTabs = storyDocTabs.map((t) =>

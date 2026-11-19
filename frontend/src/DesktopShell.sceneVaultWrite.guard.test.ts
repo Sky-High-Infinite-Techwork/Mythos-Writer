@@ -25,26 +25,35 @@ describe('DesktopShell scene markdown writes (#1904)', () => {
     expect(src).not.toMatch(
       /if\s*\(\s*!storyId\s*\)\s*\{[\s\S]*?return false;[\s\S]*?\}\s*if\s*\(\s*!ok\s*\)/,
     );
+    expect(src).toMatch(/clearSceneFailuresOnSuccess/);
+    expect(src).toMatch(/status:\s*'stale'/);
   });
 
   it('clears scene save failures only after vault switch commits (applyProjectSwitched)', () => {
     const switchBlock = src.match(
-      /const switchToVault = useCallback\(async \(vaultId: string\)[\s\S]*?\n {2}\}, \[activeVaultRoot/,
-    )?.[0] ?? '';
-    expect(switchBlock).not.toMatch(/setSceneSaveFailures\(new Map\(\)\)/);
-    expect(src).toMatch(
-      /const applyProjectSwitched = useCallback[\s\S]*?setSceneSaveFailures\(new Map\(\)\)/,
+      /const switchToVault = useCallback\(async \(vaultId: string\)[\s\S]*?return completeVaultSwitch\(vaultId, 'tile'\);\n {2}\}, \[/,
     );
+    expect(switchBlock, 'switchToVault useCallback block').toBeTruthy();
+    expect(switchBlock![0].length).toBeGreaterThan(80);
+    expect(switchBlock![0]).not.toMatch(/setSceneSaveFailures\(new Map\(\)\)/);
+
+    const applyBlock = src.match(
+      /const applyProjectSwitched = useCallback\(\(vaultRoot: string\) => \{[\s\S]*?setSceneSaveFailures\(new Map\(\)\);[\s\S]*?\n {2}\}, \[/,
+    );
+    expect(applyBlock, 'applyProjectSwitched useCallback block').toBeTruthy();
+    expect(applyBlock![0].length).toBeGreaterThan(80);
+    expect(applyBlock![0]).toMatch(/setSceneSaveFailures\(new Map\(\)\)/);
   });
 
-  it('runs snapshotSave even when vault write failed (outside save-indicator gating)', () => {
-    expect(src).toMatch(
-      /persistSceneMarkdown\(updatedScene\)\.then\(\(saved\) => \{[\s\S]*?window\.api\.snapshotSave/,
-    );
+  it('binds deferred snapshot and indicator to vault context via applyAfterSceneVaultPersist', () => {
     const applyBlock = src.match(
       /const applySceneBlocks = useCallback\([\s\S]*?\n {2}\}, \[updateManifest, persistSceneMarkdown/,
-    )?.[0] ?? '';
-    const scheduleSaved = applyBlock.match(/scheduleSaved:\s*\(\)\s*=>\s*\{([\s\S]*?)\n {8}\},/)?.[1] ?? '';
+    );
+    expect(applyBlock, 'applySceneBlocks useCallback block').toBeTruthy();
+    expect(applyBlock![0]).toMatch(/applyAfterSceneVaultPersist/);
+    const scheduleSaved = applyBlock![0].match(/scheduleSaved:\s*\(\)\s*=>\s*\{([\s\S]*?)\n {10}\},/)?.[1];
+    expect(scheduleSaved, 'scheduleSaved body inside applySceneBlocks').toBeTruthy();
+    expect(scheduleSaved!.length).toBeGreaterThan(20);
     expect(scheduleSaved).not.toMatch(/snapshotSave/);
   });
 });

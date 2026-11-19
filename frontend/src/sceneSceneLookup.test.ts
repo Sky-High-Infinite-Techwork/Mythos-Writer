@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Scene, Story } from './types';
-import { findSceneInStories, resolveStoryIdForScene, UNKNOWN_STORY_ID } from './sceneSceneLookup';
+import { UNKNOWN_STORY_ID } from './scenePersist';
+import { findSceneInStories, resolveStoryIdForScene } from './sceneSceneLookup';
 
 const sceneInPart: Scene = {
   id: 'sc-part',

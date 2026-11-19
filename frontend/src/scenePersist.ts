@@ -49,6 +49,16 @@ export interface ScenePersistContext {
   writeGeneration: number;
 }
 
+export type ScenePersistStatus = 'success' | 'failed' | 'stale';
+
+/** Placeholder story id when the scene cannot be located in the manifest yet. */
+export const UNKNOWN_STORY_ID = '?';
+
+export interface ScenePersistOutcome {
+  status: ScenePersistStatus;
+  started: ScenePersistContext;
+}
+
 export function beginSceneWriteGeneration(generations: Map<string, number>, sceneId: string): number {
   const next = (generations.get(sceneId) ?? 0) + 1;
   generations.set(sceneId, next);
@@ -99,6 +109,22 @@ export function removeSceneFailure(
 ): Map<string, SceneSaveFailureEntry> {
   const next = new Map(prev);
   next.delete(sceneFailureKey(storyId, sceneId));
+  return next;
+}
+
+/** Drop failure rows for a scene — including the unknown-story key from pre-manifest writes. */
+export function clearSceneFailuresOnSuccess(
+  prev: ReadonlyMap<string, SceneSaveFailureEntry>,
+  storyId: string,
+  sceneId: string,
+): Map<string, SceneSaveFailureEntry> {
+  let next = removeSceneFailure(prev, storyId, sceneId);
+  next = removeSceneFailure(next, UNKNOWN_STORY_ID, sceneId);
+  for (const [key, entry] of next) {
+    if (entry.sceneId === sceneId && key !== sceneFailureKey(storyId, sceneId)) {
+      next.delete(key);
+    }
+  }
   return next;
 }
 

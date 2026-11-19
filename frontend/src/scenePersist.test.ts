@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   beginSceneWriteGeneration,
+  clearSceneFailuresOnSuccess,
   markSceneFailureMissing,
   removeSceneFailure,
   sceneFailuresForVault,
+  UNKNOWN_STORY_ID,
   sceneSaveFailureMessage,
   shouldApplyScenePersistOutcome,
   upsertSceneFailure,
@@ -57,6 +59,27 @@ describe('writeSceneVault', () => {
   it('returns true when writeVault resolves bytes', async () => {
     const writeVault = vi.fn().mockResolvedValue({ path: 'stories/a/Scene.md', bytes: 12 });
     await expect(writeSceneVault(writeVault, 'stories/a/Scene.md', 'body')).resolves.toBe(true);
+  });
+});
+
+describe('clearSceneFailuresOnSuccess', () => {
+  it('removes both resolved and unknown-story keys for the same sceneId', () => {
+    const unknownKey = upsertSceneFailure(new Map(), {
+      storyId: UNKNOWN_STORY_ID,
+      sceneId: 'sc-new',
+      sceneTitle: 'Draft',
+      vaultRoot: '/v',
+      vaultSwitchGeneration: 0,
+    });
+    const resolvedKey = upsertSceneFailure(unknownKey, {
+      storyId: 'story-1',
+      sceneId: 'sc-new',
+      sceneTitle: 'Draft',
+      vaultRoot: '/v',
+      vaultSwitchGeneration: 0,
+    });
+    const cleared = clearSceneFailuresOnSuccess(resolvedKey, 'story-1', 'sc-new');
+    expect(cleared.size).toBe(0);
   });
 });
 

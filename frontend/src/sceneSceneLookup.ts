@@ -1,8 +1,7 @@
-import type { SceneSaveFailureEntry } from './scenePersist';
+import { UNKNOWN_STORY_ID, type SceneSaveFailureEntry } from './scenePersist';
 import type { Scene, Story } from './types';
 
-/** Placeholder story id when the scene cannot be located in the manifest yet. */
-export const UNKNOWN_STORY_ID = '?';
+export { UNKNOWN_STORY_ID };
 
 export function findSceneInStories(stories: Story[], storyId: string, sceneId: string): Scene | undefined {
   const story = stories.find((s) => s.id === storyId);
