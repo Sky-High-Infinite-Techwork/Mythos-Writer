@@ -1,5 +1,11 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const installedPlaywright = path.join(repoRoot, 'node_modules', 'playwright', 'cli.js');
 
 const SUITES = {
   'key-actions': {
@@ -36,17 +42,29 @@ function parseArgs(argv) {
   return { names, extra };
 }
 
-function suiteArgs(suite, extra) {
+function hasGrep(extra) {
+  return extra.some((arg) => arg === '--grep' || arg.startsWith('--grep='));
+}
+
+function suiteArgs(suite, extra, grepFiltered) {
   const args = ['test', suite.spec, `--output=${suite.output}`];
   if (suite.retries !== null) args.push(`--retries=${suite.retries}`);
-  args.push('--reporter=list,html');
-  if (extra.length > 0) args.push('--pass-with-no-tests', ...extra);
+  args.push(grepFiltered ? '--reporter=list,html,json' : '--reporter=list,html');
+  if (grepFiltered) args.push('--pass-with-no-tests');
+  args.push(...extra);
   return args;
+}
+
+function executedCount(reportPath) {
+  const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+  const stats = report.stats ?? {};
+  return (stats.expected ?? 0) + (stats.unexpected ?? 0) + (stats.flaky ?? 0);
 }
 
 function run(command, args, extraEnv = {}) {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
+      cwd: repoRoot,
       stdio: 'inherit',
       env: { ...process.env, ...extraEnv },
       shell: false,
@@ -57,21 +75,54 @@ function run(command, args, extraEnv = {}) {
   });
 }
 
-const playwright = process.env.MYTHOS_E2E_PLAYWRIGHT
-  ?? path.join('node_modules', 'playwright', 'cli.js');
-const { names, extra } = parseArgs(process.argv.slice(2));
-let failed = false;
-for (const name of names) {
-  const suite = SUITES[name];
-  if (!suite) {
-    console.error(`unknown e2e suite ${name}`);
-    process.exit(1);
+export async function runSuites(argv, options = {}) {
+  const playwright = options.playwrightCli ?? installedPlaywright;
+  const { names, extra } = parseArgs(argv);
+  const grepFiltered = hasGrep(extra);
+  let failed = false;
+  let executed = 0;
+  for (const name of names) {
+    if (!Object.hasOwn(SUITES, name)) {
+      console.error(`unknown e2e suite ${name}`);
+      return 1;
+    }
+    const suite = SUITES[name];
+    const jsonFile = grepFiltered
+      ? path.join(os.tmpdir(), `mythos-e2e-${name}-${process.pid}-${Math.random().toString(16).slice(2)}.json`)
+      : null;
+    const code = await run(
+      process.execPath,
+      [playwright, ...suiteArgs(suite, extra, grepFiltered)],
+      {
+        PLAYWRIGHT_HTML_REPORT: suite.report,
+        ...(jsonFile ? { PLAYWRIGHT_JSON_OUTPUT_FILE: jsonFile } : {}),
+      },
+    );
+    if (code !== 0) failed = true;
+    if (jsonFile) {
+      if (fs.existsSync(jsonFile)) {
+        try {
+          executed += executedCount(jsonFile);
+        } finally {
+          fs.rmSync(jsonFile, { force: true });
+        }
+      }
+    }
   }
-  const code = await run(
-    process.execPath,
-    [playwright, ...suiteArgs(suite, extra)],
-    { PLAYWRIGHT_HTML_REPORT: suite.report },
-  );
-  if (code !== 0) failed = true;
+  if (grepFiltered && executed === 0) {
+    console.error('grep matched no tests');
+    failed = true;
+  }
+  return failed ? 1 : 0;
 }
-if (failed) process.exit(1);
+
+function isDirectRun() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  return import.meta.url === pathToFileURL(entry).href;
+}
+
+if (isDirectRun()) {
+  const code = await runSuites(process.argv.slice(2));
+  if (code !== 0) process.exit(code);
+}
