@@ -26,8 +26,14 @@ async function invokeEnvelope<T>(channel: string, payload: unknown): Promise<T |
 contextBridge.exposeInMainWorld('api', {
   // Vault / filesystem
   readVault: (filePath: string) => ipcRenderer.invoke('vault:read', { path: filePath }),
-  writeVault: (filePath: string, content: string) =>
-    ipcRenderer.invoke('vault:write', { path: filePath, content }),
+  writeVault: (
+    filePath: string,
+    content: string,
+    opts?: { expectedSha256: string | null },
+  ) =>
+    opts === undefined
+      ? ipcRenderer.invoke('vault:write', { path: filePath, content })
+      : ipcRenderer.invoke('vault:write', { path: filePath, content, expectedSha256: opts.expectedSha256 }),
   listVault: (root?: string) => ipcRenderer.invoke('vault:list', { root }),
   deleteVault: (filePath: string) => ipcRenderer.invoke('vault:delete', { path: filePath }),
   readManifest: () => ipcRenderer.invoke('vault:manifest:read', undefined),
@@ -1469,8 +1475,14 @@ contextBridge.exposeInMainWorld('api', {
 // Backward-compat alias — kept for legacy code that still references window.mythosIPC
 contextBridge.exposeInMainWorld('mythosIPC', {
   readVaultFile: (filePath: string) => ipcRenderer.invoke('vault:read', { path: filePath }),
-  writeVaultFile: (filePath: string, content: string) =>
-    ipcRenderer.invoke('vault:write', { path: filePath, content }),
+  writeVaultFile: (
+    filePath: string,
+    content: string,
+    opts?: { expectedSha256: string | null },
+  ) =>
+    opts === undefined
+      ? ipcRenderer.invoke('vault:write', { path: filePath, content })
+      : ipcRenderer.invoke('vault:write', { path: filePath, content, expectedSha256: opts.expectedSha256 }),
   listVaultFiles: (root?: string) => ipcRenderer.invoke('vault:list', { root }),
   deleteVaultFile: (filePath: string) => ipcRenderer.invoke('vault:delete', { path: filePath }),
   readManifest: () => ipcRenderer.invoke('vault:manifest:read', undefined),

@@ -23,7 +23,9 @@ import {
   IPC_CHANNELS,
   type IpcHandlers,
   type VaultReadPayload,
-  type VaultReadResponse,
+  type StoryVaultReadResponse,
+  type NotesVaultReadResponse,
+  type NotesVaultWritePayload,
   type VaultWritePayload,
   type VaultWriteResponse,
   type BrainstormBoardWritePayload,
@@ -276,6 +278,8 @@ import {
 import { generateSceneCrafterSuggestions } from './archiveSceneCrafterGenerator.js';
 import { wrapIpcHandler, sanitizeIpcError, SafeIpcError } from './ipcErrors.js';
 import { exportFailureText, isNoFollowExportFailure, mapVaultWriteError } from './vault/writeErrors.js';
+import { readVaultFileBounded } from './vault/boundedRead.js';
+import { vaultWriteForIpc } from './vault/casWrite.js';
 import { shouldInitializeVaultStorage } from './startupVaultPolicy.js';
 import { isExistingUsableVaultRoot, validatePathForVault } from './validatePathUtil.js';
 import { isUnderRoot } from './pathSecurity.js';
@@ -2186,16 +2190,120 @@ function writeDialogExport(filePath: string, data: Buffer | string): void {
   }
 }
 
-function writeVaultForIpc(root: string, rel: string, content: string): import('./ipc.js').VaultWriteResponse {
+/** Story vault IPC only: refuse dot-prefixed path segments (notes/brainstorm keep using safeVaultIpcJoin). */
+function assertStoryVaultIpcPathAllowed(rel: string): void {
+  for (const segment of rel.split(/[\\/]/)) {
+    if (segment.length > 0 && segment.startsWith('.') && segment !== '.' && segment !== '..') {
+      throw new Error(`Path traversal denied: ${rel} (dotfile not allowed)`);
+    }
+  }
+}
+
+function mapVaultIpcJoinFailure(err: unknown, rel: string): import('./ipc.js').VaultWriteResponse | null {
+  const mapped = mapVaultWriteError(err, rel);
+  if (mapped) return { path: rel, bytes: 0, error: mapped.error, code: mapped.code };
+  if (err instanceof Error && /^Path traversal denied/i.test(err.message)) {
+    return { path: rel, bytes: 0, error: 'Path not allowed.' };
+  }
+  return null;
+}
+
+/** Main-branch vault write IPC body (notes vault and legacy story path): `{ path, bytes }` only. */
+export function writeVaultForIpc(
+  root: string,
+  rel: string,
+  content: string,
+): import('./ipc.js').VaultWriteResponse {
   try {
     safeVaultIpcJoin(root, rel, true);
     const written = writeVaultFileAtomic(root, rel, content);
     return { path: written.path, bytes: written.bytes };
   } catch (err) {
-    const mapped = mapVaultWriteError(err, rel);
-    if (mapped) return { path: rel, bytes: 0, error: mapped.error, code: mapped.code };
+    const mapped = mapVaultIpcJoinFailure(err, rel);
+    if (mapped) return mapped;
     throw err;
   }
+}
+
+/** Story vault CAS / bounded-hash write (after join). */
+export function writeStoryVaultForIpc(
+  root: string,
+  rel: string,
+  content: string,
+  expectedSha256?: string | null,
+): import('./ipc.js').VaultWriteResponse {
+  try {
+    assertStoryVaultIpcPathAllowed(rel);
+    safeVaultIpcJoin(root, rel, true);
+    return vaultWriteForIpc(root, rel, content, expectedSha256);
+  } catch (err) {
+    const mapped = mapVaultIpcJoinFailure(err, rel);
+    if (mapped) return mapped;
+    throw err;
+  }
+}
+
+let storyVaultIpcTestRoot: string | undefined;
+
+/** @internal vault IPC integration tests pin the story vault root here. */
+export function setStoryVaultIpcTestRoot(root: string | undefined): void {
+  storyVaultIpcTestRoot = root;
+}
+
+/** @internal test hooks for story vault IPC integration tests. */
+export function getVaultRootForStoryVaultIpc(): string {
+  return storyVaultIpcTestRoot ?? getVaultRoot();
+}
+
+/** @internal test hooks for story vault IPC integration tests. */
+export function ensureVaultDirForStoryVaultIpc(): void {
+  if (storyVaultIpcTestRoot !== undefined) return;
+  ensureVaultDir();
+}
+
+export function handleStoryVaultReadIpc(payload: VaultReadPayload): StoryVaultReadResponse {
+  ensureVaultDirForStoryVaultIpc();
+  const root = getVaultRootForStoryVaultIpc();
+  assertStoryVaultIpcPathAllowed(payload.path);
+  safeVaultIpcJoin(root, payload.path, false);
+  const { content, path: vaultPath, sha256 } = readVaultFileBounded(root, payload.path);
+  return { content, path: vaultPath, sha256 };
+}
+
+export function handleStoryVaultWriteIpc(payload: VaultWritePayload): VaultWriteResponse {
+  ensureVaultDirForStoryVaultIpc();
+  const expected = Object.prototype.hasOwnProperty.call(payload, 'expectedSha256')
+    ? payload.expectedSha256
+    : undefined;
+  return writeStoryVaultForIpc(
+    getVaultRootForStoryVaultIpc(),
+    payload.path,
+    payload.content,
+    expected,
+  );
+}
+
+let notesVaultIpcTestRoot: string | undefined;
+
+/** @internal vault IPC integration tests pin the notes vault root here. */
+export function setNotesVaultIpcTestRoot(root: string | undefined): void {
+  notesVaultIpcTestRoot = root;
+}
+
+/** @internal test hooks for notes vault write IPC tests. */
+export function getNotesVaultRootForIpc(): string {
+  return notesVaultIpcTestRoot ?? getNotesVaultRoot();
+}
+
+/** @internal test hooks for notes vault write IPC tests. */
+export function ensureNotesVaultDirForIpc(): void {
+  if (notesVaultIpcTestRoot !== undefined) return;
+  ensureNotesVaultDir();
+}
+
+export function handleNotesVaultWriteIpc(payload: NotesVaultWritePayload): VaultWriteResponse {
+  ensureNotesVaultDirForIpc();
+  return writeVaultForIpc(getNotesVaultRootForIpc(), payload.path, payload.content);
 }
 
 // ─── IPC Handlers ───
@@ -2203,15 +2311,8 @@ export const handlers: IpcHandlers = {
   // MYT-774: renderer-facing vault channels enforce dotfile + extension policy
   // at the IPC boundary. The low-level helpers also re-check traversal, so a
   // bad path is rejected twice independently.
-  [IPC_CHANNELS.VAULT_READ]: (payload: VaultReadPayload): VaultReadResponse => {
-    ensureVaultDir();
-    safeVaultIpcJoin(getVaultRoot(), payload.path, false);
-    return readVaultFile(getVaultRoot(), payload.path);
-  },
-  [IPC_CHANNELS.VAULT_WRITE]: (payload: VaultWritePayload): VaultWriteResponse => {
-    ensureVaultDir();
-    return writeVaultForIpc(getVaultRoot(), payload.path, payload.content);
-  },
+  [IPC_CHANNELS.VAULT_READ]: handleStoryVaultReadIpc,
+  [IPC_CHANNELS.VAULT_WRITE]: handleStoryVaultWriteIpc,
   [IPC_CHANNELS.VAULT_LIST]: (payload: VaultListPayload): VaultListResponse => {
     ensureVaultDir();
     // LIST takes a directory — enforce traversal/symlink only, not the
@@ -6859,7 +6960,7 @@ export const handlers: IpcHandlers = {
   // helpers and case-sensitive resolution as the Story Vault handlers so
   // Linux CI behaves the same as macOS. Every endpoint goes through
   // safeVaultIpcJoin (`.md` / `.json` only, no dotfiles, no traversal).
-  [IPC_CHANNELS.NOTES_VAULT_READ]: (payload: VaultReadPayload): VaultReadResponse => {
+  [IPC_CHANNELS.NOTES_VAULT_READ]: (payload: VaultReadPayload): NotesVaultReadResponse => {
     ensureNotesVaultDir();
     const root = getNotesVaultRoot();
     safeVaultIpcJoin(root, payload.path, false);
@@ -6867,10 +6968,7 @@ export const handlers: IpcHandlers = {
     // invisible on native Windows (antivirus / NTFS metadata propagation).
     return readVaultFileWithRetry(root, payload.path);
   },
-  [IPC_CHANNELS.NOTES_VAULT_WRITE]: (payload: VaultWritePayload): VaultWriteResponse => {
-    ensureNotesVaultDir();
-    return writeVaultForIpc(getNotesVaultRoot(), payload.path, payload.content);
-  },
+  [IPC_CHANNELS.NOTES_VAULT_WRITE]: handleNotesVaultWriteIpc,
   // SKY-11360: brainstorm/idea board is agent state → Agent Vault, never the
   // Notes Vault. The main process owns the fixed relpath; the renderer only
   // supplies the serialized body.

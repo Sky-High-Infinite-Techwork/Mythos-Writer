@@ -1177,8 +1177,12 @@ interface VaultIconRef {
 interface Window {
   /** Primary IPC bridge — use this in new code. */
   api: {
-    readVault: (path: string) => Promise<{ content: string; path: string }>;
-    writeVault: (path: string, content: string) => Promise<{ path: string; bytes: number; error?: string; code?: string }>;
+    readVault: (path: string) => Promise<{ content: string; path: string; sha256: string }>;
+    writeVault: (
+      path: string,
+      content: string,
+      opts?: { expectedSha256: string | null },
+    ) => Promise<{ path: string; bytes: number; sha256?: string; error?: string; code?: string }>;
     listVault: (root?: string) => Promise<{ items: Array<{ path: string; name: string; isDirectory: boolean; modifiedAt: string }> }>;
     deleteVault: (path: string) => Promise<{ path: string; deleted: boolean }>;
     readManifest: () => Promise<unknown>;
