@@ -317,6 +317,31 @@ describe('driver via applyLiquidNeonV2Tokens', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('token-consumer transition churn stays on suppress (not dual-flush cancel-new)', async () => {
+    stubMatchMedia();
+    applyLiquidNeonV2Tokens(undefined, COSMIC, el);
+    const consumer = document.createElement('div');
+    consumer.style.cssText =
+      'border:2px solid var(--b1);box-shadow:0 0 4px var(--g2);transition:all .2s';
+    document.body.appendChild(consumer);
+    const churn = {
+      transitionProperty: 'all',
+      effect: { target: consumer, pseudoElement: null },
+      cancel: vi.fn(),
+    } as unknown as Animation;
+    const ga = vi.fn(() => [churn]);
+    Object.defineProperty(document, 'getAnimations', { configurable: true, value: ga });
+    try {
+      await vi.advanceTimersByTimeAsync(TICK);
+      expect(ga).toHaveBeenCalledTimes(1);
+      expect(churn.cancel).not.toHaveBeenCalled();
+      expect(el.hasAttribute('data-ln-breathe-tick')).toBe(false);
+    } finally {
+      delete (document as unknown as Record<string, unknown>).getAnimations;
+      consumer.remove();
+    }
+  });
+
   it('steady tick: suppress path, one getAnimations flush; TICK_ATTR cleared', async () => {
     stubMatchMedia();
     applyLiquidNeonV2Tokens(undefined, COSMIC, el);

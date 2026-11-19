@@ -380,20 +380,32 @@ test.describe.serial('#1774 Accent breathe', () => {
       const { metrics: list } = await client.send('Performance.getMetrics') as { metrics: { name: string; value: number }[] };
       return Object.fromEntries(list.map((m) => [m.name, m.value]));
     };
+    const resetTickStats = () => page.evaluate(() => {
+      (window as unknown as { __mwAccentBreatheTickStats?: { suppress: number; cancelNew: number; plain: number } })
+        .__mwAccentBreatheTickStats = { suppress: 0, cancelNew: 0, plain: 0 };
+    });
+    const readTickStats = () => page.evaluate(() => {
+      const s = (window as unknown as { __mwAccentBreatheTickStats?: { suppress: number; cancelNew: number; plain: number } })
+        .__mwAccentBreatheTickStats;
+      return s ? { ...s } : { suppress: 0, cancelNew: 0, plain: 0 };
+    });
     const measure = async () => {
       // Let toggle/proxy style changes finish so the 4 s window measures steady ON/OFF breathe.
       await page.waitForTimeout(400);
+      await resetTickStats();
       const before = await metrics();
       const sampler = distinctB1Over(page, 4000, 100);
       const stats = summarizeFrames(await sampleFrameDeltas(page, 4000));
       const distinct = await sampler;
       const after = await metrics();
+      const tickPaths = await readTickStats();
       return {
         stats,
         distinct: distinct.length,
         recalcStyleMs: (after.RecalcStyleDuration - before.RecalcStyleDuration) * 1000,
         recalcStyleCount: after.RecalcStyleCount - before.RecalcStyleCount,
         layoutCount: after.LayoutCount - before.LayoutCount,
+        tickPaths,
       };
     };
     type FrameStatsNoDeltas = Omit<FrameStats, 'deltasMs'>;
@@ -477,12 +489,17 @@ test.describe.serial('#1774 Accent breathe', () => {
       let n = 0;
       w.__probe = setInterval(() => {
         const root = document.documentElement;
-        const before = document.getAnimations();
-        const userActive = before.some((a) => {
+        const nonToken = new Set([
+          'opacity', 'transform', 'translate', 'scale', 'rotate', 'width', 'height', 'color', 'background-color',
+        ]);
+        const nonTokenUiRunning = document.getAnimations().some((a) => {
           const target = (a.effect as KeyframeEffect | null)?.target;
-          return target instanceof Element && target !== root;
+          if (!(target instanceof Element) || target === root) return false;
+          const prop = (a as CSSTransition).transitionProperty;
+          if (typeof prop !== 'string') return false;
+          return prop.split(',').some((p) => nonToken.has(p.trim().toLowerCase()));
         });
-        if (userActive) {
+        if (nonTokenUiRunning) {
           root.setAttribute('data-ln-breathe-probe', 'legacy');
           root.style.setProperty('--breathe-perf-probe', String(++n));
           root.removeAttribute('data-ln-breathe-probe');
@@ -511,12 +528,14 @@ test.describe.serial('#1774 Accent breathe', () => {
     // wins min on−off, same as the ABBA layout).
     const perChangeRecalcMs = (probe.recalcStyleMs - off2.recalcStyleMs) / ticks;
 
+    const tickLog = (label: string, paths: { suppress: number; cancelNew: number; plain: number }, recalcMs: number) =>
+      `${label} tick=${paths.suppress}+${paths.cancelNew}+${paths.plain} RecalcStyle=${recalcMs.toFixed(1)}ms`;
     // eslint-disable-next-line no-console
     console.log(
       `[#1774 perf] ON  ${fmt(on1.stats)} | 2nd ${fmt(on2.stats)} distinct--b1=${on1.distinct}/${on2.distinct} ` +
-        `RecalcStyle=${on1.recalcStyleMs.toFixed(1)}/${on2.recalcStyleMs.toFixed(1)}ms Layout=${on1.layoutCount}\n` +
+        `${tickLog('paths', on1.tickPaths, on1.recalcStyleMs)}/${tickLog('', on2.tickPaths, on2.recalcStyleMs)} Layout=${on1.layoutCount}\n` +
       `[#1774 perf] OFF ${fmt(off1.stats)} | 2nd ${fmt(off2.stats)} distinct--b1=${off1.distinct}/${off2.distinct} ` +
-        `RecalcStyle=${off1.recalcStyleMs.toFixed(1)}/${off2.recalcStyleMs.toFixed(1)}ms Layout=${off1.layoutCount}\n` +
+        `${tickLog('paths', off1.tickPaths, off1.recalcStyleMs)}/${tickLog('', off2.tickPaths, off2.recalcStyleMs)} Layout=${off1.layoutCount}\n` +
       `[#1774 perf] delta RecalcStyle=${onOffRecalcMs.toFixed(1)}ms (min on1−off1, on2−off2) ` +
         `(${perTickRecalcMs.toFixed(2)}ms/tick over ${ticks} ticks, +${PROXY_N} proxy) ` +
         `Layout=${on1.layoutCount - off1.layoutCount}\n` +
