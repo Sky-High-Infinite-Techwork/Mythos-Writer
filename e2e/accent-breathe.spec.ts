@@ -349,6 +349,21 @@ test.describe.serial('#1774 Accent breathe', () => {
 
   test('perf: Accent breathe holds frame rate (ON vs OFF, same run)', async () => {
     test.setTimeout(90_000);
+    // --repeat-each soak: each iteration needs a clean Electron + CDP counter
+    // (cumulative runner drift made recalc ratio fail on repeats 4–8 without this).
+    const repeatIndex = test.info().repeatEachIndex;
+    if (repeatIndex > 0) {
+      await app?.close().catch(() => {});
+      for (const dir of [userData, vaultDir, notesVaultDir]) {
+        if (dir) fs.rmSync(dir, { recursive: true, force: true });
+      }
+      userData = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-breathe-user-'));
+      vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-breathe-vault-'));
+      notesVaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-breathe-notes-'));
+      seedUserData(userData, vaultDir, notesVaultDir);
+      app = await launchApp(userData);
+      page = await firstWindow(app);
+    }
     type Metrics = Record<string, number>;
     const client = await page.context().newCDPSession(page);
     await client.send('Performance.enable');
@@ -498,12 +513,5 @@ test.describe.serial('#1774 Accent breathe', () => {
     // A tick costs about one root-token change: no extra whole-tree recalc.
     expect(perChangeRecalcMs).toBeGreaterThan(0);
     expect(perTickRecalcMs).toBeLessThanOrEqual(perChangeRecalcMs * PER_TICK_RECALC_RATIO_MAX);
-
-    await toggleBreathe(true);
-    await page.evaluate(() => {
-      document.documentElement.style.removeProperty('--breathe-perf-probe');
-    });
-    await removeProxy();
-    await closeSettings(page);
   });
 });
