@@ -1,5 +1,5 @@
 import './main.handlers.harnessSetup.js';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { harnessPaths } from './main.handlers.harnessSetup.js';
@@ -19,6 +19,7 @@ import {
   writeAppSettingsFile,
   writeVaultSettingsFile,
 } from './mainHandlersHarness.js';
+import * as vaultModule from './vault.js';
 import { defaultManifest, writeManifest, writeSceneFile } from './vault.js';
 import { releaseLockfile } from './vaultSessionLock.js';
 
@@ -149,51 +150,64 @@ describe('main.handlers scene:*', () => {
     expect(manifestBytesExcludeProse(cachePath, proseMarker)).toBe(true);
   });
 
-  it('scene:save updates title/customFields on disk and reuses manifest cache on rapid saves', async () => {
+  it('scene:save reuses in-memory manifest cache across rapid back-to-back saves', async () => {
     await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
     const { sceneId, sceneRelPath } = storySceneFromManifest(bundle.storyVaultPath, bundle.mythosRoot);
     const title = 'Harness Scene Title 1907';
     const marker = 'CACHE_BACK_TO_BACK_1907';
     const firstProse = `Initial prose.\n\n${marker}`;
-    const first = await invoke<{ scene?: { title: string }; error?: string }>(IPC_CHANNELS.SCENE_SAVE, {
-      sceneId,
-      prose: firstProse,
-      title,
-      customFields: { harness1907: 'alpha' },
-    });
-    expect(first.error).toBeUndefined();
-    expect(first.scene?.title).toBe(title);
-    const afterFirst = readBytesUnderVault(bundle.storyVaultPath, sceneRelPath).toString('utf-8');
-    expect(afterFirst).toContain(marker);
-    expect(afterFirst).toContain('harness1907');
-    expect(afterFirst).toContain(title);
+    const readSpy = vi.spyOn(vaultModule, 'readManifest');
+    try {
+      const first = await invoke<{ scene?: { title: string }; error?: string }>(IPC_CHANNELS.SCENE_SAVE, {
+        sceneId,
+        prose: firstProse,
+        title,
+        customFields: { harness1907: 'alpha' },
+      });
+      expect(first.error).toBeUndefined();
+      expect(first.scene?.title).toBe(title);
+      expect(readSpy).toHaveBeenCalledTimes(1);
+      readSpy.mockClear();
 
-    const secondProse = `${firstProse}\n\nSecond paragraph ${marker}-2`;
-    const second = await invoke<{ error?: string }>(IPC_CHANNELS.SCENE_SAVE, {
-      sceneId,
-      prose: secondProse,
-      intent: 'auto',
-    });
-    expect(second.error).toBeUndefined();
+      const secondProse = `${firstProse}\n\nSecond paragraph ${marker}-2`;
+      const second = await invoke<{ error?: string }>(IPC_CHANNELS.SCENE_SAVE, {
+        sceneId,
+        prose: secondProse,
+        intent: 'auto',
+      });
+      expect(second.error).toBeUndefined();
+      expect(readSpy).toHaveBeenCalledTimes(0);
+    } finally {
+      readSpy.mockRestore();
+    }
     const afterSecond = readBytesUnderVault(bundle.storyVaultPath, sceneRelPath).toString('utf-8');
     expect(afterSecond).toContain(`${marker}-2`);
     expect(afterSecond).toContain('harness1907');
   });
 
-  it('scene:save syncs @-mention entity links on disk saves', async () => {
+  it('scene:save syncs entity:// markdown links into scene_entity_links rows', async () => {
+    const mentionEntityId = 'ent_harness1907';
+    await invoke(IPC_CHANNELS.VAULT_WRITE, {
+      path: 'entities/characters/ent_harness1907.md',
+      content: `---\nid: ${mentionEntityId}\nname: Harness Mention Entity\ntype: character\n---\n\nCast.`,
+    });
+    const listed = await invoke<{ entities: Array<{ id: string }> }>(IPC_CHANNELS.ENTITY_LIST, {});
+    const { sceneId } = storySceneFromManifest(bundle.storyVaultPath, bundle.mythosRoot);
+    expect(listed.entities.some((e) => e.id === mentionEntityId)).toBe(true);
     await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
-    const { sceneId, sceneRelPath } = storySceneFromManifest(bundle.storyVaultPath, bundle.mythosRoot);
-    const mentionId = 'ent_harness1907';
-    const proseWithMention = `Opening with mention. [Elara](entity://${mentionId}) continues here.`;
+    await invoke(IPC_CHANNELS.ENTITY_UPDATE, { id: mentionEntityId, name: 'Harness Mention Entity' });
+    const proseWithMention = `Opening with mention. [Elara](entity://${mentionEntityId}) continues here.`;
     const saved = await invoke<{ error?: string }>(IPC_CHANNELS.SCENE_SAVE, {
       sceneId,
       prose: proseWithMention,
       intent: 'save',
     });
     expect(saved.error).toBeUndefined();
-    const md = readBytesUnderVault(bundle.storyVaultPath, sceneRelPath).toString('utf-8');
-    expect(md).toContain(proseWithMention);
-    expect(md).toContain(`entity://${mentionId}`);
+    const links = await invoke<{ links: Array<{ sceneId: string; entityId: string; linkKind: string }> }>(
+      IPC_CHANNELS.SCENE_ENTITY_LINKS_LIST,
+      { sceneId },
+    );
+    expect(links.links.some((l) => l.entityId === mentionEntityId && l.linkKind === 'mention')).toBe(true);
   });
 
   it('scene:save refuses unknown scene id without mutating disk', async () => {

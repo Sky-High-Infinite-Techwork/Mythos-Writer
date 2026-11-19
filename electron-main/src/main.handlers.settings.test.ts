@@ -12,6 +12,7 @@ import {
 } from './mainHandlersHarness.js';
 import { SETTINGS_DEFAULTS } from './appSettingsLoad.js';
 import type { AppSettings } from './ipc.js';
+import { MASK_PREFIX } from './settings-masking.js';
 
 let bundle: ReturnType<typeof seedMythosVaultBundle>;
 
@@ -94,7 +95,7 @@ describe('main.handlers settings:set', () => {
     expect(after.provider?.baseUrl).not.toBe(poisoned.provider?.baseUrl);
   });
 
-  it('settings:set syncs writing-assistant flat fields on valid save', async () => {
+  it('settings:set syncs writing-assistant flat wa* fields on valid save', async () => {
     const settingsPath = path.join(bundle.userData, 'app-settings.json');
     const before = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
     const next: AppSettings = {
@@ -103,6 +104,9 @@ describe('main.handlers settings:set', () => {
         ...before.agents,
         writingAssistant: {
           ...before.agents.writingAssistant,
+          enabled: !before.agents.writingAssistant.enabled,
+          cadenceTrigger:
+            before.agents.writingAssistant.cadenceTrigger === 'on_save' ? 'idle_heartbeat' : 'on_save',
           scanIntervalSeconds: (before.agents.writingAssistant.scanIntervalSeconds ?? 60) + 5,
         },
       },
@@ -113,6 +117,8 @@ describe('main.handlers settings:set', () => {
     expect(after.agents.writingAssistant.scanIntervalSeconds).toBe(
       next.agents.writingAssistant.scanIntervalSeconds,
     );
+    expect(after.waEnabled).toBe(next.agents.writingAssistant.enabled);
+    expect(after.waCadenceTrigger).toBe(next.agents.writingAssistant.cadenceTrigger);
   });
 
   it('refuses malformed stt payload without enabling bad stt flags', async () => {
@@ -218,9 +224,21 @@ describe('main.handlers settings:set', () => {
     expect(after.tts).toEqual(before.tts);
   });
 
-  it('settings:get returns masked settings without throwing', async () => {
-    const got = await invoke<AppSettings & { legacyVaultDetected?: boolean }>(IPC_CHANNELS.SETTINGS_GET);
-    expect(got.theme).toBeTruthy();
-    expect(got.onboardingComplete).toBe(true);
+  it('settings:get masks provider apiKey for renderer', async () => {
+    const settingsPath = path.join(bundle.userData, 'app-settings.json');
+    const before = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
+    const rawKey = 'sk-ant-rawkey-should-never-leak-1907';
+    const priorProvider = before.provider ?? { kind: 'openai' as const, apiKey: '' };
+    const armed: AppSettings = {
+      ...before,
+      provider: { ...priorProvider, apiKey: rawKey },
+    };
+    const saved = await invoke<{ saved: boolean }>(IPC_CHANNELS.SETTINGS_SET, { settings: armed });
+    expect(saved.saved).toBe(true);
+    const got = await invoke<AppSettings>(IPC_CHANNELS.SETTINGS_GET);
+    expect(got.provider?.apiKey).toMatch(new RegExp(`^${MASK_PREFIX.replace(/\./g, '\\.')}`));
+    expect(got.provider?.apiKey).not.toBe(rawKey);
+    const onDisk = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
+    expect(onDisk.provider?.apiKey).toBe(rawKey);
   });
 });

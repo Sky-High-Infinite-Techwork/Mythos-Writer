@@ -1,6 +1,7 @@
 import './main.handlers.harnessSetup.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { harnessPaths } from './main.handlers.harnessSetup.js';
 import {
@@ -18,7 +19,7 @@ import {
   writeVaultSettingsFile,
 } from './mainHandlersHarness.js';
 import { generateRegistrationToken } from './registrationToken.js';
-import { acquireLockfile, releaseLockfile } from './vaultSessionLock.js';
+import { releaseLockfile } from './vaultSessionLock.js';
 
 let bundle: ReturnType<typeof seedMythosVaultBundle>;
 
@@ -45,10 +46,15 @@ describe('main.handlers vault:write / vault:read', () => {
   });
 
   it('vault:list scopes listing to a subdirectory', async () => {
-    await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
-    const relDir = 'Universes';
-    const listed = await invoke<{ items: Array<{ path: string }> }>(IPC_CHANNELS.VAULT_LIST, { root: relDir });
-    expect(listed.items.every((i) => i.path.startsWith(relDir) || !i.path.includes('..'))).toBe(true);
+    const relDir = 'harness-list-scope';
+    const relFile = `${relDir}/listed-note.md`;
+    await invoke(IPC_CHANNELS.VAULT_WRITE, { path: relFile, content: '# Listed\n\nScope probe 1907.' });
+    const listed = await invoke<{ items: Array<{ path: string; isDirectory?: boolean }> }>(IPC_CHANNELS.VAULT_LIST, {
+      root: relDir,
+    });
+    expect(listed.items.length).toBeGreaterThan(0);
+    expect(listed.items.some((i) => i.path === 'listed-note.md')).toBe(true);
+    expect(listed.items.every((i) => !i.path.includes('..') && !i.path.startsWith('notes/'))).toBe(true);
   });
   it('vault:write persists allowed .md bytes and vault:read round-trips', async () => {
     const rel = 'notes/harness-note.md';
@@ -262,7 +268,7 @@ describe('main.handlers vault discovery / create / paths', () => {
     expect(mdFiles.length).toBeGreaterThan(0);
     const sample = mdFiles[0]!;
     expect(readBytesUnderVault(storyRoot, sample).length).toBeGreaterThan(10);
-    expect(fs.readdirSync(created.notesVaultRoot).length).toBeGreaterThanOrEqual(0);
+    expect(fs.readdirSync(created.notesVaultRoot).length).toBeGreaterThan(0);
   });
 
   it('vault:createDefaultMythos scaffolds story+notes roots on disk', async () => {
@@ -326,14 +332,24 @@ describe('main.handlers vault discovery / create / paths', () => {
   });
 
   it('vault:create-from-options resolves default parent when destinationParent omitted', async () => {
+    const defaultParent = path.join(bundle.userData, 'vaults');
     const created = await invoke<{ ok: boolean; storyVaultPath?: string; notesVaultPath?: string }>(
       IPC_CHANNELS.VAULT_CREATE_FROM_OPTIONS,
       { mode: 'blank', name: `DefaultParent-${Date.now()}`, activate: false },
     );
-    expect(created.ok).toBe(true);
-    expect(created.storyVaultPath).toBeTruthy();
-    expect(fs.existsSync(created.storyVaultPath!)).toBe(true);
-    expect(fs.existsSync(created.notesVaultPath!)).toBe(true);
+    try {
+      expect(created.ok).toBe(true);
+      expect(created.storyVaultPath).toBeTruthy();
+      expect(created.storyVaultPath!.startsWith(defaultParent)).toBe(true);
+      expect(created.notesVaultPath!.startsWith(defaultParent)).toBe(true);
+      expect(fs.existsSync(created.storyVaultPath!)).toBe(true);
+      expect(fs.existsSync(created.notesVaultPath!)).toBe(true);
+    } finally {
+      const mythosRoot = created.storyVaultPath ? path.dirname(path.dirname(created.storyVaultPath)) : '';
+      if (mythosRoot && fs.existsSync(mythosRoot)) {
+        fs.rmSync(mythosRoot, { recursive: true, force: true });
+      }
+    }
   });
 
   it('vault:create-from-options strips unsafe defaultTheme tokens', async () => {
@@ -517,26 +533,70 @@ describe('main.handlers vault graph, search, and legacy detect', () => {
 
   it('vault:graph:nodes and vault:graph:edges honour notes scope after notesVault:write', async () => {
     await invoke(IPC_CHANNELS.NOTES_VAULT_WRITE, {
+      path: 'graph-notes/b.md',
+      content: '---\ntitle: Notes Graph B\n---\n\nTarget.',
+    });
+    await invoke(IPC_CHANNELS.NOTES_VAULT_WRITE, {
       path: 'graph-notes/a.md',
       content: '---\ntitle: Notes Graph A\n---\n\n[[b]]',
     });
-    const nodes = await invoke<{ nodes: unknown[] }>(IPC_CHANNELS.VAULT_GRAPH_NODES, { scope: 'notes' });
-    const edges = await invoke<{ edges: unknown[] }>(IPC_CHANNELS.VAULT_GRAPH_EDGES, { scope: 'notes' });
-    expect(nodes.nodes.length).toBeGreaterThan(0);
-    expect(Array.isArray(edges.edges)).toBe(true);
+    const nodes = await invoke<{ nodes: Array<{ id: string; vault?: string }> }>(IPC_CHANNELS.VAULT_GRAPH_NODES, {
+      scope: 'notes',
+    });
+    const edges = await invoke<{ edges: Array<{ source: string; target: string }> }>(IPC_CHANNELS.VAULT_GRAPH_EDGES, {
+      scope: 'notes',
+    });
+    expect(nodes.nodes.some((n) => n.id === 'graph-notes/a.md')).toBe(true);
+    expect(nodes.nodes.some((n) => n.id === 'graph-notes/b.md')).toBe(true);
+    const ab = edges.edges.find((e) => e.source === 'graph-notes/a.md' && e.target === 'graph-notes/b.md');
+    expect(ab).toBeDefined();
   });
 
-  it('search:query runs against indexed demo vault', async () => {
+  it('search:query returns a hit for prose indexed via scene:save', async () => {
     bundle = seedMythosVaultBundle({ seedDemo: true, name: 'SearchVault' });
     harnessPaths.userData = bundle.userData;
     await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
-    const results = await invoke<{ results: unknown[]; elapsed_ms: number }>(IPC_CHANNELS.SEARCH_QUERY, {
-      query: 'Harness',
-      scope: 'all',
+    const { sceneId } = storySceneFromManifest(bundle.storyVaultPath, bundle.mythosRoot);
+    const token = `SEARCH_TOKEN_1907_${Date.now()}`;
+    await invoke(IPC_CHANNELS.SCENE_SAVE, { sceneId, prose: `Searchable scene body.\n\n${token}`, intent: 'save' });
+    const results = await invoke<{ results: Array<{ docId: string; snippet?: string }> }>(IPC_CHANNELS.SEARCH_QUERY, {
+      query: token,
+      scope: 'story',
       limit: 10,
     });
-    expect(results.elapsed_ms).toBeGreaterThanOrEqual(0);
-    expect(Array.isArray(results.results)).toBe(true);
+    expect(results.results.length).toBeGreaterThan(0);
+    expect(results.results.some((r) => r.docId === sceneId && (r.snippet ?? '').includes(token))).toBe(true);
+  });
+
+  it('archive:scan runs wiki pass on demo scene when archive agent is enabled', async () => {
+    bundle = seedMythosVaultBundle({ seedDemo: true, name: 'ArchiveScanVault' });
+    harnessPaths.userData = bundle.userData;
+    const settingsPath = path.join(bundle.userData, 'app-settings.json');
+    const before = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as import('./ipc.js').AppSettings;
+    const set = await invoke<{ saved: boolean }>(IPC_CHANNELS.SETTINGS_SET, {
+      settings: {
+        ...before,
+        agents: {
+          ...before.agents,
+          archive: { ...before.agents.archive, enabled: true },
+        },
+      },
+    });
+    expect(set.saved).toBe(true);
+    await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
+    const entityName = `ArchiveWikiOnly1907_${Date.now()}`;
+    await invoke(IPC_CHANNELS.ENTITY_CREATE, {
+      name: entityName,
+      type: 'character',
+      prose: 'Indexed for archive wiki opportunities.',
+    });
+    const { sceneRelPath } = storySceneFromManifest(bundle.storyVaultPath, bundle.mythosRoot);
+    const prose = `Quiet scene.\n\n${entityName} stepped into the room without a wiki link.`;
+    const scan = await invoke<{ inconsistenciesFound: number; wikiLinksFound: number }>(IPC_CHANNELS.ARCHIVE_SCAN, {
+      sceneText: prose,
+      scenePath: sceneRelPath,
+    });
+    expect(scan.wikiLinksFound).toBeGreaterThan(0);
   });
 
   it('archive:scan returns early when archive agent is disabled', async () => {
@@ -546,31 +606,6 @@ describe('main.handlers vault graph, search, and legacy detect', () => {
     });
     expect(scan.suggestions).toEqual([]);
     expect(scan.inconsistenciesFound).toBe(0);
-  });
-
-  it('archive:scan runs wiki pass on demo scene when archive agent is enabled', async () => {
-    bundle = seedMythosVaultBundle({ seedDemo: true, name: 'ArchiveScanVault' });
-    harnessPaths.userData = bundle.userData;
-    const settingsPath = path.join(bundle.userData, 'app-settings.json');
-    const before = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as import('./ipc.js').AppSettings;
-    await invoke<{ saved: boolean }>(IPC_CHANNELS.SETTINGS_SET, {
-      settings: {
-        ...before,
-        agents: {
-          ...before.agents,
-          archive: { ...before.agents.archive, enabled: true },
-        },
-      },
-    });
-    await invoke(IPC_CHANNELS.VAULT_MANIFEST_READ);
-    const { sceneRelPath } = storySceneFromManifest(bundle.storyVaultPath, bundle.mythosRoot);
-    const prose = sceneProseOnDisk(bundle.storyVaultPath, sceneRelPath);
-    const scan = await invoke<{ inconsistenciesFound: number; wikiLinksFound: number }>(IPC_CHANNELS.ARCHIVE_SCAN, {
-      sceneText: prose,
-      scenePath: sceneRelPath,
-    });
-    expect(scan.inconsistenciesFound).toBeGreaterThanOrEqual(0);
-    expect(scan.wikiLinksFound).toBeGreaterThanOrEqual(0);
   });
 
   it('project:stats and vault:getSystemPaths return structured payloads', async () => {
@@ -591,9 +626,12 @@ describe('main.handlers vault graph, search, and legacy detect', () => {
     expect(detected.found).toBe(false);
   });
 
-  it('notesVault:get-order returns an object map', async () => {
+  it('notesVault:get-order returns persisted manual order map', async () => {
+    await invoke(IPC_CHANNELS.NOTES_VAULT_WRITE, { path: 'order-a.md', content: '# A' });
+    await invoke(IPC_CHANNELS.NOTES_VAULT_WRITE, { path: 'order-b.md', content: '# B' });
+    await invoke(IPC_CHANNELS.NOTES_VAULT_REORDER, { parentPath: '', orderedPaths: ['order-b.md', 'order-a.md'] });
     const order = await invoke<Record<string, string[]>>(IPC_CHANNELS.NOTES_VAULT_GET_ORDER);
-    expect(order).toBeTypeOf('object');
+    expect(order['']).toEqual(['order-b.md', 'order-a.md']);
   });
 });
 
@@ -657,11 +695,14 @@ describe('main.handlers vault:check-session-lock', () => {
   });
 
   it('acquires lock when none exists', async () => {
+    const lockPath = path.join(bundle.storyVaultPath, '.mythos', 'vault.lock');
+    expect(fs.existsSync(lockPath)).toBe(false);
     const result = await invoke<{ lockfileConflict: null | { pid: number } }>(IPC_CHANNELS.VAULT_CHECK_SESSION_LOCK);
     expect(result.lockfileConflict).toBeNull();
-    const acquired = acquireLockfile(bundle.storyVaultPath);
-    expect(acquired).not.toBeNull();
-    releaseLockfile(bundle.storyVaultPath);
+    expect(fs.existsSync(lockPath)).toBe(true);
+    const onDisk = JSON.parse(fs.readFileSync(lockPath, 'utf-8')) as { pid: number; hostname: string };
+    expect(onDisk.pid).toBe(process.pid);
+    expect(onDisk.hostname).toBe(os.hostname());
   });
 });
 

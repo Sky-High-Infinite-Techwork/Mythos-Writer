@@ -57,6 +57,7 @@ export function writeVaultSettingsFile(
   body: {
     vaultRoot: string;
     notesVaultRoot?: string;
+    vaultsParentPath?: string;
     layoutMode?: 'default' | 'blank';
     recentProjects?: ProjectEntry[];
   },
