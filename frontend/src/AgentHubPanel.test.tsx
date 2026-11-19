@@ -123,6 +123,26 @@ describe('AgentHubPanel — Slice B partner shell', () => {
     expect(within(card).getByRole('button', { name: /Session:/ }).closest('[aria-hidden="true"]')).toBeNull();
   });
 
+  it('Escape on rename input inside Past chats does not close the disclosure (FD-9 #3)', async () => {
+    render(<AgentHubPanel scene={null} onOpenPartnerHistory={() => {}} />);
+    const card = await screen.findByTestId('partner-card');
+    const toggle = within(card).getByTestId('ahp-past-chats-toggle');
+    const pastRoot = within(card).getByTestId('ahp-past-chats');
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+    const renameInput = document.createElement('input');
+    renameInput.className = 'asp-rename-input';
+    renameInput.setAttribute('aria-label', 'Rename session');
+    pastRoot.appendChild(renameInput);
+    renameInput.focus();
+    expect(renameInput).toHaveFocus();
+
+    fireEvent.keyDown(renameInput, { key: 'Escape' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  });
+
   it('tab order is header controls, then past chats, in both call layouts', async () => {
     render(<AgentHubPanel scene={null} onOpenPartnerHistory={() => {}} />);
     const card = await screen.findByTestId('partner-card');

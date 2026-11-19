@@ -375,36 +375,16 @@ function PartnerChatView({
     ?? (writerBusy ? 'writer' : brainstormActivity.active ? null : null);
   const [pastOpen, setPastOpen] = useState(false);
   const pastToggleRef = useRef<HTMLButtonElement>(null);
-  const pastChatsRef = useRef<HTMLDivElement>(null);
-  const dismissPastChats = useCallback(() => {
-    setPastOpen(false);
-    pastToggleRef.current?.focus();
-  }, []);
-  const onPastChatsEscape = useCallback((event: React.KeyboardEvent) => {
+  // FD-9 #3 — the session pill stays mounted while Past chats is closed
+  // (TC-8537-02). Escape is handled only inside this region.
+  const onPastChatsKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (!pastOpen || event.key !== 'Escape') return;
     const target = event.target;
     if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
     event.preventDefault();
-    dismissPastChats();
-  }, [pastOpen, dismissPastChats]);
-  // FD-9 #3 — Escape closes only while focus is inside past-chats (not the editor).
-  // Window capture + activeElement covers Playwright CDP (FORCE_JAVASCRIPT_ACTIONS_TO_NODE24).
-  useEffect(() => {
-    if (!pastOpen) return;
-    const root = pastChatsRef.current;
-    if (!root) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      const active = document.activeElement;
-      if (!active || !root.contains(active)) return;
-      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
-      event.preventDefault();
-      event.stopPropagation();
-      dismissPastChats();
-    };
-    window.addEventListener('keydown', onKeyDown, true);
-    return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [pastOpen, dismissPastChats]);
+    setPastOpen(false);
+    pastToggleRef.current?.focus();
+  };
   // Tip cards always mounted (N4-A tips-only WA); chat stays on the partner thread.
   const [showWriterTips, setShowWriterTips] = useState(false);
 
@@ -419,9 +399,9 @@ function PartnerChatView({
         pastChats={(
           /* FD-9 #3 — small neutral Past chats dropdown in the header card. */
           <div
-            ref={pastChatsRef}
             className="ahp-past-chats"
             data-testid="ahp-past-chats"
+            onKeyDown={onPastChatsKeyDown}
           >
             <button
               ref={pastToggleRef}
@@ -430,7 +410,6 @@ function PartnerChatView({
               aria-expanded={pastOpen}
               aria-controls="ahp-past-chats-history"
               onClick={() => setPastOpen((o) => !o)}
-              onKeyDown={onPastChatsEscape}
               data-testid="ahp-past-chats-toggle"
             >
               <span>Past chats &amp; calls</span>

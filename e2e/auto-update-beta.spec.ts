@@ -5,7 +5,8 @@
  * 2026-07-23) — a deliberate distribution control, not a bug. A known, ACCEPTED
  * consequence of that policy is that the in-app updater cannot see draft releases,
  * so auto-update is deferred to public launch, not shipped in Beta 4. This spec's
- * Opt-in via MYTHOS_AUTO_UPDATE_E2E=1 (see npm run test:e2e:auto-update) — not required CI.
+ * `test.skip()` below is that deferral, not an unmet obligation — do not un-skip it
+ * (or mint an un-skip-owner ticket for it) without an owner decision to un-draft
  * releases / ship the updater first; see PR #1071 / SKY-8110 (cancelled for the
  * same reason). Re-evaluation trigger + owner: the public-launch / undraft-releases
  * call itself (Ivy/Skyy, via COMPANY-STANDARDS §5e) — not a per-agent un-skip task.

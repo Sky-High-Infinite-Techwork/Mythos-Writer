@@ -216,4 +216,36 @@ test('Setup: Create story, chapter, and scene', async () => {
   await expect(sceneRow).toBeVisible({ timeout: 6_000 });
 });
 
+// ─── TC-ISR-01..06: SKIPPED — SKY-9022/M6 ────────────────────────────────────
+//
+// These cases test the old VaultBrowser story-side tree's double-click
+// inline-rename (`.vb-rename-input` on `vb-story-vault` rows), which SKY-9022
+// M6 removed with no direct replacement (renaming now happens in the editor
+// via onRenameScene/onRenameChapter/onRenameStory — see DesktopShell.tsx).
+// Skipped rather than deleted so this coverage gap stays visible/traceable.
+// Follow-up: add e2e coverage for the new editor-based rename flow.
+
+test.skip('TC-ISR-01: double-click scene node shows inline input with name pre-filled', async () => {
+  // See SKY-9022/M6 skip note above — .vb-story-vault / .vb-rename-input no longer exist.
+});
+
+test.skip('TC-ISR-02: typing in rename input updates the input value', async () => {
+  // See SKY-9022/M6 skip note above.
+});
+
+test.skip('TC-ISR-03: press Escape during rename cancels edit and reverts name', async () => {
+  // See SKY-9022/M6 skip note above.
+});
+
+test.skip('TC-ISR-04: submit empty name shows error message', async () => {
+  // See SKY-9022/M6 skip note above.
+});
+
+test.skip('TC-ISR-05: rename input receives autofocus when opened', async () => {
+  // See SKY-9022/M6 skip note above.
+});
+
+test.skip('TC-ISR-06: rename validator rejects invalid characters', async () => {
+  // See SKY-9022/M6 skip note above.
+});
 

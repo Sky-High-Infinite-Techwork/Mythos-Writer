@@ -165,7 +165,10 @@ test.describe('SKY-8217 metric 2 — idle CPU', () => {
   });
 
   test('main + renderer CPU over a 5s idle window', async () => {
-    expect(process.platform, 'idleCpu.ts only supports Linux /proc sampling').toBe('linux');
+    if (process.platform !== 'linux') {
+      test.skip(true, 'idleCpu.ts only supports Linux /proc sampling');
+      return;
+    }
     const result = await measureIdleCpu(app!, 5000);
     const pass = result.totalCpuPct <= IDLE_CPU_TARGET_PCT;
     // eslint-disable-next-line no-console
