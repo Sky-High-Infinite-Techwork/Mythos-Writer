@@ -230,6 +230,10 @@ function writeTick(c: Controller, t: Record<string, string>): void {
     write(c, t);
     return;
   }
+  if (c.el.getAttribute('data-ln-breathe-legacy') === '1') {
+    writeTickCancelNew(c, t, doc);
+    return;
+  }
   const active = doc.getAnimations();
   const userTransitionActive = active.some((a) => {
     const target = (a.effect as KeyframeEffect | null)?.target;
