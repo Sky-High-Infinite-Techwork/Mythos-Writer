@@ -529,3 +529,25 @@ export function resetNotesTrashForTests(): void {
   groups.clear();
   entryIndex.clear();
 }
+
+// Seam: itemDeleteStub parent/item split is internal to flush; layout bytes are the observable check (#1911).
+export const notesTrashPathSeams = {
+  splitVaultRelPath,
+  vaultRelJoin,
+  depth,
+} as const;
+
+// Seam: overlap chain merge is not returned from emptyTrash—only ordering roots are observable in isolation (#1911).
+export const notesTrashGroupSeams = {
+  isAncestorOrSame,
+  groupDepth,
+  groupRoots,
+  overlapChains,
+} as const;
+
+// Seam: claimGroup/flushClaimedGroups sit between timer flush and shell.trashItem with no narrower public hook (#1911).
+export const notesTrashFlushSeams = {
+  claimGroup,
+  flushClaimedGroups,
+} as const;
+

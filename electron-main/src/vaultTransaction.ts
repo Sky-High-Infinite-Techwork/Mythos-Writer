@@ -106,12 +106,22 @@ export function applyVaultTransaction(opts: ApplyVaultTransactionOptions): Apply
       });
     }
   } catch (err) {
-    // Roll back: restore every file already written, then undo the rename.
-    // The vault must never be left half-updated.
+    // Roll back: restore only targets this transaction actually wrote (on-disk
+    // bytes still match newContent), then undo the rename. Skips refused /
+    // untouched files and avoids clobbering unrelated edits.
     const rollbackFailures: string[] = [];
-    for (const file of applied) {
+    for (const file of snapshotted) {
+      const root = file.side === 'notes' ? notesRoot : storyRoot;
+      let current: string;
       try {
-        write(file.side === 'notes' ? notesRoot : storyRoot, file.relPath, file.oldContent);
+        current = readVaultFile(root, file.relPath).content;
+      } catch {
+        continue;
+      }
+      if (current === file.oldContent) continue;
+      if (current !== file.newContent) continue;
+      try {
+        write(root, file.relPath, file.oldContent);
       } catch {
         rollbackFailures.push(file.relPath);
       }
