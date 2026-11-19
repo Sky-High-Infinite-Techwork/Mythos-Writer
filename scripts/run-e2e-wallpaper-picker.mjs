@@ -61,6 +61,25 @@ function executedCount(reportPath) {
   return (stats.expected ?? 0) + (stats.unexpected ?? 0) + (stats.flaky ?? 0);
 }
 
+/**
+ * Spawn npm as `node npm-cli.js` with no shell. Windows rejects `.cmd` / `.bat`
+ * spawns unless a shell is used (CVE-2024-27980), and a shell would re-quote argv.
+ * `npm_execpath` is the JS entry when npm itself started this process. Otherwise
+ * the CLI sits next to the node binary.
+ */
+export function npmLaunch(npmArgs, options = {}) {
+  const platform = options.platform ?? process.platform;
+  const pathApi = platform === 'win32' ? path.win32 : path;
+  const execPath = options.execPath ?? process.execPath;
+  const env = options.env ?? process.env;
+  const fromEnv = env.npm_execpath;
+  const beside = pathApi.join(pathApi.dirname(execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  const cli = typeof fromEnv === 'string' && fromEnv.length > 0 && !/\.(cmd|bat)$/i.test(fromEnv)
+    ? fromEnv
+    : beside;
+  return { command: execPath, args: [cli, ...npmArgs], shell: false };
+}
+
 function run(command, args, extraEnv = {}) {
   return new Promise((resolve) => {
     const child = spawn(command, args, {

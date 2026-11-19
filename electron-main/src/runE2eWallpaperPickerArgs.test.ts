@@ -8,19 +8,26 @@ import { describe, expect, it } from 'vitest';
 const repoRoot = path.resolve(import.meta.dirname, '../..');
 const wrapper = path.join(repoRoot, 'scripts', 'run-e2e-wallpaper-picker.mjs');
 
-interface SuiteRunner {
-  runSuites(argv: string[], options?: { playwrightCli?: string }): Promise<number>;
+interface NpmLaunch {
+  command: string;
+  args: string[];
+  shell: false;
 }
 
-const { runSuites } = await (import(pathToFileURL(wrapper).href) as Promise<SuiteRunner>);
+interface SuiteRunner {
+  runSuites(argv: string[], options?: { playwrightCli?: string }): Promise<number>;
+  npmLaunch(npmArgs: string[], options?: {
+    platform?: string;
+    execPath?: string;
+    env?: NodeJS.ProcessEnv;
+  }): NpmLaunch;
+}
+
+const { runSuites, npmLaunch } = await (import(pathToFileURL(wrapper).href) as Promise<SuiteRunner>);
 
 interface RecordedRun {
   argv: string[];
   report: string;
-}
-
-function npmExecutable(): string {
-  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
 }
 
 function writeStub(file: string): void {
@@ -118,10 +125,46 @@ describe('e2e wrapper forwards Playwright args', () => {
     }
   }, 30_000);
 
-  it('spawns npm with the platform executable', async () => {
-    const child = spawn(npmExecutable(), ['pkg', 'get', 'scripts.test:e2e:key-actions'], {
+  it('win32 npm spawn is node plus npm-cli.js and never a shell', () => {
+    const nodeExe = 'C:\\Program Files\\nodejs\\node.exe';
+    const spec = npmLaunch(['pkg', 'get', 'scripts.test:e2e:key-actions'], {
+      platform: 'win32',
+      execPath: nodeExe,
+      env: {},
+    });
+    expect(spec.command).toBe(nodeExe);
+    expect(spec.shell).toBe(false);
+    expect(spec.args[0]).toBe('C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js');
+    expect(`${spec.command} ${spec.args.join(' ')}`.toLowerCase()).not.toContain('.cmd');
+    expect(`${spec.command} ${spec.args.join(' ')}`.toLowerCase()).not.toContain('.bat');
+
+    const fromCmd = npmLaunch(['pkg', 'get', 'scripts.test:e2e:key-actions'], {
+      platform: 'win32',
+      execPath: nodeExe,
+      env: { npm_execpath: 'C:\\Program Files\\nodejs\\npm.cmd' },
+    });
+    expect(fromCmd.command).toBe(nodeExe);
+    expect(fromCmd.shell).toBe(false);
+    expect(fromCmd.args[0]).toBe(spec.args[0]);
+
+    const fromJs = npmLaunch(['pkg', 'get', 'scripts.test:e2e:key-actions'], {
+      platform: 'win32',
+      execPath: nodeExe,
+      env: { npm_execpath: 'D:\\npm\\bin\\npm-cli.js' },
+    });
+    expect(fromJs.command).toBe(nodeExe);
+    expect(fromJs.shell).toBe(false);
+    expect(fromJs.args[0]).toBe('D:\\npm\\bin\\npm-cli.js');
+  });
+
+  it('spawns npm through the JS CLI with no shell', async () => {
+    const launch = npmLaunch(['pkg', 'get', 'scripts.test:e2e:key-actions']);
+    expect(launch.command).toBe(process.execPath);
+    expect(launch.shell).toBe(false);
+    expect(launch.args[0]).toMatch(/npm-cli\.js$/);
+    const child = spawn(launch.command, launch.args, {
       cwd: repoRoot,
-      shell: false,
+      shell: launch.shell,
       windowsHide: true,
     });
     const stdout = await new Promise<string>((resolve, reject) => {
