@@ -432,7 +432,18 @@
     },
     "api.notesBoardTrashItems": {
       "folderPath": "/tmp/bridge-sample",
-      "targets": []
+      "targets": [
+        {
+          "kind": "note",
+          "itemPath": "/tmp/bridge-sample/note-a.md",
+          "label": "note-a"
+        },
+        {
+          "kind": "furniture",
+          "furnitureId": "bridge-id",
+          "label": "desk-1"
+        }
+      ]
     },
     "api.notesGet": {
       "sceneId": "bridge-sample"

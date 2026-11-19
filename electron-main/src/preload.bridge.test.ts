@@ -130,6 +130,11 @@ const SAMPLE = {
   token: 'bridge-token',
 } as const;
 
+const NOTES_BOARD_TRASH_TARGETS = [
+  { kind: 'note' as const, itemPath: '/tmp/bridge-sample/note-a.md', label: 'note-a' },
+  { kind: 'furniture' as const, furnitureId: SAMPLE.id, label: 'desk-1' },
+];
+
 /** Per-path call shape: argument list and exact invoke/send payload (2nd argument). */
 type BridgeCallSpec = {
   args: unknown[];
@@ -198,7 +203,10 @@ const BRIDGE_ARG_OVERRIDES: Record<string, BridgeArgOverride> = {
   'api.agentSessions.create': {
     args: [SAMPLE.str, SAMPLE.str2, 'hi', SAMPLE.id],
   },
-  'api.notesBoardTrashItems': { args: [SAMPLE.path, []] },
+  'api.notesBoardTrashItems': {
+    args: [SAMPLE.path, NOTES_BOARD_TRASH_TARGETS],
+    payload: { folderPath: SAMPLE.path, targets: NOTES_BOARD_TRASH_TARGETS },
+  },
   'api.tagsBulkApply': {
     args: [[SAMPLE.id], 'scene' as const, [SAMPLE.str], [SAMPLE.str2]],
   },
@@ -458,17 +466,46 @@ function assertNoRawIpcSurface(value: unknown, pathKey: string, ipcRendererRef: 
   }
 }
 
-function detectListenerKind(bridgeFn: (...args: unknown[]) => unknown): ListenerKind {
-  const src = Function.prototype.toString.call(bridgeFn);
-  if (/const handler = \(\) => cb\(\)/.test(src)) return 'noArg';
-  if (src.includes('cb(data.chunk)')) return 'chunk';
-  if (src.includes('cb(data.requestId)')) return 'requestId';
-  if (src.includes('cb(data.text)')) return 'text';
-  if (src.includes('cb(data.panelId)')) return 'panelId';
-  if (src.includes('cb(data.storySlug)')) return 'storySlug';
-  if (src.includes('cb(entries)')) return 'entries';
-  if (src.includes('cb(info)')) return 'info';
-  return 'passthrough';
+const LISTENER_KIND_PROBE_ORDER: ListenerKind[] = [
+  'noArg',
+  'chunk',
+  'requestId',
+  'text',
+  'panelId',
+  'storySlug',
+  'entries',
+  'info',
+  'passthrough',
+];
+
+function listenerProbeMatchesKind(
+  probeCb: ReturnType<typeof vi.fn>,
+  row: ListenerFixtureRow,
+): boolean {
+  const expected = userCbArgsFromListenerRow(row);
+  if (probeCb.mock.calls.length !== 1) return false;
+  const actual = probeCb.mock.calls[0]!;
+  if (actual.length !== expected.length) return false;
+  return actual.every((arg, i) => JSON.stringify(arg) === JSON.stringify(expected[i]));
+}
+
+function probeListenerKindForRecord(
+  bridgeFn: (cb: (arg?: unknown) => void) => () => void,
+  row: ExposedRow,
+): ListenerKind {
+  for (const kind of LISTENER_KIND_PROBE_ORDER) {
+    const ipcPayload = defaultIpcPayloadForListener(row, kind);
+    const fixture: ListenerFixtureRow =
+      ipcPayload === undefined ? { kind } : { kind, ipcPayload };
+    const probeCb = vi.fn<(arg?: unknown) => void>();
+    onMock.mockClear();
+    bridgeFn(probeCb);
+    const handler = onMock.mock.calls[0]?.[1] as ((...args: unknown[]) => void) | undefined;
+    if (!handler) continue;
+    handler(...ipcInvokeArgsForListenerRow(fixture));
+    if (listenerProbeMatchesKind(probeCb, fixture)) return kind;
+  }
+  throw new Error(`Could not probe listener callback shape for ${callKey(row)}`);
 }
 
 function defaultIpcPayloadForListener(row: ExposedRow, kind: ListenerKind): unknown | undefined {
@@ -505,7 +542,7 @@ function recordListenerFixtureRow(row: ExposedRow): ListenerFixtureRow {
   const bridgeFn = getAtPath(capturedWorlds[row.world], row.path) as (
     cb: (arg?: unknown) => void,
   ) => () => void;
-  const kind = detectListenerKind(bridgeFn as (...args: unknown[]) => unknown);
+  const kind = probeListenerKindForRecord(bridgeFn, row);
   const ipcPayload = defaultIpcPayloadForListener(row, kind);
   const probeCb = vi.fn<(arg?: unknown) => void>();
   onMock.mockClear();
@@ -545,16 +582,6 @@ describe.skipIf(!!process.env.PRELOAD_BRIDGE_RECORD)('preload bridge', () => {
     const missing = FROZEN_LISTENERS.map(callKey).filter((key) => !getListenerFixture()[key]);
     expect(missing).toEqual([]);
   });
-
-  it.each(FROZEN_LISTENERS.map((row) => [callKey(row), row] as const))(
-    '%s fixture kind matches preload listener wiring (red-on-revert)',
-    (_key, row) => {
-      const fn = getAtPath(capturedWorlds[row.world], row.path);
-      expect(typeof fn).toBe('function');
-      const runtimeKind = detectListenerKind(fn as (...args: unknown[]) => unknown);
-      expect(getListenerFixture()[callKey(row)]?.kind).toBe(runtimeKind);
-    },
-  );
 
   it('covers every frozen exposeInMainWorld function (new key without a case fails)', () => {
     const runtime = allRuntimeFunctionPaths();
@@ -674,6 +701,22 @@ describe.skipIf(!!process.env.PRELOAD_BRIDGE_RECORD)('preload bridge', () => {
 
   it('isPackaged is a boolean constant, not IPC', () => {
     expect((capturedWorlds.api as { isPackaged: boolean }).isPackaged).toBe(false);
+  });
+
+  it('notesBoardTrashItems forwards every selected target to IPC (red-on-revert)', async () => {
+    const row = FROZEN_CALLS.find((r) => callKey(r) === 'api.notesBoardTrashItems');
+    expect(row).toBeDefined();
+    const override = BRIDGE_ARG_OVERRIDES['api.notesBoardTrashItems']!;
+    const targets = override.args[1] as typeof NOTES_BOARD_TRASH_TARGETS;
+    expect(targets).toHaveLength(2);
+    expect(targets[0]!.kind).not.toBe(targets[1]!.kind);
+    const api = capturedWorlds[row!.world];
+    const fn = getAtPath(api, row!.path) as (...a: unknown[]) => unknown;
+    await (fn(...override.args) as Promise<unknown>);
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock).toHaveBeenCalledWith(row!.channel, override.payload);
+    const payload = firstIpcMockCall(invokeMock)[1] as { targets: typeof NOTES_BOARD_TRASH_TARGETS };
+    expect(payload.targets).toEqual(targets);
   });
 
   it('vaultSetPaths golden encodes distinct story vs notes paths (red-on-revert)', () => {
