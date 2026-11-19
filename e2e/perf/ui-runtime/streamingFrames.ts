@@ -42,8 +42,11 @@ function generateLoremTokens(count: number): string[] {
   return tokens;
 }
 
+/** Default mock stream length for ui-runtime perf (chunks × chatDelayMs ≈ stream duration). */
+export const UI_RUNTIME_STREAMING_MOCK_TOKEN_COUNT = 40;
+
 export interface StreamingMockOptions {
-  /** Number of streamed chunks to emit. Default 30. */
+  /** Number of streamed chunks to emit. Default UI_RUNTIME_STREAMING_MOCK_TOKEN_COUNT. */
   tokenCount?: number;
   /** Delay in ms between chunks. Default 100. */
   chatDelayMs?: number;
@@ -55,15 +58,14 @@ export interface StreamingMockOptions {
  * `e2e/writing-assistant.spec.ts`'s `installIpcMocks`, since partner chat
  * never calls `agent:writing-assistant`.
  *
- * Defaults (tokenCount=30, chatDelayMs=100) keep a streaming window open for
- * ~3 seconds, giving `sampleFrameDeltas` (animationFps.ts) room to capture a
- * meaningful number of frames concurrently while the stream is in flight.
+ * Defaults keep a streaming window open for several seconds so
+ * `sampleFrameDeltas` (animationFps.ts) can sample frames during the stream.
  */
 export async function installMockChatStream(
   app: ElectronApplication,
   opts: StreamingMockOptions = {},
 ): Promise<void> {
-  const { tokenCount = 30, chatDelayMs = 100 } = opts;
+  const { tokenCount = UI_RUNTIME_STREAMING_MOCK_TOKEN_COUNT, chatDelayMs = 100 } = opts;
   const chatTokens = generateLoremTokens(tokenCount);
   const chatResponse = chatTokens.join('');
 
@@ -99,7 +101,7 @@ export async function installMockChatStream(
 }
 
 /** Full mocked response text for assertions (default installMockChatStream tokens). */
-export const DEFAULT_MOCK_CHAT_RESPONSE = generateLoremTokens(30).join('');
+export const DEFAULT_MOCK_CHAT_RESPONSE = generateLoremTokens(UI_RUNTIME_STREAMING_MOCK_TOKEN_COUNT).join('');
 
 /**
  * Opens the Writing Coach chat view in the agent hub panel.
@@ -131,9 +133,8 @@ export async function openWritingCoachChat(page: Page): Promise<void> {
  * finished. Callers want to sample frames WHILE the stream is still going,
  * so this deliberately does not wait for stream completion.
  *
- * "Stream has started" reuses the same signal e2e/writing-assistant.spec.ts's
- * TC-WA-10 uses to detect an in-progress assistant message: the partner hub
- * typing indicator (F3 N4-A: `.wa-cursor` is retired).
+ * Stream start is visible via the agent-hub partner typing indicator
+ * (`ahp-partner-typing`), not the retired `.wa-cursor` glyph from TC-WA-10.
  */
 export async function sendPromptAndWaitForStreamStart(page: Page, prompt: string): Promise<void> {
   const input = page.getByTestId('ahp-partner-chat-input');

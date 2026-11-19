@@ -22,9 +22,9 @@
  *      transition (one running across a tick, one still pending at a tick).
  *   7. Perf: ABBA order (ON, OFF, OFF, ON) against a populated DOM proxy —
  *      rAF frame deltas (animationFps.ts) plus CDP RecalcStyle / LayoutCount.
- *      Pairs: on1 vs off1, on2 vs off2; pass when min dropΔ ≤ +2 pp and the
- *      better pair's fps floor is within −3 fps (best-of-pairs tolerates one
- *      stalled window). Red-on-revert: pre-#1774 restart bug fails both pairs.
+ *      OFF baseline min(off1, off2); worst ON max(on1, on2); dropΔ ≤ +2 pp;
+ *      worst ON fps vs best OFF within −3 fps; stalled OFF windows fail closed.
+ *      Red-on-revert: pre-#1774 restart bug fails the shared gate helper.
  *      A tick's style work must stay within 2× of one root-token change.
  *
  * The app's 5 s idle pause would also freeze breathe, so each window gets a
@@ -330,9 +330,7 @@ test.describe.serial('#1774 Accent breathe', () => {
     expect(await readState(page)).toBe('running');
   });
 
-  test('red-on-revert: pre-#1774 drop deltas fail ABBA min-over-pairs (+2 pp bar)', () => {
-    // Soak-era paired windows before #1774: every ON sample carried ~5–9pp extra
-    // drops vs its OFF; the live gate helper rejects them (revert helper → breaks).
+  test('red-on-revert: pre-#1774 drop deltas fail fail-closed ABBA gate (+2 pp bar)', () => {
     for (const window of [
       { on1: 5.8, off1: 0.2, on2: 7.1, off2: 0.3 },
       { on1: 6.5, off1: 0.0, on2: 5.2, off2: 0.4 },
@@ -347,23 +345,30 @@ test.describe.serial('#1774 Accent breathe', () => {
     }
   });
 
+  test('red-on-revert: Critic fail-open min-pair gate would pass; fail-closed gate fails', () => {
+    const gate = evaluateAbbaBreathePerfGate({
+      pair1Drop: { onDroppedPct: 6, offDroppedPct: 5 },
+      pair2Drop: { onDroppedPct: 7, offDroppedPct: 0 },
+      pair1Fps: { onP95Fps: 59.5, offP95Fps: 59.9 },
+      pair2Fps: { onP95Fps: 59.5, offP95Fps: 59.9 },
+    });
+    expect(gate.passesDropGate).toBe(false);
+    expect(gate.dropDeltaPp).toBeGreaterThan(2);
+  });
+
+  test('red-on-revert: stalled OFF baseline fails closed', () => {
+    const gate = evaluateAbbaBreathePerfGate({
+      pair1Drop: { onDroppedPct: 5.8, offDroppedPct: 0.2 },
+      pair2Drop: { onDroppedPct: 7.1, offDroppedPct: 6 },
+      pair1Fps: { onP95Fps: 59.5, offP95Fps: 59.9 },
+      pair2Fps: { onP95Fps: 59.5, offP95Fps: 59.9 },
+    });
+    expect(gate.baselineStalled).toBe(true);
+    expect(gate.passesDropGate).toBe(false);
+  });
+
   test('perf: Accent breathe holds frame rate (ON vs OFF, same run)', async () => {
     test.setTimeout(90_000);
-    // --repeat-each soak: each iteration needs a clean Electron + CDP counter
-    // (cumulative runner drift made recalc ratio fail without this).
-    const repeatIndex = test.info().repeatEachIndex;
-    if (repeatIndex > 0) {
-      await app?.close().catch(() => {});
-      for (const dir of [userData, vaultDir, notesVaultDir]) {
-        if (dir) fs.rmSync(dir, { recursive: true, force: true });
-      }
-      userData = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-breathe-user-'));
-      vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-breathe-vault-'));
-      notesVaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-breathe-notes-'));
-      seedUserData(userData, vaultDir, notesVaultDir);
-      app = await launchApp(userData);
-      page = await firstWindow(app);
-    }
     type Metrics = Record<string, number>;
     const client = await page.context().newCDPSession(page);
     await client.send('Performance.enable');
@@ -496,10 +501,6 @@ test.describe.serial('#1774 Accent breathe', () => {
     expect(on2.distinct).toBeGreaterThanOrEqual(10);
     expect(off1.distinct).toBe(1);
     expect(off2.distinct).toBe(1);
-    // Best-of-pairs (+2 pp / −3 fps bars unchanged): min dropΔ across on1−off1
-    // and on2−off2; fps judged on the better pair only — one stalled window may
-    // fail a pair while the other still proves breathe. Pre-#1774 per-tick
-    // restarts (~5–9% ON vs ~0% OFF in every window) fail min dropΔ via both pairs.
     const gate = assertAbbaBreathePerfGate(expect, {
       pair1Drop: { onDroppedPct: on1.stats.droppedFramePct, offDroppedPct: off1.stats.droppedFramePct },
       pair2Drop: { onDroppedPct: on2.stats.droppedFramePct, offDroppedPct: off2.stats.droppedFramePct },
@@ -508,9 +509,10 @@ test.describe.serial('#1774 Accent breathe', () => {
     });
     // eslint-disable-next-line no-console
     console.log(
-      `[perf] accent-breathe ABBA dropΔ min=${gate.dropDeltaPp.toFixed(2)}pp ` +
-        `(on1−off1=${gate.dropPair1Pp.toFixed(2)} on2−off2=${gate.dropPair2Pp.toFixed(2)}) ` +
-        `fpsBestΔ=${gate.fpsPairBest.toFixed(2)} (pair1=${gate.fpsPair1.toFixed(2)} pair2=${gate.fpsPair2.toFixed(2)})`,
+      `[perf] accent-breathe ABBA dropΔ worst=${gate.dropDeltaPp.toFixed(2)}pp ` +
+        `(onWorst=${gate.onDropWorstPp.toFixed(2)} offBase=${gate.offDropBaselinePp.toFixed(2)}; ` +
+        `pair1=${gate.dropPair1Pp.toFixed(2)} pair2=${gate.dropPair2Pp.toFixed(2)}) ` +
+        `fpsMargin=${gate.fpsMargin.toFixed(2)} (worstOn=${gate.fpsWorstOnP95.toFixed(2)} bestOff=${gate.fpsBestOffP95.toFixed(2)})`,
     );
     // A tick costs about one root-token change: no extra whole-tree recalc.
     expect(perChangeRecalcMs).toBeGreaterThan(0);

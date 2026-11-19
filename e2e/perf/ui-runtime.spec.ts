@@ -39,6 +39,7 @@ import { sampleFrameDeltas, summarizeFrames } from './ui-runtime/animationFps';
 import {
   DEFAULT_MOCK_CHAT_RESPONSE,
   installMockChatStream,
+  UI_RUNTIME_STREAMING_MOCK_TOKEN_COUNT,
   openWritingCoachChat,
   sendPromptAndWaitForStreamStart,
 } from './ui-runtime/streamingFrames';
@@ -267,8 +268,10 @@ test.describe('SKY-8217 metric 4 — dropped frames with agents live', () => {
     const idleStats = summarizeFrames(idleDeltas);
 
     const STREAM_SAMPLE_MS = 2500;
-    // 40×100ms mock stream — keeps chunks arriving through the full sample window.
-    await installMockChatStream(app!, { tokenCount: 40, chatDelayMs: 100 });
+    await installMockChatStream(app!, {
+      tokenCount: UI_RUNTIME_STREAMING_MOCK_TOKEN_COUNT,
+      chatDelayMs: 100,
+    });
     await sendPromptAndWaitForStreamStart(page, 'Give me feedback on this scene.');
 
     await expect(page.getByTestId('ahp-partner-chat-error')).toHaveCount(0);
