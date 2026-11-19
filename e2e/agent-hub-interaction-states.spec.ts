@@ -261,8 +261,11 @@ test('keyboard: Enter opens coach tips from the Open tips control; Close returns
 test('regression guard: the Writing Coach mini-chat does not permanently collapse at a normal panel width', async () => {
   await openAgentsHub(page);
   await openPartnerChat(page);
+  await page.getByTestId('ahp-open-writer-tips').click();
+  await expect(page.getByTestId('ahp-writer-tips')).toBeVisible({ timeout: 8_000 });
 
   await expect(page.locator('.wa-collapsed-btn')).not.toBeVisible();
+  await expect(page.locator('.wa-panel-root')).toBeVisible();
   const width = await page.locator('.wa-panel-root').evaluate((el) => el.getBoundingClientRect().width);
   expect(width).toBeGreaterThan(280);
 });
