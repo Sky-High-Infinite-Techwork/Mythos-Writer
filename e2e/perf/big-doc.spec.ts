@@ -35,13 +35,18 @@ import { focusEditorAtEnd, logLongTasks, measureKeystrokeAtEnd, traceLongTasks }
  *   metric              p95    max    formula   budget
  *   keystroke_p95_ms    446    490    892       892
  *   burst_20_ms         606    625    1212      1200  (cap)
- *   switch_timeline_ms  536    536    1072      1072
+ *   switch_timeline_ms  536    536    1072      see CI note
  *   switch_back_story   1094   1175   2188      2188
  *   switch_boards_ms    512    541    1024      1024
+ *
+ * GitHub runners were slower than those local runs. Three first tries there
+ * put Timeline at 938 / 1094 / 1302. formula = max(2×1302, 1.25×1302) = 2604.
+ * No #1914 cap applies to Timeline. The other four stayed inside the budgets
+ * above (burst max 1125, still under the 1200 cap).
  */
 const KEYSTROKE_P95_MS = 892;
 const BURST_MS = 1200;
-const TIMELINE_MS = 1072;
+const TIMELINE_MS = 2604;
 const SWITCH_BACK_MS = 2188;
 const BOARDS_MS = 1024;
 
@@ -144,6 +149,13 @@ test.describe('big scene typing and view switch', () => {
       console.log(
         `[perf] metric=keystroke_p50_ms ms=${Math.round(keystroke.p50)} samples=${keystroke.samples.length}`,
       );
+
+      // Let the keystroke sample's autosave land before the burst clock
+      // starts, so this metric is the 20-character type itself.
+      await expect.poll(() => fs.readFileSync(seed.scenePath).includes(Buffer.from('xxxxxxxxxx')), {
+        timeout: 8_000,
+        intervals: [100, 200, 400],
+      }).toBe(true);
 
       await focusEditorAtEnd(page);
       const burst = TRACE
