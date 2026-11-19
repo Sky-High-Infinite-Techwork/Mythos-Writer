@@ -261,16 +261,149 @@ describe('vaultTransaction', () => {
     expect(readScene('Manuscript/01/scene-1.md')).toBe('Then [[Jasper]] arrived.');
   });
 
+  it('reports no-changes-kept when the default writer hits a read-only folder on a later target', () => {
+    if (process.getuid && process.getuid() === 0) return;
+    writeNote('Jasper Thorne.md', 'note-body\n');
+    writeNote('Allies.md', 'allies-v1\n');
+    fs.mkdirSync(path.join(notesRoot, 'Locked'));
+    writeNote('Locked/B.md', 'b-v1\n');
+    const lockedDir = path.join(notesRoot, 'Locked');
+    fs.chmodSync(lockedDir, 0o555);
+    try {
+      expect(() =>
+        applyVaultTransaction({
+          notesRoot,
+          storyRoot,
+          fromPath: 'Jasper.md',
+          toPath: 'Jasper Thorne.md',
+          oldStem: 'Jasper',
+          newStem: 'Jasper Thorne',
+          changes: [
+            {
+              side: 'notes',
+              kind: 'note',
+              relPath: 'Allies.md',
+              newContent: 'allies-v2\n',
+              linkCount: 0,
+              mode: 'update-display',
+            },
+            {
+              side: 'notes',
+              kind: 'note',
+              relPath: 'Locked/B.md',
+              newContent: 'b-v2\n',
+              linkCount: 0,
+              mode: 'update-display',
+            },
+          ],
+        }),
+      ).toThrow(/no changes were kept/);
+      expect(readNote('Allies.md')).toBe('allies-v1\n');
+      expect(readNote('Locked/B.md')).toBe('b-v1\n');
+    } finally {
+      fs.chmodSync(lockedDir, 0o755);
+    }
+  });
+
+  it('reports no-changes-kept when a write refuses before touching the second target', () => {
+    writeNote('Jasper Thorne.md', 'note-body\n');
+    writeNote('Allies.md', 'allies-v1\n');
+    writeNote('B.md', 'b-v1\n');
+    let calls = 0;
+    const refusingWriter: VaultWriter = (root, relPath, content) => {
+      calls += 1;
+      if (calls === 2) throw new VaultWriteRefusedError('HARD_LINK', relPath);
+      writeVaultFileAtomic(root, relPath, content);
+    };
+    expect(() =>
+      applyVaultTransaction({
+        notesRoot,
+        storyRoot,
+        fromPath: 'Jasper.md',
+        toPath: 'Jasper Thorne.md',
+        oldStem: 'Jasper',
+        newStem: 'Jasper Thorne',
+        changes: [
+          {
+            side: 'notes',
+            kind: 'note',
+            relPath: 'Allies.md',
+            newContent: 'allies-v2\n',
+            linkCount: 0,
+            mode: 'update-display',
+          },
+          {
+            side: 'notes',
+            kind: 'note',
+            relPath: 'B.md',
+            newContent: 'b-v2\n',
+            linkCount: 0,
+            mode: 'update-display',
+          },
+        ],
+        writeFile: refusingWriter,
+      }),
+    ).toThrow(/no changes were kept/);
+    expect(readNote('Allies.md')).toBe('allies-v1\n');
+    expect(readNote('B.md')).toBe('b-v1\n');
+  });
+
+  it('does not clobber an unrelated edit on a target whose write was refused', () => {
+    writeNote('Jasper Thorne.md', 'note-body\n');
+    writeNote('Allies.md', 'allies-v1\n');
+    writeNote('B.md', 'b-v1\n');
+    let calls = 0;
+    const refusingWriter: VaultWriter = (root, relPath, content) => {
+      calls += 1;
+      if (calls === 1) writeVaultFileAtomic(root, relPath, content);
+      else if (calls === 2) {
+        fs.writeFileSync(path.join(notesRoot, 'B.md'), 'edited-outside\n', 'utf-8');
+        throw new VaultWriteRefusedError('HARD_LINK', relPath);
+      } else writeVaultFileAtomic(root, relPath, content);
+    };
+    expect(() =>
+      applyVaultTransaction({
+        notesRoot,
+        storyRoot,
+        fromPath: 'Jasper.md',
+        toPath: 'Jasper Thorne.md',
+        oldStem: 'Jasper',
+        newStem: 'Jasper Thorne',
+        changes: [
+          {
+            side: 'notes',
+            kind: 'note',
+            relPath: 'Allies.md',
+            newContent: 'allies-v2\n',
+            linkCount: 0,
+            mode: 'update-display',
+          },
+          {
+            side: 'notes',
+            kind: 'note',
+            relPath: 'B.md',
+            newContent: 'b-v2\n',
+            linkCount: 0,
+            mode: 'update-display',
+          },
+        ],
+        writeFile: refusingWriter,
+      }),
+    ).toThrow(/no changes were kept/);
+    expect(readNote('Allies.md')).toBe('allies-v1\n');
+    expect(readNote('B.md')).toBe('edited-outside\n');
+  });
+
   it('rolls back a story-side rewrite to the story root when the cascade fails on the next change', () => {
     writeNote('Jasper Thorne.md', 'note-body\n');
     writeNote('Allies.md', 'allies-v1\n');
     writeNote('B.md', 'b-v1\n');
     writeScene('Manuscript/01/scene-1.md', 'scene-v1\n');
     let writes = 0;
-    const failAfterStory: VaultWriter = (root, relPath, content) => {
+    const failBeforeThirdWrite: VaultWriter = (root, relPath, content) => {
       writes += 1;
+      if (writes === 3) throw new Error('stop before B write');
       writeVaultFileAtomic(root, relPath, content);
-      if (writes === 3) throw new Error('stop after story and allies');
     };
     expect(() =>
       applyVaultTransaction({
@@ -306,7 +439,7 @@ describe('vaultTransaction', () => {
             mode: 'update-display',
           },
         ],
-        writeFile: failAfterStory,
+        writeFile: failBeforeThirdWrite,
       }),
     ).toThrow(/rolled back/);
     expect(readNote('Allies.md')).toBe('allies-v1\n');
