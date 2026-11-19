@@ -325,12 +325,11 @@ test('launch 300-scene vault, open 500KB scene, switch view, export book', async
   const navLabels = (await nav.getByRole('button').allInnerTexts()).map((label) => label.trim()).filter(Boolean);
   console.log(`[perf] nav=${JSON.stringify(navLabels)}`);
 
-  // Notes Editor is the first switch off the 500 KB scene (audit loop).
-  // The box maxes for Mythos (159ms) and Timeline (411ms) came from the
-  // repeated switches inside one launch. The first Partner mount was 4729ms
-  // on the GitHub runner, and the first Timeline switch that followed it
-  // was 754ms, over the 700ms cap. Open each once untimed, then record the
-  // next switch. Boards and the return to Story Writer stay out (slice 11).
+  // Notes Editor is the first switch off the 500 KB scene and is gated.
+  // The first Mythos open and the first Timeline switch after it are not
+  // gated yet (#1929). They are logged as [perf] detail only. The gated
+  // Mythos and Timeline samples are the next switch in this launch.
+  // Boards and the return to Story Writer stay out (slice 11).
   perf('switch_notes_editor_ms', await switchView(page, 'Notes Editor'));
   await dismissBackdrop(page);
   await expect(page.getByTestId('notes-tab-panel')).toBeVisible({ timeout: 15_000 });
