@@ -20,11 +20,12 @@
  *   5. The preset export file has no accentBreathe key.
  *   6. Ticks start no transitions of their own and never cut or skip a user
  *      transition (one running across a tick, one still pending at a tick).
- *   7. Perf: ON vs OFF in the same run against a populated DOM (a documented
- *      N-element proxy) — rAF frame deltas (animationFps.ts) plus CDP
- *      RecalcStyleDuration / LayoutCount, each mode judged by the better of two
- *      sequential 4 s windows; a tick's style work must stay within 2× (a
- *      coarse guard) of one plain root-token change measured in the same run.
+ *   7. Perf: ABBA order (ON, OFF, OFF, ON) against a populated DOM proxy —
+ *      rAF frame deltas (animationFps.ts) plus CDP RecalcStyle / LayoutCount.
+ *      OFF baseline min(off1, off2); worst ON max(on1, on2); dropΔ ≤ +2 pp;
+ *      worst ON fps vs best OFF within −3 fps; stalled OFF windows fail closed.
+ *      Red-on-revert: pre-#1774 restart bug fails the shared gate helper.
+ *      A tick's style work must stay within 2× of one root-token change.
  *
  * The app's 5 s idle pause would also freeze breathe, so each window gets a
  * synthetic pointermove keep-alive every second.
@@ -44,6 +45,7 @@ import {
   type Page,
 } from '@playwright/test';
 import { sampleFrameDeltas, summarizeFrames, type FrameStats } from './perf/ui-runtime/animationFps';
+import { assertAbbaBreathePerfGate, evaluateAbbaBreathePerfGate } from './perf/accentBreathePerfGate';
 
 const MAIN_JS = path.resolve(__dirname, '../out/main/main.js');
 /** Static classic slot-1 border at default intensity: hexA('#00f0ff', 1.1). */
@@ -155,6 +157,8 @@ let vaultDir: string;
 let notesVaultDir: string;
 
 test.describe.serial('#1774 Accent breathe', () => {
+  test.describe.configure({ retries: 0 });
+
   test.beforeAll(async () => {
     userData = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-breathe-user-'));
     vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-breathe-vault-'));
@@ -254,8 +258,9 @@ test.describe.serial('#1774 Accent breathe', () => {
     fs.rmSync(downloadDir, { recursive: true, force: true });
   });
 
-  test('ticks start no transitions and never cut or skip a user transition', async () => {
-    // Settings is still open: its NeonToggles (`transition: all .2s`) and cards
+  test('ticks start no transitions and never cut or skip a user transition (opacity + border-color + box-shadow)', async () => {
+    await openAppearance(page);
+    // Settings open: NeonToggles (`transition: all .2s`) and cards
     // read the breathing tokens, so a tick that let its own color step
     // transition would fire transitionrun here every 250 ms.
     await expect.poll(() => readState(page), { timeout: 3_000 }).toBe('running');
@@ -288,12 +293,16 @@ test.describe.serial('#1774 Accent breathe', () => {
       const mk = () => {
         const d = document.createElement('div');
         d.style.cssText = 'position:fixed;left:0;top:0;width:40px;height:40px;border:2px solid var(--b1);' +
-          'transition:opacity 1s linear,border-color 1s linear;';
+          'box-shadow:0 0 6px var(--g2);transition:opacity 1s linear,border-color 1s linear,box-shadow 1s linear;';
         document.body.appendChild(d);
         void getComputedStyle(d).opacity;
         return d;
       };
-      const change = (d: HTMLElement) => { d.style.opacity = '0'; d.style.borderColor = 'var(--b4)'; };
+      const change = (d: HTMLElement) => {
+        d.style.opacity = '0';
+        d.style.borderColor = 'var(--b4)';
+        d.style.boxShadow = '0 0 12px var(--g4)';
+      };
       const running = (d: HTMLElement) => d.getAnimations()
         .filter((x) => 'transitionProperty' in x && x.playState === 'running')
         .map((x) => (x as CSSTransition).transitionProperty).sort();
@@ -323,13 +332,65 @@ test.describe.serial('#1774 Accent breathe', () => {
     expect(after.tickSeq).toBeGreaterThan(0);
     expect(after.bSeq).toBeGreaterThan(0);
     expect(after.bSeq).toBeLessThan(after.tickSeq);
-    expect(after.a).toEqual(expect.arrayContaining(['border-top-color', 'opacity']));
-    expect(after.b).toEqual(expect.arrayContaining(['border-top-color', 'opacity']));
+    expect(after.a).toContain('opacity');
+    expect(after.b).toContain('opacity');
+    expect(after.a.some((p) => p.includes('border'))).toBe(true);
+    expect(after.b.some((p) => p.includes('border'))).toBe(true);
+    expect(after.a.some((p) => p.includes('box-shadow'))).toBe(true);
+    expect(after.b.some((p) => p.includes('box-shadow'))).toBe(true);
     expect(await readState(page)).toBe('running');
+    await closeSettings(page);
   });
 
-  test('perf: Accent breathe holds frame rate (ON vs OFF, same run)', async () => {
-    test.setTimeout(90_000);
+  test('red-on-revert: pre-#1774 drop deltas fail fail-closed ABBA gate (+2 pp bar)', () => {
+    for (const window of [
+      { on1: 5.8, off1: 0.2, on2: 7.1, off2: 0.3 },
+      { on1: 6.5, off1: 0.0, on2: 5.2, off2: 0.4 },
+    ]) {
+      const gate = evaluateAbbaBreathePerfGate({
+        pair1Drop: { onDroppedPct: window.on1, offDroppedPct: window.off1 },
+        pair2Drop: { onDroppedPct: window.on2, offDroppedPct: window.off2 },
+        pair1Fps: { onP95Fps: 59.5, offP95Fps: 59.9 },
+        pair2Fps: { onP95Fps: 59.5, offP95Fps: 59.9 },
+      });
+      expect(gate.passesDropGate).toBe(false);
+    }
+  });
+
+  test('red-on-revert: Critic fail-open min-pair gate would pass; fail-closed gate fails', () => {
+    const gate = evaluateAbbaBreathePerfGate({
+      pair1Drop: { onDroppedPct: 6, offDroppedPct: 5 },
+      pair2Drop: { onDroppedPct: 7, offDroppedPct: 0 },
+      pair1Fps: { onP95Fps: 59.5, offP95Fps: 59.9 },
+      pair2Fps: { onP95Fps: 59.5, offP95Fps: 59.9 },
+    });
+    expect(gate.passesDropGate).toBe(false);
+    expect(gate.dropDeltaPp).toBeGreaterThan(2);
+  });
+
+  test('red-on-revert: min OFF > +2pp stalls baseline (OFF 3.9/3.9 vs ON 5.8/5.8)', () => {
+    const gate = evaluateAbbaBreathePerfGate({
+      pair1Drop: { onDroppedPct: 5.8, offDroppedPct: 3.9 },
+      pair2Drop: { onDroppedPct: 5.8, offDroppedPct: 3.9 },
+      pair1Fps: { onP95Fps: 59.5, offP95Fps: 59.9 },
+      pair2Fps: { onP95Fps: 59.5, offP95Fps: 59.9 },
+    });
+    expect(gate.baselineStalled).toBe(true);
+    expect(gate.passesDropGate).toBe(false);
+  });
+
+  test('perf: Accent breathe holds frame rate (ON vs OFF, same run)', async ({}, testInfo) => {
+    const soakRep = testInfo.repeatEachIndex;
+    const soakVariant = process.env.ACCENT_BREATHE_PERF_SOAK ?? 'steady';
+    test.setTimeout(soakVariant !== 'steady' ? 150_000 : 90_000);
+    if (process.env.CI && soakRep === 0) {
+      // Functional cases above stack visibility hacks, downloads, and settings
+      // chrome; relaunch so ABBA sees a cold renderer like a fresh profile.
+      await app.close();
+      app = await launchApp(userData);
+      page = await firstWindow(app);
+      await expect.poll(() => readState(page), { timeout: 10_000 }).toBe('running');
+    }
     type Metrics = Record<string, number>;
     const client = await page.context().newCDPSession(page);
     await client.send('Performance.enable');
@@ -337,29 +398,36 @@ test.describe.serial('#1774 Accent breathe', () => {
       const { metrics: list } = await client.send('Performance.getMetrics') as { metrics: { name: string; value: number }[] };
       return Object.fromEntries(list.map((m) => [m.name, m.value]));
     };
-    const measure = async () => {
+    const resetTickStats = () => page.evaluate(() => {
+      (window as unknown as { __mwAccentBreatheTickStats?: { suppress: number; cancelNew: number; plain: number } })
+        .__mwAccentBreatheTickStats = { suppress: 0, cancelNew: 0, plain: 0 };
+    });
+    const readTickStats = () => page.evaluate(() => {
+      const s = (window as unknown as { __mwAccentBreatheTickStats?: { suppress: number; cancelNew: number; plain: number } })
+        .__mwAccentBreatheTickStats;
+      return s ? { ...s } : { suppress: 0, cancelNew: 0, plain: 0 };
+    });
+    const measure = async (settleMs = 400) => {
+      // Let toggle/proxy style changes finish so the 4 s window measures steady ON/OFF breathe.
+      await page.waitForTimeout(settleMs);
+      await resetTickStats();
       const before = await metrics();
       const sampler = distinctB1Over(page, 4000, 100);
       const stats = summarizeFrames(await sampleFrameDeltas(page, 4000));
       const distinct = await sampler;
       const after = await metrics();
+      const tickPaths = await readTickStats();
       return {
         stats,
         distinct: distinct.length,
         recalcStyleMs: (after.RecalcStyleDuration - before.RecalcStyleDuration) * 1000,
         recalcStyleCount: after.RecalcStyleCount - before.RecalcStyleCount,
         layoutCount: after.LayoutCount - before.LayoutCount,
+        tickPaths,
       };
     };
-    // A second sample in the same mode: each mode is judged by its better
-    // window (frames and style work alike), so a one-off stall (GC,
-    // compositor) in a single 4 s window can't decide the result; a per-tick
-    // cost shows up in both.
-    const best = (a: FrameStats, b: FrameStats) => ({
-      droppedFramePct: Math.min(a.droppedFramePct, b.droppedFramePct),
-      p95Fps: Math.max(a.p95Fps, b.p95Fps),
-    });
-    const fmt = (s: FrameStats) =>
+    type FrameStatsNoDeltas = Omit<FrameStats, 'deltasMs'>;
+    const fmt = (s: FrameStatsNoDeltas) =>
       `avg=${s.avgFps.toFixed(1)} p50=${s.p50Fps.toFixed(1)} floor(p5)=${s.p95Fps.toFixed(1)} ` +
       `dropped=${s.droppedFramePct.toFixed(1)}% n=${s.sampleCount}`;
 
@@ -387,32 +455,78 @@ test.describe.serial('#1774 Accent breathe', () => {
       document.getElementById('breathe-perf-proxy-css')?.remove();
     });
 
-    // ON (the state test 4 left it in).
+    const toggleBreathe = async (on: boolean) => {
+      const dialog = await openAppearance(page);
+      const toggle = dialog.locator('[data-testid="lnas-accentbreathe"]');
+      const checked = await toggle.getAttribute('aria-checked');
+      if ((checked === 'true') !== on) {
+        await toggle.click();
+        await expect(toggle).toHaveAttribute('aria-checked', on ? 'true' : 'false');
+      }
+      await closeSettings(page);
+      await expect.poll(() => readState(page), { timeout: 3_000 }).toBe(on ? 'running' : 'off');
+    };
+
+    // ABBA (ON, OFF, OFF, ON): back-to-back OFF windows let runner drift cancel
+    // across the middle. Pair on1 with off1 (first OFF after on1); pair on2
+    // with off2 (second OFF immediately before on2).
     await closeSettings(page);
     await expect.poll(() => readState(page), { timeout: 3_000 }).toBe('running');
     await addProxy();
-    const on = await measure();
-    const on2 = await measure();
+    const on1 = await measure();
     await removeProxy();
 
-    // OFF, through the UI.
-    const dialog = await openAppearance(page);
-    await dialog.locator('[data-testid="lnas-accentbreathe"]').click();
-    await expect(dialog.locator('[data-testid="lnas-accentbreathe"]')).toHaveAttribute('aria-checked', 'false');
-    await closeSettings(page);
-    await expect.poll(() => readState(page), { timeout: 3_000 }).toBe('off');
+    await toggleBreathe(false);
     await addProxy();
-    const off = await measure();
+    const off1 = await measure();
+    await removeProxy();
+
+    await addProxy();
     const off2 = await measure();
+    await removeProxy();
+
+    await toggleBreathe(true);
+    await addProxy();
+    const on2 = await measure();
+    await removeProxy();
+    await toggleBreathe(false);
+    await addProxy();
     // Baseline, still OFF with the proxy: the cost of one root custom-property
     // change at the tick rate, flushed the way the driver flushes its write.
     await page.evaluate((tickMs) => {
       const w = window as unknown as { __probe?: ReturnType<typeof setInterval> };
+      const styleId = 'ln-breathe-probe-css';
+      if (!document.getElementById(styleId)) {
+        const css = document.createElement('style');
+        css.id = styleId;
+        css.textContent =
+          'html[data-ln-breathe-tick] *,html[data-ln-breathe-tick] *::before,html[data-ln-breathe-tick] *::after{' +
+          'transition-property:none!important;transition-duration:0s!important}';
+        document.head.appendChild(css);
+      }
       let n = 0;
       w.__probe = setInterval(() => {
-        document.getAnimations();
-        document.documentElement.style.setProperty('--breathe-perf-probe', String(++n));
-        document.getAnimations();
+        const root = document.documentElement;
+        const nonToken = new Set([
+          'opacity', 'transform', 'translate', 'scale', 'rotate', 'width', 'height', 'color', 'background-color',
+        ]);
+        const nonTokenUiRunning = document.getAnimations().some((a) => {
+          const target = (a.effect as KeyframeEffect | null)?.target;
+          if (!(target instanceof Element) || target === root) return false;
+          const prop = (a as CSSTransition).transitionProperty;
+          if (typeof prop !== 'string') return false;
+          return prop.split(',').some((p) => nonToken.has(p.trim().toLowerCase()));
+        });
+        if (nonTokenUiRunning) {
+          root.setAttribute('data-ln-breathe-probe', 'legacy');
+          root.style.setProperty('--breathe-perf-probe', String(++n));
+          root.removeAttribute('data-ln-breathe-probe');
+          return;
+        }
+        root.setAttribute('data-ln-breathe-tick', '');
+        root.style.setProperty('--breathe-perf-probe', String(++n));
+        void getComputedStyle(root).getPropertyValue('--breathe-perf-probe');
+        root.removeAttribute('data-ln-breathe-tick');
       }, tickMs);
     }, TICK_MS);
     const probe = await measure();
@@ -424,45 +538,59 @@ test.describe.serial('#1774 Accent breathe', () => {
     await removeProxy();
     await client.detach().catch(() => {});
     const ticks = 4000 / TICK_MS;
-    const onRecalcMs = Math.min(on.recalcStyleMs, on2.recalcStyleMs);
-    const offRecalcMs = Math.min(off.recalcStyleMs, off2.recalcStyleMs);
-    const perTickRecalcMs = (onRecalcMs - offRecalcMs) / ticks;
-    const perChangeRecalcMs = (probe.recalcStyleMs - offRecalcMs) / ticks;
+    const recalcPair1Ms = on1.recalcStyleMs - off1.recalcStyleMs;
+    const recalcPair2Ms = on2.recalcStyleMs - off2.recalcStyleMs;
+    const onOffRecalcMs = Math.min(recalcPair1Ms, recalcPair2Ms);
+    const perTickRecalcMs = onOffRecalcMs / ticks;
+    // Probe runs after off2; baseline is probe−off2 (pairs with on2−off2 when that
+    // wins min on−off, same as the ABBA layout).
+    const perChangeRecalcMs = (probe.recalcStyleMs - off2.recalcStyleMs) / ticks;
 
+    const tickLog = (label: string, paths: { suppress: number; cancelNew: number; plain: number }, recalcMs: number) =>
+      `${label} tick=${paths.suppress}+${paths.cancelNew}+${paths.plain} RecalcStyle=${recalcMs.toFixed(1)}ms`;
     // eslint-disable-next-line no-console
     console.log(
-      `[#1774 perf] ON  ${fmt(on.stats)} | 2nd ${fmt(on2.stats)} distinct--b1=${on.distinct}/${on2.distinct} ` +
-        `RecalcStyle=${on.recalcStyleMs.toFixed(1)}/${on2.recalcStyleMs.toFixed(1)}ms Layout=${on.layoutCount}\n` +
-        `[#1774 perf] OFF ${fmt(off.stats)} | 2nd ${fmt(off2.stats)} distinct--b1=${off.distinct}/${off2.distinct} ` +
-        `RecalcStyle=${off.recalcStyleMs.toFixed(1)}/${off2.recalcStyleMs.toFixed(1)}ms Layout=${off.layoutCount}\n` +
-        `[#1774 perf] delta RecalcStyle=${(onRecalcMs - offRecalcMs).toFixed(1)}ms (best windows) ` +
-        `(${perTickRecalcMs.toFixed(2)}ms/tick over ${ticks} ticks, +${PROXY_N} proxy elements) ` +
-        `Layout=${on.layoutCount - off.layoutCount}\n` +
-        `[#1774 perf] baseline one root-token change=${perChangeRecalcMs.toFixed(2)}ms ` +
-        `ratio=${(perTickRecalcMs / perChangeRecalcMs).toFixed(2)} (max ${PER_TICK_RECALC_RATIO_MAX})`,
+      `[#1774 perf] ON  ${fmt(on1.stats)} | 2nd ${fmt(on2.stats)} distinct--b1=${on1.distinct}/${on2.distinct} ` +
+        `${tickLog('paths', on1.tickPaths, on1.recalcStyleMs)}/${tickLog('', on2.tickPaths, on2.recalcStyleMs)} Layout=${on1.layoutCount}\n` +
+      `[#1774 perf] OFF ${fmt(off1.stats)} | 2nd ${fmt(off2.stats)} distinct--b1=${off1.distinct}/${off2.distinct} ` +
+        `${tickLog('paths', off1.tickPaths, off1.recalcStyleMs)}/${tickLog('', off2.tickPaths, off2.recalcStyleMs)} Layout=${off1.layoutCount}\n` +
+      `[#1774 perf] delta RecalcStyle=${onOffRecalcMs.toFixed(1)}ms (min on1−off1, on2−off2) ` +
+        `(${perTickRecalcMs.toFixed(2)}ms/tick over ${ticks} ticks, +${PROXY_N} proxy) ` +
+        `Layout=${on1.layoutCount - off1.layoutCount}\n` +
+      `[#1774 perf] baseline one root-token change=${perChangeRecalcMs.toFixed(2)}ms/tick ` +
+        `(probe vs off2) ratio=${(perTickRecalcMs / perChangeRecalcMs).toFixed(2)} (max ${PER_TICK_RECALC_RATIO_MAX})`,
     );
 
     // The ON sample really breathed; the OFF sample really didn't.
-    expect(on.distinct).toBeGreaterThanOrEqual(10);
+    expect(on1.distinct).toBeGreaterThanOrEqual(10);
     expect(on2.distinct).toBeGreaterThanOrEqual(10);
-    expect(off.distinct).toBe(1);
+    expect(off1.distinct).toBe(1);
     expect(off2.distinct).toBe(1);
-    // Best ON window within 2 points of the best OFF window. One point is ~2.4
-    // of the ~240 frames in 4 s, so +2 is ~4.8 frames over OFF: about one frame
-    // of headroom over the worst single ON window measured (local 1.7% = 4
-    // frames). ON and OFF are separate, sequential windows (a Settings round
-    // trip between them), so runner jank in only one of them does NOT cancel
-    // out; the best-of-2 per mode above is what absorbs a one-off stall, and
-    // being relative to OFF is what absorbs a uniformly slow runner. Measured:
-    // CI shard-1 ON 0.8% / OFF 0.0%; local ON 0.0–1.7% / OFF 0.0–0.8%. The
-    // pre-fix per-tick transition restarts measured 5–9% ON vs 0% OFF in every
-    // window, which this fails.
-    const onBest = best(on.stats, on2.stats);
-    const offBest = best(off.stats, off2.stats);
-    expect(onBest.droppedFramePct).toBeLessThanOrEqual(offBest.droppedFramePct + 2);
-    expect(onBest.p95Fps).toBeGreaterThanOrEqual(offBest.p95Fps - 3);
+    const gate = assertAbbaBreathePerfGate(expect, {
+      pair1Drop: { onDroppedPct: on1.stats.droppedFramePct, offDroppedPct: off1.stats.droppedFramePct },
+      pair2Drop: { onDroppedPct: on2.stats.droppedFramePct, offDroppedPct: off2.stats.droppedFramePct },
+      pair1Fps: { onP95Fps: on1.stats.p95Fps, offP95Fps: off1.stats.p95Fps },
+      pair2Fps: { onP95Fps: on2.stats.p95Fps, offP95Fps: off2.stats.p95Fps },
+    });
+  const onDrop = `${on1.stats.droppedFramePct.toFixed(1)}/${on2.stats.droppedFramePct.toFixed(1)}`;
+    const offDrop = `${off1.stats.droppedFramePct.toFixed(1)}/${off2.stats.droppedFramePct.toFixed(1)}`;
+    const onFps = `${on1.stats.p95Fps.toFixed(1)}/${on2.stats.p95Fps.toFixed(1)}`;
+    const offFps = `${off1.stats.p95Fps.toFixed(1)}/${off2.stats.p95Fps.toFixed(1)}`;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[perf] accent-breathe ABBA dropΔ worst=${gate.dropDeltaPp.toFixed(2)}pp ` +
+        `(onWorst=${gate.onDropWorstPp.toFixed(2)} offBase=${gate.offDropBaselinePp.toFixed(2)}; ` +
+        `pair1=${gate.dropPair1Pp.toFixed(2)} pair2=${gate.dropPair2Pp.toFixed(2)}) ` +
+        `fpsMargin=${gate.fpsMargin.toFixed(2)} (worstOn=${gate.fpsWorstOnP95.toFixed(2)} bestOff=${gate.fpsBestOffP95.toFixed(2)})`,
+    );
+    // eslint-disable-next-line no-console
+    console.log(
+      `[perf-soak] variant=${soakVariant} rep=${soakRep} dropΔ=${gate.dropDeltaPp.toFixed(2)}pp ` +
+        `ON%=${onDrop} OFF%=${offDrop} ONfps=${onFps} OFFfps=${offFps} pass=${gate.passesDropGate && gate.passesFpsGate}`,
+    );
     // A tick costs about one root-token change: no extra whole-tree recalc.
     expect(perChangeRecalcMs).toBeGreaterThan(0);
     expect(perTickRecalcMs).toBeLessThanOrEqual(perChangeRecalcMs * PER_TICK_RECALC_RATIO_MAX);
+    await toggleBreathe(true);
   });
 });
