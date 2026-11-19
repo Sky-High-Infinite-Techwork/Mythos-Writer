@@ -198,42 +198,7 @@ async function waitForShell(page: Page): Promise<void> {
   await expect(page.locator('.app-menu-bar')).toBeVisible({ timeout: 15_000 });
 }
 
-// ─── TC-PO-01: Getting Started panel ─────────────────────────────────────────
-
-test.describe('TC-PO-01: Getting Started panel', () => {
-  let userData: string;
-  let vaultDir: string;
-  let app: ElectronApplication;
-  let page: Page;
-
-  test.beforeAll(async () => {
-    userData = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-po01-'));
-    vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-po01-vault-'));
-    seedMinimalVault(vaultDir);
-    seedUserData(userData, vaultDir, { onboardingStartMode: 'default-mythos-vault' });
-    app = await launchApp(userData);
-    page = await firstWindow(app);
-    await waitForShell(page);
-  });
-
-  test.afterAll(async () => {
-    await app.close().catch(() => {});
-    fs.rmSync(userData, { recursive: true, force: true });
-    fs.rmSync(vaultDir, { recursive: true, force: true });
-  });
-
-  test('panel renders in the right sidebar after first launch', async () => {
-    test.skip(true, 'F3#10: GettingStartedPanel deleted; WelcomeOverlay is the only first-run surface.');
-  });
-
-  test('panel shows 4 checklist items', async () => {
-    test.skip(true, 'F3#10: GettingStartedPanel deleted.');
-  });
-
-  test('dismiss button (×) hides the panel', async () => {
-    test.skip(true, 'F3#10: GettingStartedPanel deleted.');
-  });
-});
+// ─── TC-PO-01: Getting Started panel (F3#10: GettingStartedPanel deleted) ─────
 
 test.describe('TC-PO-01b: Getting Started panel already dismissed', () => {
   let userData: string;

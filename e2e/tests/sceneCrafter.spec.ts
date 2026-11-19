@@ -497,17 +497,6 @@ test('AC-SC-14: each story has an independent board that does not share cards', 
   expect(totalCardsB, 'Story B board must have no cards from Story A').toBe(0);
 });
 
-// ─── AC-SC-13: Write error banner ────────────────────────────────────────────
-
-test.skip('AC-SC-13: I/O error during board save surfaces the write-error banner', async () => {
-  // Simulating a file-lock or EPERM at the filesystem layer requires platform-specific
-  // tooling (chattr +i on Linux, SetFileAttributes on Windows) which is unreliable in
-  // headless CI across Ubuntu and macOS. This AC is instead covered by the IPC unit test
-  // in electron-main/src/sceneCrafterIpc.test.ts which throws from writeFileAtomic and
-  // asserts the handler propagates the error. Re-enable when a reliable cross-platform
-  // mock approach is identified (tracked in SKY-1766 thread).
-});
-
 // ─── AC-SC-15: Suggested-card selection feeds draft context (SKY-7601) ───────
 
 test('AC-SC-15: clicking a suggested card selects it instead of writing to the retired lanes board', async () => {

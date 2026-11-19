@@ -100,6 +100,9 @@ let app: ElectronApplication | undefined;
 let page: Page;
 
 test.beforeAll(async () => {
+  if (!fs.existsSync(MAIN_JS)) {
+    throw new Error('needs npm run build:electron');
+  }
   userData = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-subview-'));
   vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-subview-vault-'));
   seedUserData(userData, vaultDir);
@@ -228,7 +231,6 @@ async function ensureStoryManuscript(p: Page): Promise<void> {
 }
 
 test('F1#13: msv-toolbar computed height is 36px', async () => {
-  test.skip(!fs.existsSync(MAIN_JS), 'needs build');
   await ensureStoryManuscript(page);
   const tb = page.getByTestId('msv-toolbar');
   await expect(tb).toBeVisible({ timeout: 10_000 });
@@ -237,7 +239,6 @@ test('F1#13: msv-toolbar computed height is 36px', async () => {
 });
 
 test('F1#10: dropcap gated off — ::first-letter float none when class absent', async () => {
-  test.skip(!fs.existsSync(MAIN_JS), 'needs build');
   await ensureStoryManuscript(page);
   const root = page.getByTestId('msv-root');
   await expect(root).toBeVisible({ timeout: 10_000 });
@@ -262,7 +263,6 @@ test('F1#9: + Chapter via in-app modal keeps order across reload', async () => {
   // Self-contained relaunch (own userData) — proves createChapter × editor-flush
   // race does not wipe chapters from nav or manifest.
   test.setTimeout(180_000);
-  test.skip(!fs.existsSync(MAIN_JS), 'needs build');
   const ownUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-f1-9-'));
   const ownVault = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-f1-9-v-'));
   seedUserData(ownUserData, ownVault);
