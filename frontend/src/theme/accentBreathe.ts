@@ -9,12 +9,9 @@
 // rendered consumers with `transition: all`/box-shadow/border (7 on a fresh
 // window, 49 with Settings open) would otherwise restart on every color step
 // and keep repainting (measured: 5–9% dropped frames ON vs 0% OFF under xvfb).
-// Steady ticks: one `getAnimations()` flush, then `data-ln-breathe-tick` blocks
-// new consumer transitions for the synchronous write (second full scan removed).
-// If a non-token UI transition (opacity, transform, …) is already running on a
-// descendant, fall back to cancel-new-only (two flushes) so hover/toggle motion
-// is never snapped. Token-consumer churn (`transition: all`, border, box-shadow)
-// stays on the suppress path (one scan). No standing global transition override.
+// Steady ticks: drop breathe churn on marked consumers, suppress-only when no user
+// transition is running, else #1774 cancel-new (no global suppress). After every
+// write, cancel only tick-started consumer transitions (see accentBreatheConsumerLonghands).
 //
 // Off (static theme, no timer): toggle off, in-app Reduce motion, OS
 // prefers-reduced-motion, prefers-contrast: more, forced-colors, the app's
@@ -23,6 +20,8 @@
 // `ln-anim-paused` idle path (BackgroundStack.tsx).
 //
 // No runtime imports from liquidNeonEngine.ts — it calls in here.
+
+import { transitionPropertyDrivenByAccentTokens } from './accentBreatheConsumerLonghands';
 
 /** 6 hops × 8 s, inside the issue's 30–60 s. */
 export const ACCENT_BREATHE_LOOP_MS = 48_000;
@@ -154,6 +153,9 @@ interface Controller {
   onVis: (() => void) | null;
   /** Last state written to data-ln-breathe; null until the first reconcile. */
   state: AccentBreatheState | null;
+  /** transitionKey values canceled as breathe churn on the prior tick. */
+  churnKeys: Set<string>;
+  elementIds: Map<Element, number>;
 }
 
 let ctl: Controller | null = null;
@@ -179,6 +181,7 @@ function write(c: Controller, t: Record<string, string>): void {
 
 const TICK_ATTR = 'data-ln-breathe-tick';
 const TICK_STYLE_ID = 'ln-breathe-tick-css';
+const CHURN_ATTR = 'data-ln-breathe-churn';
 
 /** One stylesheet; only active while TICK_ATTR is on the theme root during writeTick. */
 function ensureTickSuppressStyle(doc: Document): void {
@@ -191,56 +194,23 @@ function ensureTickSuppressStyle(doc: Document): void {
   doc.head.appendChild(css);
 }
 
-/** CSS transition properties the accent token write does not drive; fallback only when one is running. */
-const NON_TOKEN_TRANSITION_PROPS = new Set([
-  'opacity',
-  'transform',
-  'translate',
-  'scale',
-  'rotate',
-  'width',
-  'height',
-  'max-width',
-  'max-height',
-  'min-width',
-  'min-height',
-  'margin',
-  'margin-top',
-  'margin-right',
-  'margin-bottom',
-  'margin-left',
-  'padding',
-  'padding-top',
-  'padding-right',
-  'padding-bottom',
-  'padding-left',
-  'top',
-  'right',
-  'bottom',
-  'left',
-  'background-color',
-  'background',
-  'color',
-  'fill-opacity',
-  'stroke-opacity',
-  'visibility',
-  'clip-path',
-  'grid-template-columns',
-  'grid-template-rows',
-  'gap',
-  'flex-grow',
-  'flex-shrink',
-  'flex-basis',
-]);
+function isCssTransition(a: Animation): a is CSSTransition {
+  return typeof (a as CSSTransition).transitionProperty === 'string';
+}
 
-/** True when `transitionProperty` includes a property unrelated to glow/border tokens. */
-function transitionIncludesNonTokenProp(transitionProperty: string): boolean {
-  for (const raw of transitionProperty.split(',')) {
-    const p = raw.trim().toLowerCase();
-    if (!p || p === 'none' || p === 'initial' || p === 'inherit') continue;
-    if (NON_TOKEN_TRANSITION_PROPS.has(p)) return true;
+function cancelMarkedChurn(doc: Document, root: Element): void {
+  for (const node of doc.querySelectorAll('[' + CHURN_ATTR + ']')) {
+    if (!(node instanceof Element) || node === root) continue;
+    const anims = typeof node.getAnimations === 'function'
+      ? node.getAnimations()
+      : doc.getAnimations().filter((a) => (a.effect as KeyframeEffect | null)?.target === node);
+    for (const a of anims) {
+      if (!isCssTransition(a)) continue;
+      if (!transitionPropertyDrivenByAccentTokens(a.transitionProperty)) continue;
+      a.cancel();
+    }
+    node.removeAttribute(CHURN_ATTR);
   }
-  return false;
 }
 
 /** Optional perf/e2e counters on `window.__mwAccentBreatheTickStats`. */
@@ -258,47 +228,45 @@ function bumpTickPath(
   else s.plain += 1;
 }
 
+function elementId(c: Controller, el: Element): number {
+  let id = c.elementIds.get(el);
+  if (id === undefined) c.elementIds.set(el, (id = c.elementIds.size));
+  return id;
+}
+
 /** `target|pseudo|property` of a running CSS transition, or null for any other animation. */
-function transitionKey(a: Animation, ids: Map<Element, number>): string | null {
+function transitionKey(c: Controller, a: Animation): string | null {
   const prop = (a as CSSTransition).transitionProperty;
   const fx = a.effect as KeyframeEffect | null;
-  if (typeof prop !== 'string' || !fx?.target) return null;
-  let id = ids.get(fx.target);
-  if (id === undefined) ids.set(fx.target, (id = ids.size));
-  return id + '|' + (fx.pseudoElement ?? '') + '|' + prop;
+  if (typeof prop !== 'string' || !(fx?.target instanceof Element)) return null;
+  return elementId(c, fx.target) + '|' + (fx.pseudoElement ?? '') + '|' + prop;
 }
 
-/** Legacy #1774 cancel: two flushes; used when user transitions are already running. */
-function writeTickCancelNew(c: Controller, t: Record<string, string>, doc: Document): void {
-  const ids = new Map<Element, number>();
-  const before = new Set<Animation>();
-  const busy = new Set<string>();
-  for (const a of doc.getAnimations()) {
-    before.add(a);
-    const key = transitionKey(a, ids);
-    if (key) busy.add(key);
-  }
-  write(c, t);
-  for (const a of doc.getAnimations()) {
-    if (before.has(a)) continue;
-    const key = transitionKey(a, ids);
-    if (key && !busy.has(key)) a.cancel();
-  }
+function isProtectedUserTransition(c: Controller, a: Animation, root: Element): boolean {
+  const target = (a.effect as KeyframeEffect | null)?.target;
+  if (!(target instanceof Element) || target === root) return false;
+  if (!isCssTransition(a)) return false;
+  if (target.hasAttribute(CHURN_ATTR)) return false;
+  return true;
 }
 
-/** #1774: cancel-new when a non-token UI transition is already running on a descendant. */
-function needsCancelNewFallback(active: Animation[], root: Element): boolean {
-  return active.some((a) => {
-    const target = (a.effect as KeyframeEffect | null)?.target;
-    if (!(target instanceof Element) || target === root) return false;
-    const prop = (a as CSSTransition).transitionProperty;
-    return typeof prop === 'string' && transitionIncludesNonTokenProp(prop);
-  });
+function matchesProtectedUserTransition(user: Animation, candidate: Animation): boolean {
+  const uFx = user.effect as KeyframeEffect | null;
+  const cFx = candidate.effect as KeyframeEffect | null;
+  if (!uFx?.target || uFx.target !== cFx?.target) return false;
+  if ((uFx.pseudoElement ?? '') !== (cFx?.pseudoElement ?? '')) return false;
+  if (!isCssTransition(user) || !isCssTransition(candidate)) return false;
+  const uProp = user.transitionProperty.toLowerCase();
+  const cProp = candidate.transitionProperty.toLowerCase();
+  if (uProp === cProp) return true;
+  if (uProp === 'all' || cProp === 'all') return true;
+  if (uProp.includes('border') && cProp.includes('border')) return true;
+  if (uProp.includes('box-shadow') && cProp.includes('box-shadow')) return true;
+  return false;
 }
 
 /**
- * Steady breathe: one probe, then tick-suppress (no second scan) unless a
- * non-token user transition needs the legacy cancel-new-only path (#1774).
+ * Steady breathe: churn cleanup, scoped suppress or cancel-new (#1774), cancel tick-started only.
  */
 function writeTick(c: Controller, t: Record<string, string>): void {
   if (!ACCENT_BREATHE_KEYS.some((k) => t[k] !== undefined && t[k] !== c.last[k])) return;
@@ -308,12 +276,35 @@ function writeTick(c: Controller, t: Record<string, string>): void {
     bumpTickPath(doc, 'plain');
     return;
   }
-  const active = doc.getAnimations();
-  if (needsCancelNewFallback(active, c.el)) {
-    writeTickCancelNew(c, t, doc);
+  cancelMarkedChurn(doc, c.el);
+  const before = new Set(doc.getAnimations());
+  const protectedUsers = [...before].filter((a) => isProtectedUserTransition(c, a, c.el));
+
+  const cancelTickStartedConsumers = (): void => {
+    const nextChurn = new Set<string>();
+    for (const a of doc.getAnimations()) {
+      if (before.has(a)) continue;
+      if (!isCssTransition(a)) continue;
+      if (!transitionPropertyDrivenByAccentTokens(a.transitionProperty)) continue;
+      const target = (a.effect as KeyframeEffect | null)?.target;
+      if (!(target instanceof Element) || target === c.el) continue;
+      if (protectedUsers.some((u) => matchesProtectedUserTransition(u, a))) continue;
+      const key = transitionKey(c, a);
+      a.cancel();
+      if (key) nextChurn.add(key);
+      target.setAttribute(CHURN_ATTR, '');
+    }
+    c.churnKeys = nextChurn;
+  };
+
+  if (protectedUsers.length > 0) {
+    write(c, t);
+    void getComputedStyle(c.el).getPropertyValue('--b1');
+    cancelTickStartedConsumers();
     bumpTickPath(doc, 'cancelNew');
     return;
   }
+
   ensureTickSuppressStyle(doc);
   c.el.setAttribute(TICK_ATTR, '');
   try {
@@ -322,6 +313,7 @@ function writeTick(c: Controller, t: Record<string, string>): void {
   } finally {
     c.el.removeAttribute(TICK_ATTR);
   }
+  cancelTickStartedConsumers();
   bumpTickPath(doc, 'suppress');
 }
 
@@ -367,6 +359,7 @@ function createController(el: HTMLElement): Controller {
   const c: Controller = {
     el, input: { enabled: false, slots: [], aB: 0, aG: 0, aGs: 0, glowRh: 0 }, rgb: null,
     elapsed: 0, timer: null, last: {}, mq: null, observer: null, onVis: null, state: null,
+    churnKeys: new Set(), elementIds: new Map(),
   };
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return c;
   c.mq = {

@@ -258,7 +258,7 @@ test.describe.serial('#1774 Accent breathe', () => {
     fs.rmSync(downloadDir, { recursive: true, force: true });
   });
 
-  test('ticks start no transitions and never cut or skip a user transition', async () => {
+  test('ticks start no transitions and never cut or skip a user transition (opacity + border-color)', async () => {
     // Settings is still open: its NeonToggles (`transition: all .2s`) and cards
     // read the breathing tokens, so a tick that let its own color step
     // transition would fire transitionrun here every 250 ms.
@@ -327,8 +327,10 @@ test.describe.serial('#1774 Accent breathe', () => {
     expect(after.tickSeq).toBeGreaterThan(0);
     expect(after.bSeq).toBeGreaterThan(0);
     expect(after.bSeq).toBeLessThan(after.tickSeq);
-    expect(after.a).toEqual(expect.arrayContaining(['border-top-color', 'opacity']));
-    expect(after.b).toEqual(expect.arrayContaining(['border-top-color', 'opacity']));
+    expect(after.a).toContain('opacity');
+    expect(after.b).toContain('opacity');
+    expect(after.a.some((p) => p.includes('border'))).toBe(true);
+    expect(after.b.some((p) => p.includes('border'))).toBe(true);
     expect(await readState(page)).toBe('running');
   });
 
@@ -455,7 +457,7 @@ test.describe.serial('#1774 Accent breathe', () => {
     await closeSettings(page);
     await expect.poll(() => readState(page), { timeout: 3_000 }).toBe('running');
     await addProxy();
-    const on1 = await measure(1000);
+    const on1 = await measure();
     await removeProxy();
 
     await toggleBreathe(false);
@@ -469,7 +471,7 @@ test.describe.serial('#1774 Accent breathe', () => {
 
     await toggleBreathe(true);
     await addProxy();
-    const on2 = await measure(1000);
+    const on2 = await measure();
     await removeProxy();
     await toggleBreathe(false);
     await addProxy();

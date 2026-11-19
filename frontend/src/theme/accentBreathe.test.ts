@@ -317,24 +317,30 @@ describe('driver via applyLiquidNeonV2Tokens', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('token-consumer transition churn stays on suppress (not dual-flush cancel-new)', async () => {
+  it('token-consumer churn is canceled and marked, then steady ticks stay on suppress', async () => {
     stubMatchMedia();
     applyLiquidNeonV2Tokens(undefined, COSMIC, el);
     const consumer = document.createElement('div');
     consumer.style.cssText =
       'border:2px solid var(--b1);box-shadow:0 0 4px var(--g2);transition:all .2s';
     document.body.appendChild(consumer);
-    const churn = {
+    const tickStarted = {
       transitionProperty: 'all',
       effect: { target: consumer, pseudoElement: null },
       cancel: vi.fn(),
     } as unknown as Animation;
-    const ga = vi.fn(() => [churn]);
+    let pass = 0;
+    const ga = vi.fn(() => {
+      pass += 1;
+      return pass % 2 === 0 ? [tickStarted] : [];
+    });
     Object.defineProperty(document, 'getAnimations', { configurable: true, value: ga });
     try {
       await vi.advanceTimersByTimeAsync(TICK);
-      expect(ga).toHaveBeenCalledTimes(1);
-      expect(churn.cancel).not.toHaveBeenCalled();
+      expect(tickStarted.cancel).toHaveBeenCalled();
+      expect(consumer.hasAttribute('data-ln-breathe-churn')).toBe(true);
+      await vi.advanceTimersByTimeAsync(TICK * 3);
+      expect(ga.mock.calls.length).toBeGreaterThanOrEqual(8);
       expect(el.hasAttribute('data-ln-breathe-tick')).toBe(false);
     } finally {
       delete (document as unknown as Record<string, unknown>).getAnimations;
@@ -354,13 +360,52 @@ describe('driver via applyLiquidNeonV2Tokens', () => {
     Object.defineProperty(document, 'getAnimations', { configurable: true, value: ga });
     try {
       await vi.advanceTimersByTimeAsync(TICK);
-      expect(ga).toHaveBeenCalledTimes(1);
+      expect(ga).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(TICK * 3);
-      expect(ga).toHaveBeenCalledTimes(4);
+      expect(ga).toHaveBeenCalledTimes(8);
       expect(el.hasAttribute('data-ln-breathe-tick')).toBe(false);
     } finally {
       delete (document as unknown as Record<string, unknown>).getAnimations;
       consumer.remove();
+    }
+  });
+
+  it('user box-shadow transition uses cancel-new (no data-ln-breathe-tick suppress)', async () => {
+    stubMatchMedia();
+    applyLiquidNeonV2Tokens(undefined, COSMIC, el);
+    const target = document.createElement('div');
+    const userShadow = {
+      transitionProperty: 'box-shadow',
+      effect: { target, pseudoElement: null },
+      cancel: vi.fn(),
+    } as unknown as Animation;
+    Object.defineProperty(document, 'getAnimations', { configurable: true, value: () => [userShadow] });
+    try {
+      await vi.advanceTimersByTimeAsync(TICK);
+      expect(el.hasAttribute('data-ln-breathe-tick')).toBe(false);
+      expect(userShadow.cancel).not.toHaveBeenCalled();
+    } finally {
+      delete (document as unknown as Record<string, unknown>).getAnimations;
+    }
+  });
+
+  // Red-on-revert: property denylist forced suppress on user border (pre-a71c0e18).
+  it('user border-color transition uses cancel-new (no data-ln-breathe-tick suppress)', async () => {
+    stubMatchMedia();
+    applyLiquidNeonV2Tokens(undefined, COSMIC, el);
+    const target = document.createElement('div');
+    const userBorder = {
+      transitionProperty: 'border-top-color',
+      effect: { target, pseudoElement: null },
+      cancel: vi.fn(),
+    } as unknown as Animation;
+    Object.defineProperty(document, 'getAnimations', { configurable: true, value: () => [userBorder] });
+  try {
+      await vi.advanceTimersByTimeAsync(TICK);
+      expect(el.hasAttribute('data-ln-breathe-tick')).toBe(false);
+      expect(userBorder.cancel).not.toHaveBeenCalled();
+    } finally {
+      delete (document as unknown as Record<string, unknown>).getAnimations;
     }
   });
 
@@ -396,7 +441,7 @@ describe('driver via applyLiquidNeonV2Tokens', () => {
     });
     try {
       await vi.advanceTimersByTimeAsync(TICK);
-      expect(flushes).toEqual([false, false, true]);
+      expect(flushes).toEqual([false, true]);
       expect(own.cancel).toHaveBeenCalledTimes(1);
       for (const a of [userOpacity, userBorder, retargeted, keyframes]) expect(a.cancel).not.toHaveBeenCalled();
       expect(el.hasAttribute('data-ln-breathe-tick')).toBe(false);
