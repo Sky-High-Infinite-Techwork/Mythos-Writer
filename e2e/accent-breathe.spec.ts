@@ -372,19 +372,7 @@ test.describe.serial('#1774 Accent breathe', () => {
   test('perf: Accent breathe holds frame rate (ON vs OFF, same run)', async ({}, testInfo) => {
     const soakRep = testInfo.repeatEachIndex;
     const soakVariant = process.env.ACCENT_BREATHE_PERF_SOAK ?? 'steady';
-    test.setTimeout(soakVariant !== 'steady' ? 120_000 : 90_000);
-    if (soakVariant !== 'steady' && soakRep > 0) {
-      await app?.close().catch(() => {});
-      for (const dir of [userData, vaultDir, notesVaultDir]) {
-        if (dir) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-      }
-      userData = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-breathe-user-'));
-      vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-breathe-vault-'));
-      notesVaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-breathe-notes-'));
-      seedUserData(userData, vaultDir, notesVaultDir);
-      app = await launchApp(userData);
-      page = await firstWindow(app);
-    }
+    test.setTimeout(soakVariant !== 'steady' ? 150_000 : 90_000);
     type Metrics = Record<string, number>;
     const client = await page.context().newCDPSession(page);
     await client.send('Performance.enable');

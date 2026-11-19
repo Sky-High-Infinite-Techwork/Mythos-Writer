@@ -230,11 +230,6 @@ function writeTick(c: Controller, t: Record<string, string>): void {
     write(c, t);
     return;
   }
-  const legacyAttr = c.el.getAttribute('data-ln-breathe-legacy');
-  if (legacyAttr === '1' || legacyAttr === 'force') {
-    writeTickCancelNew(c, t, doc);
-    return;
-  }
   const active = doc.getAnimations();
   const userTransitionActive = active.some((a) => {
     const target = (a.effect as KeyframeEffect | null)?.target;
