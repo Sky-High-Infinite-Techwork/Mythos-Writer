@@ -884,8 +884,40 @@ function usesOf(doc) {
   return found;
 }
 
+test('mythos-dispatch schedule never claims; discover uses mythos-control', () => {
+  const name = 'mythos-dispatch.yml';
+  const text = fs.readFileSync(path.join(WORKFLOWS, name), 'utf8');
+  const doc = loadWorkflow(name);
+  const on = triggerOf(doc);
+  assert.deepEqual(doc.permissions, {});
+  assert.deepEqual(Object.keys(on).sort(), ['schedule', 'workflow_dispatch']);
+  assert.equal(on.pull_request, undefined);
+  assert.equal(text.includes('OPENROUTER'), false);
+  assert.equal(text.includes('CLAUDE_CODE_OAUTH_TOKEN'), false);
+  assert.equal(text.includes('OPENAI_API_KEY'), false);
+  assert.equal(doc.jobs.discover.environment, 'mythos-control');
+  assert.equal(
+    String(doc.jobs.claim.if),
+    "needs.admit.result == 'success' && needs.admit.outputs.claim == 'true' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'",
+  );
+  assert.equal(JSON.stringify(doc.jobs.discover).includes('MYTHOS_WRITE_APP_PRIVATE_KEY'), false);
+  assert.match(text, /permission-contents: write/);
+  assert.match(text, /CANARY_OUTCOME_PATH: canary-outcome-\$\{\{ matrix\.index \}\}\.json/);
+  assert.match(text, /actions\/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4\.6\.0/);
+  assert.match(text, /actions\/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4\.3\.0/);
+  assert.equal(doc.jobs.canary.concurrency, undefined);
+  assert.equal(doc.jobs['canary-verify'].concurrency, undefined);
+  assert.match(text, /mythos-dispatch-canary/);
+  assert.match(text, /id: install-check/);
+  assert.match(
+    text,
+    /Assert single scratch ref and CAS delete[\s\S]*if: \$\{\{ success\(\) && steps\.write\.outcome == 'success' && steps\.install-check\.outcome == 'success' \}\}/,
+  );
+  assert.doesNotMatch(text, /always\(\) && steps\.write\.outcome == 'success'/);
+});
+
 test('privileged workflows are inert controllers with pinned actions and split credentials', () => {
-  for (const name of ['mythos-final-gate.yml', 'mythos-flow-step.yml']) {
+  for (const name of ['mythos-final-gate.yml', 'mythos-flow-step.yml', 'mythos-dispatch.yml']) {
     const text = fs.readFileSync(path.join(WORKFLOWS, name), 'utf8');
     const doc = loadWorkflow(name);
     const on = triggerOf(doc);
