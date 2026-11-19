@@ -9,7 +9,7 @@ import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from 'tiptap-markdown';
 import { WikiLink } from './WikiLinkExtension';
-import { WikiLinkResolutionExtension, WIKI_LINK_RESOLUTION_META, targetStem } from './WikiLinkResolutionExtension';
+import { WikiLinkResolutionExtension, WIKI_LINK_RESOLUTION_META, targetStem, wikiDecorationBuilds } from './WikiLinkResolutionExtension';
 
 function makeEditor(content: string, resolvedTitles: ReadonlySet<string>) {
   const editor = new Editor({
@@ -111,6 +111,24 @@ describe('WikiLinkResolutionExtension scene-kind decorations (M16)', () => {
     editor.destroy();
     expect(span?.classList.contains('wiki-link-unresolved')).toBe(true);
     expect(span?.classList.contains('wiki-link-scene')).toBe(false);
+  });
+
+  it('keeps an unresolved mark when another paragraph is edited', () => {
+    const editor = makeEditor('[[Nobody Here]]\n\nPlain.', new Set(['elara voss']));
+    editor.commands.focus('end');
+    editor.commands.insertContent('x');
+    const span = editor.view.dom.querySelector('span[data-wiki-link]');
+    editor.destroy();
+    expect(span?.classList.contains('wiki-link-unresolved')).toBe(true);
+  });
+
+  it('does not rebuild decorations on a plain keystroke', () => {
+    const editor = makeEditor('[[Nobody Here]]\n\nPlain.', new Set());
+    const before = wikiDecorationBuilds;
+    editor.commands.focus('end');
+    editor.commands.insertContent('x');
+    editor.destroy();
+    expect(wikiDecorationBuilds).toBe(before);
   });
 
   it('still accepts the legacy bare-Set meta shape (back-compat)', () => {

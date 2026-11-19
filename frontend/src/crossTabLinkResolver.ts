@@ -451,6 +451,30 @@ export function isWikiLinkTargetResolved(rawTarget: string, titleIndex: Readonly
  * the resolved-title index so [[scene links]] render gold (prototype #ffd319)
  * while note links keep the slot-B purple — Liquid Neon `mkLink` parity.
  */
+/**
+ * Titles and paths the wiki indexes read. Body-only edits keep this string
+ * identical, so those indexes can stay memoized and the open editor does not
+ * redecorate every paragraph on autosave.
+ */
+export function storyLinkTitleSignature(stories: Story[]): string {
+  let out = '';
+  for (const story of stories) {
+    out += story.title ?? '';
+    out += '\n';
+    for (const chapter of story.chapters) {
+      out += chapter.title ?? '';
+      out += '\n';
+      for (const scene of chapter.scenes) {
+        out += scene.title ?? '';
+        out += '\0';
+        out += scene.path ?? '';
+        out += '\n';
+      }
+    }
+  }
+  return out;
+}
+
 export function buildSceneWikiLinkTitleIndex(stories: Story[]): Set<string> {
   const titles = new Set<string>();
   for (const story of stories) {

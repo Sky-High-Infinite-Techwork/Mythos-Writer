@@ -151,7 +151,7 @@ import StorySubViewBar from './StorySubViewBar';
 import NotesTabPanel from './NotesTabPanel';
 import BrainstormPage from './BrainstormPage';
 import BetaReaderPage from './beta/BetaReaderPage';
-import { resolveCrossTabLink, resolveWikiLinkTarget, crossTabLinkMatchKey, buildWikiLinkTitleIndex, buildWikiLinkCandidates, buildSceneWikiLinkTitleIndex, notePathForUnresolvedLink, buildUnresolvedLinkNote, wikiLinkTargetStem, type CrossTabLinkMatch } from './crossTabLinkResolver';
+import { resolveCrossTabLink, resolveWikiLinkTarget, crossTabLinkMatchKey, buildWikiLinkTitleIndex, buildWikiLinkCandidates, buildSceneWikiLinkTitleIndex, storyLinkTitleSignature, notePathForUnresolvedLink, buildUnresolvedLinkNote, wikiLinkTargetStem, type CrossTabLinkMatch } from './crossTabLinkResolver';
 import type { WikiLinkPreviewData } from './WikiLinkHoverPreview';
 import {
   tabbedShellReducer,
@@ -5048,19 +5048,26 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
   // resolved/unresolved [[wiki link]] styling, plus the flat candidate list
   // for the `[[` autocomplete popup. Both rebuilt only when the underlying
   // vault state actually changes.
+  // Body edits must not rebuild these sets: a new Set identity redecorates
+  // every block in the open editor. Titles and paths are the only story
+  // fields the indexes read.
+  const linkTitleSig = useMemo(() => storyLinkTitleSignature(stories), [stories]);
   const wikiLinkTitleIndex = useMemo(
     () => buildWikiLinkTitleIndex({ stories, entities: allEntities, notePaths: allNotePaths }),
-    [stories, allEntities, allNotePaths],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- linkTitleSig stands in for story titles
+    [linkTitleSig, allEntities, allNotePaths],
   );
   const wikiLinkCandidates = useMemo(
     () => buildWikiLinkCandidates({ stories, entities: allEntities, notePaths: allNotePaths }),
-    [stories, allEntities, allNotePaths],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- linkTitleSig stands in for story titles
+    [linkTitleSig, allEntities, allNotePaths],
   );
   // M16: stems that resolve to story scenes — those [[links]] render gold in
   // the notes editor (Liquid Neon mkLink parity).
   const sceneWikiLinkTitleIndex = useMemo(
     () => buildSceneWikiLinkTitleIndex(stories),
-    [stories],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- linkTitleSig stands in for story titles
+    [linkTitleSig],
   );
 
   // M16 / F2#3: an unresolved [[link]] CREATES the note in the Notes Vault
