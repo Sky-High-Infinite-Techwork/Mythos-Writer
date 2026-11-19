@@ -29,7 +29,7 @@ describe('DesktopShell scene markdown writes (#1904)', () => {
 
   it('clears scene save failures only after vault switch commits (applyProjectSwitched)', () => {
     const switchBlock = src.match(
-      /const switchToVault = useCallback\(async \(vaultId: string\)[\s\S]*?\n  \}, \[activeVaultRoot/,
+      /const switchToVault = useCallback\(async \(vaultId: string\)[\s\S]*?\n {2}\}, \[activeVaultRoot/,
     )?.[0] ?? '';
     expect(switchBlock).not.toMatch(/setSceneSaveFailures\(new Map\(\)\)/);
     expect(src).toMatch(
@@ -42,9 +42,9 @@ describe('DesktopShell scene markdown writes (#1904)', () => {
       /persistSceneMarkdown\(updatedScene\)\.then\(\(saved\) => \{[\s\S]*?window\.api\.snapshotSave/,
     );
     const applyBlock = src.match(
-      /const applySceneBlocks = useCallback\([\s\S]*?\n  \}, \[updateManifest, persistSceneMarkdown/,
+      /const applySceneBlocks = useCallback\([\s\S]*?\n {2}\}, \[updateManifest, persistSceneMarkdown/,
     )?.[0] ?? '';
-    const scheduleSaved = applyBlock.match(/scheduleSaved:\s*\(\)\s*=>\s*\{([\s\S]*?)\n        \},/)?.[1] ?? '';
+    const scheduleSaved = applyBlock.match(/scheduleSaved:\s*\(\)\s*=>\s*\{([\s\S]*?)\n {8}\},/)?.[1] ?? '';
     expect(scheduleSaved).not.toMatch(/snapshotSave/);
   });
 });
