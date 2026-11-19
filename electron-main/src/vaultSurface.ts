@@ -13,12 +13,11 @@
 import { shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
-import { isMythosV2Root } from './mythosFormat/mythosJson.js';
+import { isMythosV2Root, mythosRootForStoryVault } from './mythosFormat/mythosJson.js';
+import { isExistingUsableVaultRoot } from './validatePathUtil.js';
 import { ensureNotesVaultRegistry } from './mythosFormat/notesVaultRegistry.js';
 import { ensureStoryVaultRegistry } from './mythosFormat/storyVaultRegistry.js';
 import type { ProjectEntry } from './ipc.js';
-import { mythosRootForStoryVault } from './mythosFormat/mythosJson.js';
-
 export interface VaultSettingsRoots {
   vaultRoot?: string;
   notesVaultRoot?: string;
@@ -192,13 +191,29 @@ export function isActiveVaultTrashed(
 ): boolean {
   const resolvedTrash = path.resolve(vaultPath);
   const activeStory = current.vaultRoot ? path.resolve(current.vaultRoot) : null;
+  const activeNotes = current.notesVaultRoot ? path.resolve(current.notesVaultRoot) : null;
   if (level === 'mythos') {
-    return (
+    const activeMythos = activeStory ? mythosRootForStoryVault(activeStory) : null;
+    const trashIsWholeBundle =
+      activeMythos !== null &&
+      (resolvedTrash === activeMythos || resolvedTrash.startsWith(activeMythos + path.sep));
+    const storyHit =
       activeStory !== null &&
       (activeStory === resolvedTrash ||
         activeStory.startsWith(resolvedTrash + path.sep) ||
-        mythosRootForStoryVault(activeStory) === resolvedTrash)
-    );
+        activeMythos === resolvedTrash ||
+        (trashIsWholeBundle && activeStory.startsWith(activeMythos! + path.sep)));
+    const notesHit =
+      activeNotes !== null &&
+      (activeNotes === resolvedTrash ||
+        activeNotes.startsWith(resolvedTrash + path.sep) ||
+        (trashIsWholeBundle && activeNotes.startsWith(activeMythos! + path.sep)));
+    const notesOnlyBundleHit =
+      activeNotes === null &&
+      trashIsWholeBundle &&
+      activeStory !== null &&
+      activeStory.startsWith(activeMythos! + path.sep);
+    return storyHit || notesHit || notesOnlyBundleHit;
   }
   if (level === 'story') {
     return activeStory === resolvedTrash;
@@ -225,13 +240,18 @@ export function mythosRootForTrashRegistryCleanup(
   return null;
 }
 
+export function isUsableOpenStoryRoot(storyRoot: string): boolean {
+  if (!isExistingUsableVaultRoot(storyRoot)) return false;
+  return mythosRootForStoryVault(storyRoot) !== null;
+}
+
 function isViableSurvivorProject(
   entry: ProjectEntry,
   resolvedTrash: string,
   level: 'mythos' | 'story',
 ): boolean {
   const story = path.resolve(entry.vaultRoot);
-  if (!fs.existsSync(story)) return false;
+  if (!isUsableOpenStoryRoot(story)) return false;
   if (level === 'story' && story === resolvedTrash) return false;
   if (level === 'mythos') {
     if (story === resolvedTrash || story.startsWith(resolvedTrash + path.sep)) return false;
@@ -240,7 +260,7 @@ function isViableSurvivorProject(
   }
   if (entry.notesVaultRoot != null) {
     const notes = path.resolve(entry.notesVaultRoot);
-    if (!fs.existsSync(notes)) return false;
+    if (!isExistingUsableVaultRoot(notes)) return false;
   }
   return true;
 }

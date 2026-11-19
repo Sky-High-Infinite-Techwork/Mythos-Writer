@@ -2304,7 +2304,7 @@ export interface VoicePickBinaryResponse {
 }
 
 export interface VaultGetRootResponse {
-  vaultRoot: string;
+  vaultRoot: string | null;
 }
 
 /** Response from VAULT_REVEAL_FOLDER (SKY-5790). `opened` is false when the

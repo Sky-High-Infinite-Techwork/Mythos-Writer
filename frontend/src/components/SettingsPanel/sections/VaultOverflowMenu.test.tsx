@@ -1,6 +1,6 @@
 // SKY-11154 / test-gap 03 — every VaultOverflowMenu branch (hide/delete/remove,
 // mythos 2-step vs inner 1-step, failure surface, paired-notes hide copy).
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { type ComponentProps } from 'react';
 import { render, screen, fireEvent, waitFor, act, cleanup } from '@testing-library/react';
 import VaultOverflowMenu, { type VaultOverflowLevel } from './VaultOverflowMenu';

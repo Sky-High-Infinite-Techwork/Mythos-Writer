@@ -36,8 +36,6 @@ interface VaultSettings {
   hiddenVaultRoots?: string[];
 }
 
-type ChmodRestore = { path: string; mode: number };
-
 function ensureTmpBase() {
   fs.mkdirSync(TMP_BASE, { recursive: true });
 }
@@ -60,7 +58,7 @@ function seedV2Vault(parent: string, name: string): VaultBundle {
       seed: null,
     }, null, 2),
   );
-  fs.writeFileSync(path.join(storyRoot, 'book-seed.md'), '# Seed\n');
+  fs.writeFileSync(path.join(storyRoot, 'book-seed.md'), `# Seed for ${name}\n`);
   fs.writeFileSync(path.join(notesRoot, 'note.md'), '# Note\n');
   fs.writeFileSync(path.join(mythosRoot, TRASH_PROBE_FILE), `probe:${mythosRoot}\ntrash-marker:${trashMarker}\n`);
   return { mythosRoot, storyRoot, notesRoot, name, trashMarker };
@@ -142,15 +140,6 @@ function mkFixture(slug: string): { tempRoot: string; userData: string; alpha: V
 async function closeApp(app: ElectronApplication | undefined): Promise<void> {
   if (!app) return;
   await app.close().catch(() => undefined);
-}
-
-function restoreChmods(restores: ChmodRestore[], tempRoot?: string): void {
-  for (const { path: p, mode } of restores) {
-    try { fs.chmodSync(p, mode); } catch { /* cleanup */ }
-  }
-  if (tempRoot) {
-    try { fs.chmodSync(tempRoot, 0o755); } catch { /* cleanup */ }
-  }
 }
 
 function rmTempRoot(tempRoot?: string): void {
@@ -353,40 +342,45 @@ test('proves non-active Mythos delete moves the bundle to OS Trash (not rm), pru
 
 // ── Active delete ────────────────────────────────────────────────────────────
 
-test('proves deleting the active Mythos vault switches vaultRoot to the surviving vault', async () => {
+test('proves deleting the active Mythos vault switches the open story to the survivor without Scene not found', async () => {
   test.setTimeout(180_000);
   let tempRoot: string | undefined;
   let userData: string;
   let alpha: VaultBundle;
   let beta: VaultBundle;
   let app: ElectronApplication | undefined;
+  let xdgDataHome: string;
   try {
     ({ tempRoot, userData, alpha, beta } = mkFixture('trash-active'));
-    app = await launchApp(userData);
+    xdgDataHome = prepareIsolatedTrashDir(tempRoot);
+    app = await launchApp(userData, { XDG_DATA_HOME: xdgDataHome });
     const page = await app.firstWindow();
     await openVaultFiles(page);
     await openOverflow(page, alpha.storyRoot);
     await confirmMythosTrash(page, alpha.storyRoot);
 
     await expect.poll(() => fs.existsSync(alpha.mythosRoot), { timeout: 60_000 }).toBe(false);
+    assertMythosRootInFreedesktopTrash(alpha.mythosRoot, alpha.trashMarker, xdgDataHome);
     await expect(page.locator('.app-menu-bar')).toBeVisible({ timeout: 15_000 });
 
     await expect.poll(() => readVaultSettings(userData).vaultRoot, { timeout: 30_000, intervals: [250, 500, 1000] })
       .toBe(beta.storyRoot);
+    await expect.poll(async () => (await page.evaluate(() => window.api.getVaultRoot())).vaultRoot, { timeout: 15_000 })
+      .toBe(beta.storyRoot);
 
-    await expect.poll(async () => {
-      const vr = readVaultSettings(userData).vaultRoot;
-      if (vr === beta.storyRoot) return 'switched';
-      if ((readVaultSettings(userData).recentProjects ?? []).length === 0
-        && await page.getByTestId('story-vault-picker-btn').isVisible().catch(() => false)) {
-        return 'picker';
-      }
-      return 'pending';
-    }, { timeout: 45_000, intervals: [300, 500, 1000] }).toMatch(/^(switched|picker)$/);
+    await openVaultFiles(page);
+    await expect(page.getByTestId(`mvs-card-${beta.storyRoot}`)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId(`mvs-card-${alpha.storyRoot}`)).toHaveCount(0);
 
-    if (readVaultSettings(userData).vaultRoot === beta.storyRoot) {
-      await expect(page.getByTestId(`mvs-card-${beta.storyRoot}`)).toBeVisible({ timeout: 15_000 });
-    }
+    const writeResult = await page.evaluate(async () => {
+      const root = await window.api.getVaultRoot();
+      if (!root.vaultRoot) return { ok: false, error: 'no vaultRoot' };
+      const res = await window.api.writeVault('book-seed.md', '# Beta survivor write\n');
+      if (res && 'error' in res && res.error) return { ok: false, error: res.error };
+      return { ok: true, error: null as string | null };
+    });
+    expect(writeResult.ok, writeResult.error ?? 'vault write after switch').toBe(true);
+    expect(fs.readFileSync(path.join(beta.storyRoot, 'book-seed.md'), 'utf8')).toContain('Beta survivor write');
   } finally {
     await closeApp(app);
     rmTempRoot(tempRoot);
@@ -395,18 +389,14 @@ test('proves deleting the active Mythos vault switches vaultRoot to the survivin
 
 // ── Trash failure ────────────────────────────────────────────────────────────
 
-test('proves read-only trash failure surfaces an error and leaves registry and folder intact', async () => {
-  test.skip(
-    process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0),
-    'deterministic trash stub is used instead of chmod (unsafe as root / on Windows)',
-  );
+test('proves stubbed trash failure surfaces an error and leaves registry and folder intact', async () => {
   test.setTimeout(120_000);
   let tempRoot: string | undefined;
   let userData: string;
   let beta: VaultBundle;
   let app: ElectronApplication | undefined;
   try {
-    ({ tempRoot, userData, beta } = mkFixture('readonly'));
+    ({ tempRoot, userData, beta } = mkFixture('trash-fail-stub'));
     app = await launchApp(userData);
     await app.evaluate(async ({ shell }) => {
       shell.trashItem = async () => {

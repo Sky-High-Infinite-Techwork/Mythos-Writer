@@ -5,7 +5,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { shell } from 'electron';
-import { handlers } from './main.js';
+import { handlers, setMainWindowForTests } from './main.js';
+import * as storyVaultRegistryModule from './mythosFormat/storyVaultRegistry.js';
 import { IPC_CHANNELS } from './ipc.js';
 import { createMythosFile, writeMythosFile } from './mythosFormat/mythosJson.js';
 import {
@@ -21,9 +22,13 @@ import {
 
 const paths = vi.hoisted(() => ({ userData: '' }));
 
+const mainWindowMock = vi.hoisted(() => ({
+  webContents: { send: vi.fn() },
+}));
+
 vi.mock('electron', () => ({
   BrowserWindow: class {
-    webContents = { send: vi.fn() };
+    webContents = mainWindowMock.webContents;
     destroy = vi.fn();
   },
   app: {
@@ -59,11 +64,22 @@ vi.mock('./jobs/jobWorker?nodeWorker', () => ({
   default: () => ({ postMessage() {}, terminate() {}, on() {}, once() {} }),
 }));
 vi.mock('./db.js', () => ({
-  getDb: () => ({ prepare: () => ({ run: vi.fn(), get: vi.fn(), all: vi.fn().mockReturnValue([]) }) }),
+  getDb: () => ({
+    prepare: () => ({
+      run: vi.fn().mockReturnValue({ changes: 0 }),
+      get: vi.fn(),
+      all: vi.fn().mockReturnValue([]),
+    }),
+    exec: vi.fn(),
+    pragma: vi.fn(),
+  }),
   openDb: vi.fn(),
   closeDb: vi.fn(),
   insertAuditLog: vi.fn(),
   insertManifestMigrationLog: vi.fn(),
+}));
+vi.mock('./searchIndex.js', () => ({
+  buildFullIndex: vi.fn(),
 }));
 
 const OPENED = '2026-01-01T00:00:00.000Z';
@@ -108,9 +124,14 @@ describe('handlers[VAULT_SURFACE_TRASH] — active vault fallout', () => {
     vi.clearAllMocks();
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-handler-trash-'));
     paths.userData = path.join(tmpRoot, 'userData');
+    setMainWindowForTests({
+      webContents: mainWindowMock.webContents,
+      isDestroyed: () => false,
+    } as unknown as import('electron').BrowserWindow);
   });
 
   afterEach(() => {
+    setMainWindowForTests(null);
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 
@@ -157,7 +178,7 @@ describe('handlers[VAULT_SURFACE_TRASH] — active vault fallout', () => {
     expect(readNotesVaultRegistry(a.mythos)?.vaults.find((v) => v.id === notesEntry!.id)).toBeUndefined();
   });
 
-  it('sole active story trash clears settings without throwing and removes the inner story entry', async () => {
+  it('sole active story trash clears settings, returns null from VAULT_GET_ROOT, and broadcasts empty project:switched', async () => {
     const only = seedMythosBundle(tmpRoot, 'Only');
     writeVaultSettings({
       vaultRoot: only.story,
@@ -172,6 +193,58 @@ describe('handlers[VAULT_SURFACE_TRASH] — active vault fallout', () => {
     expect(readVaultSettings().vaultRoot).toBeUndefined();
     expect(readVaultSettings().notesVaultRoot).toBeUndefined();
     expect(readStoryVaultRegistry(only.mythos)?.vaults).toHaveLength(0);
+    const getRoot = handlers[IPC_CHANNELS.VAULT_GET_ROOT] as () => { vaultRoot: string | null };
+    expect(getRoot().vaultRoot).toBeNull();
+    expect(mainWindowMock.webContents.send).toHaveBeenCalledWith('project:switched', {
+      vaultRoot: null,
+      notesVaultRoot: null,
+    });
+  });
+
+  it('active mythos trash with survivor broadcasts project:switched to the survivor roots', async () => {
+    const a = seedMythosBundle(tmpRoot, 'Alpha');
+    const b = seedMythosBundle(tmpRoot, 'Beta');
+    writeVaultSettings({
+      vaultRoot: a.story,
+      notesVaultRoot: a.notes,
+      recentProjects: [
+        { name: 'Alpha', vaultRoot: a.story, notesVaultRoot: a.notes, openedAt: OPENED },
+        { name: 'Beta', vaultRoot: b.story, notesVaultRoot: b.notes, openedAt: OPENED },
+      ],
+    });
+    mainWindowMock.webContents.send.mockClear();
+    const result = await trash({ vaultPath: a.mythos, level: 'mythos' });
+    expect(result.trashed).toBe(true);
+    expect(readVaultSettings().vaultRoot).toBe(b.story);
+    expect(mainWindowMock.webContents.send).toHaveBeenCalledWith('project:switched', {
+      vaultRoot: b.story,
+      notesVaultRoot: b.notes,
+    });
+  });
+
+  it('still reconciles settings when inner registry cleanup throws', async () => {
+    const a = seedMythosBundle(tmpRoot, 'Alpha');
+    const b = seedMythosBundle(tmpRoot, 'Beta');
+    writeVaultSettings({
+      vaultRoot: a.story,
+      notesVaultRoot: a.notes,
+      recentProjects: [
+        { name: 'Alpha', vaultRoot: a.story, notesVaultRoot: a.notes, openedAt: OPENED },
+        { name: 'Beta', vaultRoot: b.story, notesVaultRoot: b.notes, openedAt: OPENED },
+      ],
+    });
+    const storyEntry = readStoryVaultRegistry(a.mythos)?.vaults[0]!;
+    const storyPath = storyVaultAbsPath(a.mythos, storyEntry);
+    const removeSpy = vi.spyOn(storyVaultRegistryModule, 'removeStoryVault').mockImplementation(() => {
+      throw new Error('injected registry write failure');
+    });
+  try {
+    const result = await trash({ vaultPath: storyPath, level: 'story' });
+    expect(result.trashed).toBe(true);
+    expect(readVaultSettings().vaultRoot).toBe(b.story);
+  } finally {
+    removeSpy.mockRestore();
+  }
   });
 
   it('non-active mythos trash does not change the active vaultRoot', async () => {

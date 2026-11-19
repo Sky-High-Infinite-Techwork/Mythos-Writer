@@ -1249,13 +1249,19 @@ const notesRootForStoryVault = (storyVaultRoot: string): string | null => {
   }
   return null;
 };
-const getNotesVaultRoot = () =>
-  // SKY-11058: v2 vaults resolve through the per-vault registry so the caller
-  // always gets the currently-active notes vault path. Legacy v0.4 vaults fall
-  // back to the userData vault-settings entry unchanged.
-  notesRootForStoryVault(getVaultRoot())
-  ?? loadVaultSettings().notesVaultRoot
-  ?? defaultNotesVaultRoot();
+const getNotesVaultRoot = (): string => {
+  const storyRoot = getVaultRoot();
+  if (!storyRoot) {
+    const fromSettings = loadVaultSettings().notesVaultRoot;
+    if (fromSettings && isExistingUsableVaultRoot(fromSettings)) return fromSettings;
+    return defaultNotesVaultRoot();
+  }
+  const structural = notesRootForStoryVault(storyRoot);
+  if (structural && isExistingUsableVaultRoot(structural)) return structural;
+  const fromSettings = loadVaultSettings().notesVaultRoot;
+  if (fromSettings && isExistingUsableVaultRoot(fromSettings)) return fromSettings;
+  return defaultNotesVaultRoot();
+};
 // SKY-10952: Agent Vault lives as a sibling inside a v2 MythosVault root.
 // Legacy twin-root vaults keep sessions/boards under Notes Vault/Sessions/
 // (pre-existing brainstorm/coach path). F5 Shield fail-closed applies to
@@ -1439,10 +1445,13 @@ function parseMentionEntityIds(prose: string): Set<string> {
 
 function shouldInitializeVaultsOnStartup(): boolean {
   const settings = loadAppSettings();
+  const vaultSettings = loadVaultSettings();
+  const storyRoot = vaultSettings.vaultRoot;
+  const notesRoot = vaultSettings.notesVaultRoot;
   return shouldInitializeVaultStorage({
     onboardingComplete: settings.onboardingComplete === true,
-    storyVaultUsable: isExistingUsableVaultRoot(getVaultRoot()),
-    notesVaultUsable: isExistingUsableVaultRoot(getNotesVaultRoot()),
+    storyVaultUsable: isExistingUsableVaultRoot(storyRoot),
+    notesVaultUsable: isExistingUsableVaultRoot(notesRoot),
   });
 }
 
@@ -1472,6 +1481,9 @@ function ensureVaultDir() {
     throw new Error('App data was cleared — restart Mythos Writer to continue.');
   }
   const vaultRoot = getVaultRoot();
+  if (!vaultRoot || !isExistingUsableVaultRoot(vaultRoot)) {
+    return;
+  }
   const mythosRoot = mythosRootForStoryVault(vaultRoot);
   if (mythosRoot !== null) {
     // M5 (MythosVault v2): the SKY-15 scaffold and .mythos-seeded sentinel
@@ -1653,11 +1665,15 @@ function ensureNotesVaultDir() {
   if (isAppDataCleared()) {
     throw new Error('App data was cleared — restart Mythos Writer to continue.');
   }
+  const storyRoot = getVaultRoot();
+  if (!storyRoot || !isExistingUsableVaultRoot(storyRoot)) {
+    return;
+  }
   // M5: the Notes Vault half of a MythosVault v2 never receives the SKY-15
   // legacy scaffold — its layout was written at creation/migration time.
-  if (mythosRootForStoryVault(getVaultRoot()) !== null) {
+  if (mythosRootForStoryVault(storyRoot) !== null) {
     const notesRoot = getNotesVaultRoot();
-    if (!fs.existsSync(notesRoot)) fs.mkdirSync(notesRoot, { recursive: true });
+    if (notesRoot && !fs.existsSync(notesRoot)) fs.mkdirSync(notesRoot, { recursive: true });
     return;
   }
   // W0.1 (GAP #1): seed-once — see ensureVaultDir. A user who pre-creates an
@@ -2210,6 +2226,73 @@ function writeVaultForIpc(root: string, rel: string, content: string): import('.
   }
 }
 
+async function finalizeActiveVaultTrashFallout(
+  level: 'mythos' | 'notes' | 'story',
+  patch: import('./vaultSurface.js').VaultSettingsRoots,
+): Promise<void> {
+  stopWritingScanScheduler();
+  await stopBoardWatcher();
+  await stopVaultWatcher();
+  await stopNotesVaultWatcher();
+  await shutdownJobService();
+  closeDb();
+
+  if (level === 'notes') {
+    const storyRoot = getVaultRoot();
+    const notesRoot = getNotesVaultRoot();
+    if (storyRoot && isExistingUsableVaultRoot(storyRoot)) {
+      ensureVaultDir();
+      if (notesRoot) {
+        ensureNotesVaultDir();
+        await startNotesVaultWatcher(notesRoot, notifyNotesVaultChanged);
+      }
+      startWritingScanScheduler();
+    }
+    mainWindow?.webContents.send('project:switched', {
+      vaultRoot: storyRoot ?? null,
+      notesVaultRoot: notesRoot ?? null,
+    });
+    return;
+  }
+
+  const newStory = patch.vaultRoot;
+  const newNotes = patch.notesVaultRoot;
+  if (newStory && isExistingUsableVaultRoot(newStory)) {
+    const resolvedNotes =
+      newNotes && isExistingUsableVaultRoot(newNotes)
+        ? newNotes
+        : notesRootForStoryVault(newStory) ?? newNotes;
+    ensureVaultDir();
+    if (resolvedNotes && isExistingUsableVaultRoot(resolvedNotes)) {
+      ensureNotesVaultDir();
+    }
+    try {
+      const manifest = readManifest(getManifestPath());
+      const { manifest: synced } = reindexVault(newStory, manifest);
+      writeManifest(getManifestPath(), synced);
+      try {
+        buildFullIndex(getDb(), newStory, synced);
+      } catch {
+        /* non-fatal */
+      }
+    } catch {
+      /* non-fatal */
+    }
+    await startVaultWatcher(newStory, notifyVaultChanged);
+    if (resolvedNotes && isExistingUsableVaultRoot(resolvedNotes)) {
+      await startNotesVaultWatcher(resolvedNotes, notifyNotesVaultChanged);
+    }
+    startWritingScanScheduler();
+    mainWindow?.webContents.send('project:switched', {
+      vaultRoot: newStory,
+      notesVaultRoot: resolvedNotes ?? null,
+    });
+    return;
+  }
+
+  mainWindow?.webContents.send('project:switched', { vaultRoot: null, notesVaultRoot: null });
+}
+
 // ─── IPC Handlers ───
 export const handlers: IpcHandlers = {
   // MYT-774: renderer-facing vault channels enforce dotfile + extension policy
@@ -2302,8 +2385,12 @@ export const handlers: IpcHandlers = {
     return { vaultRoot: newRoot, cancelled: false };
   },
   [IPC_CHANNELS.VAULT_GET_ROOT]: () => {
+    const vaultRoot = getVaultRoot();
+    if (!vaultRoot || !isExistingUsableVaultRoot(vaultRoot)) {
+      return { vaultRoot: null };
+    }
     ensureVaultDir();
-    return { vaultRoot: getVaultRoot() };
+    return { vaultRoot };
   },
   // SKY-5790: reveal the current Story Vault root in the OS file manager
   // (Finder/Explorer/etc.) — the path always comes from the main process's
@@ -6414,45 +6501,50 @@ export const handlers: IpcHandlers = {
     // the matching entry there too so a trashed card does not stay listed
     // pointing at a now-gone folder. Registry cleanup uses the pre-fallback
     // active story root (or the trashed story path), not a switched vaultRoot.
-    if (level === 'notes' || level === 'story') {
-      if (mythosRootForRegistry !== null) {
-        if (level === 'notes') {
-          const registry = readNotesVaultRegistry(mythosRootForRegistry);
-          const entry = registry?.vaults.find((v) => path.resolve(notesVaultAbsPath(mythosRootForRegistry, v)) === vaultPath);
-          if (entry) {
-            removeNotesVault(mythosRootForRegistry, entry.id);
-            // A story vault paired to the now-removed notes vault must not
-            // keep pointing at a dangling id.
-            const storyRegistry = readStoryVaultRegistry(mythosRootForRegistry);
-            let storyChanged = false;
-            for (const sv of storyRegistry?.vaults ?? []) {
-              if (sv.pairedNotesVaultId === entry.id) {
-                pairStoryVaultToNotesVault(mythosRootForRegistry, sv.id, null);
-                storyChanged = true;
+    try {
+      if (level === 'notes' || level === 'story') {
+        if (mythosRootForRegistry !== null) {
+          if (level === 'notes') {
+            const registry = readNotesVaultRegistry(mythosRootForRegistry);
+            const entry = registry?.vaults.find((v) => path.resolve(notesVaultAbsPath(mythosRootForRegistry, v)) === vaultPath);
+            if (entry) {
+              removeNotesVault(mythosRootForRegistry, entry.id);
+              const storyRegistry = readStoryVaultRegistry(mythosRootForRegistry);
+              let storyChanged = false;
+              for (const sv of storyRegistry?.vaults ?? []) {
+                if (sv.pairedNotesVaultId === entry.id) {
+                  pairStoryVaultToNotesVault(mythosRootForRegistry, sv.id, null);
+                  storyChanged = true;
+                }
               }
+              mainWindow?.webContents.send('notesVaultRegistry:changed');
+              if (storyChanged) mainWindow?.webContents.send('storyVaultRegistry:changed');
             }
-            mainWindow?.webContents.send('notesVaultRegistry:changed');
-            if (storyChanged) mainWindow?.webContents.send('storyVaultRegistry:changed');
-          }
-        } else {
-          const registry = readStoryVaultRegistry(mythosRootForRegistry);
-          const entry = registry?.vaults.find((v) => path.resolve(storyVaultAbsPath(mythosRootForRegistry, v)) === vaultPath);
-          if (entry) {
-            removeStoryVault(mythosRootForRegistry, entry.id);
-            mainWindow?.webContents.send('storyVaultRegistry:changed');
+          } else {
+            const registry = readStoryVaultRegistry(mythosRootForRegistry);
+            const entry = registry?.vaults.find((v) => path.resolve(storyVaultAbsPath(mythosRootForRegistry, v)) === vaultPath);
+            if (entry) {
+              removeStoryVault(mythosRootForRegistry, entry.id);
+              mainWindow?.webContents.send('storyVaultRegistry:changed');
+            }
           }
         }
       }
+    } catch (err) {
+      console.error('[vault-surface-trash] registry cleanup failed:', err);
     }
 
+    const activePatch = activeTrashed
+      ? buildActiveVaultSettingsPatch(remaining, vaultPath, level)
+      : null;
+    const settingsPatch: Parameters<typeof saveVaultSettings>[0] = {
+      recentProjects: remaining,
+      ...(activePatch ?? {}),
+    };
+    saveVaultSettings(settingsPatch);
+
     if (activeTrashed) {
-      const settingsPatch: Parameters<typeof saveVaultSettings>[0] = {
-        recentProjects: remaining,
-        ...buildActiveVaultSettingsPatch(remaining, vaultPath, level),
-      };
-      saveVaultSettings(settingsPatch);
-    } else {
-      saveVaultSettings({ recentProjects: remaining });
+      await finalizeActiveVaultTrashFallout(level, activePatch ?? {});
     }
 
     return result;
@@ -11869,6 +11961,14 @@ function setupAgentPersonaIpc(): void {
 // Must be called before the app 'ready' event.
 app.disableHardwareAcceleration();
 
+/** Vitest-only hook so handler tests can observe renderer broadcasts. */
+export function setMainWindowForTests(win: BrowserWindow | null): void {
+  if (process.env.VITEST !== 'true') {
+    throw new Error('setMainWindowForTests is available in Vitest only');
+  }
+  mainWindow = win;
+}
+
 // Electron 44 auto-picks a client certificate when this event is unhandled,
 // including for net and utility-process requests where webContents is null.
 // Register before ready and before any BrowserWindow.
@@ -11892,7 +11992,13 @@ app.whenReady().then(async () => {
     ensureVaultDir();
     ensureNotesVaultDir();
     // Track current vault in recent projects list on every launch.
-    addToRecentProjects(getVaultRoot(), getNotesVaultRoot());
+    const storyRoot = getVaultRoot();
+    if (storyRoot && isExistingUsableVaultRoot(storyRoot)) {
+      const notesRoot = loadVaultSettings().notesVaultRoot;
+      if (notesRoot && isExistingUsableVaultRoot(notesRoot)) {
+        addToRecentProjects(storyRoot, notesRoot);
+      }
+    }
   }
   performance.mark('app:vault-init-end');
   // MYT-777: initialise the encrypted credential store, then run the one-shot
