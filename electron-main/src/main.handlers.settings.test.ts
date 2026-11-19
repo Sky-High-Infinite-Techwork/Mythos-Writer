@@ -56,7 +56,7 @@ describe('main.handlers settings:set', () => {
             kind: before.agents.writingAssistant.provider?.kind ?? 'openai',
             model: before.agents.writingAssistant.provider?.model ?? 'gpt-4o',
             apiKey: before.agents.writingAssistant.provider?.apiKey ?? '',
-            baseUrl: 'http://169.254.169.254/latest/meta-data/wa',
+            baseUrl: 'http://10.0.0.1/harness-ssrf-poison-1907/writing-assistant',
           },
         },
       },
@@ -67,7 +67,7 @@ describe('main.handlers settings:set', () => {
     expect(result.saved).toBe(false);
     expect(result.error).toMatch(/agents\.writingAssistant\.provider\.baseUrl/i);
     const disk = fs.readFileSync(settingsPath, 'utf-8');
-    expect(disk).not.toContain('169.254.169.254');
+    expect(disk).not.toContain('harness-ssrf-poison-1907');
     const after = JSON.parse(disk) as AppSettings;
     expect(after.agents.writingAssistant.provider?.baseUrl ?? priorUrl).toBe(priorUrl);
   });
@@ -82,7 +82,7 @@ describe('main.handlers settings:set', () => {
         kind: 'openai',
         model: 'gpt-4o',
         apiKey: '',
-        baseUrl: 'http://169.254.169.254/latest/meta-data/',
+        baseUrl: 'http://10.0.0.1/harness-ssrf-poison-1907/provider',
       },
     };
     const result = await invoke<{ saved: boolean; error?: string }>(IPC_CHANNELS.SETTINGS_SET, {
@@ -151,7 +151,7 @@ describe('main.handlers settings:set', () => {
             kind: before.agents.archive.provider?.kind ?? 'openai',
             model: before.agents.archive.provider?.model ?? 'gpt-4o',
             apiKey: before.agents.archive.provider?.apiKey ?? '',
-            baseUrl: 'http://169.254.169.254/latest/meta-data/archive',
+            baseUrl: 'http://10.0.0.1/harness-ssrf-poison-1907/archive',
           },
         },
       },
@@ -161,7 +161,7 @@ describe('main.handlers settings:set', () => {
     });
     expect(result.saved).toBe(false);
     expect(result.error).toMatch(/agents\.archive\.provider\.baseUrl/i);
-    expect(fs.readFileSync(settingsPath, 'utf-8')).not.toContain('169.254.169.254');
+    expect(fs.readFileSync(settingsPath, 'utf-8')).not.toContain('harness-ssrf-poison-1907');
   });
 
   it('settings:set persists archive continuity scheduler toggles', async () => {
@@ -227,7 +227,7 @@ describe('main.handlers settings:set', () => {
   it('settings:get masks provider apiKey for renderer', async () => {
     const settingsPath = path.join(bundle.userData, 'app-settings.json');
     const before = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as AppSettings;
-    const rawKey = 'sk-ant-rawkey-should-never-leak-1907';
+    const rawKey = 'test-api-key-placeholder-1907';
     const priorProvider = before.provider ?? { kind: 'openai' as const, apiKey: '' };
     const armed: AppSettings = {
       ...before,
