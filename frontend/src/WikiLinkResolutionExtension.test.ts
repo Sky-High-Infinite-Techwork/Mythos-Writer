@@ -131,6 +131,15 @@ describe('WikiLinkResolutionExtension scene-kind decorations (M16)', () => {
     expect(wikiDecorationBuilds).toBe(before);
   });
 
+  it('decorates a wiki link inserted after load', () => {
+    const editor = makeEditor('Plain.', new Set(['elara voss']));
+    editor.commands.focus('end');
+    editor.commands.insertContent({ type: 'wikiLink', attrs: { target: 'Nobody Here' } });
+    const span = editor.view.dom.querySelector('span[data-wiki-link]');
+    editor.destroy();
+    expect(span?.classList.contains('wiki-link-unresolved')).toBe(true);
+  });
+
   it('still accepts the legacy bare-Set meta shape (back-compat)', () => {
     const editor = makeEditorWithMeta('[[Elara Voss]]', new Set(['elara voss']));
     const span = editor.view.dom.querySelector('span[data-wiki-link]');
