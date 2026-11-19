@@ -369,8 +369,10 @@ test.describe.serial('#1774 Accent breathe', () => {
     expect(gate.passesDropGate).toBe(false);
   });
 
-  test('perf: Accent breathe holds frame rate (ON vs OFF, same run)', async () => {
+  test('perf: Accent breathe holds frame rate (ON vs OFF, same run)', async ({}, testInfo) => {
     test.setTimeout(90_000);
+    const soakRep = testInfo.repeatEachIndex;
+    const soakVariant = process.env.ACCENT_BREATHE_PERF_SOAK ?? 'steady';
     type Metrics = Record<string, number>;
     const client = await page.context().newCDPSession(page);
     await client.send('Performance.enable');
@@ -511,12 +513,21 @@ test.describe.serial('#1774 Accent breathe', () => {
       pair1Fps: { onP95Fps: on1.stats.p95Fps, offP95Fps: off1.stats.p95Fps },
       pair2Fps: { onP95Fps: on2.stats.p95Fps, offP95Fps: off2.stats.p95Fps },
     });
+  const onDrop = `${on1.stats.droppedFramePct.toFixed(1)}/${on2.stats.droppedFramePct.toFixed(1)}`;
+    const offDrop = `${off1.stats.droppedFramePct.toFixed(1)}/${off2.stats.droppedFramePct.toFixed(1)}`;
+    const onFps = `${on1.stats.p95Fps.toFixed(1)}/${on2.stats.p95Fps.toFixed(1)}`;
+    const offFps = `${off1.stats.p95Fps.toFixed(1)}/${off2.stats.p95Fps.toFixed(1)}`;
     // eslint-disable-next-line no-console
     console.log(
       `[perf] accent-breathe ABBA dropΔ worst=${gate.dropDeltaPp.toFixed(2)}pp ` +
         `(onWorst=${gate.onDropWorstPp.toFixed(2)} offBase=${gate.offDropBaselinePp.toFixed(2)}; ` +
         `pair1=${gate.dropPair1Pp.toFixed(2)} pair2=${gate.dropPair2Pp.toFixed(2)}) ` +
         `fpsMargin=${gate.fpsMargin.toFixed(2)} (worstOn=${gate.fpsWorstOnP95.toFixed(2)} bestOff=${gate.fpsBestOffP95.toFixed(2)})`,
+    );
+    // eslint-disable-next-line no-console
+    console.log(
+      `[perf-soak] variant=${soakVariant} rep=${soakRep} dropΔ=${gate.dropDeltaPp.toFixed(2)}pp ` +
+        `ON%=${onDrop} OFF%=${offDrop} ONfps=${onFps} OFFfps=${offFps} pass=${gate.passesDropGate && gate.passesFpsGate}`,
     );
     // A tick costs about one root-token change: no extra whole-tree recalc.
     expect(perChangeRecalcMs).toBeGreaterThan(0);

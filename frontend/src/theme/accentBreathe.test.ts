@@ -316,46 +316,25 @@ describe('driver via applyLiquidNeonV2Tokens', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('a tick cancels only the transitions its own write started', async () => {
+  it('a tick suppresses token-consumer transitions without document.getAnimations()', async () => {
     stubMatchMedia();
     applyLiquidNeonV2Tokens(undefined, COSMIC, el);
-    const target = document.createElement('div');
-    const anim = (transitionProperty?: string) => ({
-      ...(transitionProperty ? { transitionProperty } : {}),
-      effect: { target, pseudoElement: null },
-      cancel: vi.fn(),
-    }) as unknown as Animation;
-    const userOpacity = anim('opacity'); // running (or just flushed) before the tick
-    const userBorder = anim('border-top-color'); // running before; the tick retargets it…
-    const retargeted = anim('border-top-color'); // …so this replacement keeps running
-    const own = anim('box-shadow'); // started by the tick's own color step
-    const keyframes = anim(); // a CSS animation that appeared meanwhile
-    let written = false;
-    const real = el.style.setProperty.bind(el.style);
-    vi.spyOn(el.style, 'setProperty').mockImplementation((k: string, v: string | null, p?: string) => {
-      written = true;
-      real(k, v, p);
-    });
-    const flushes: boolean[] = [];
-    Object.defineProperty(document, 'getAnimations', {
-      configurable: true,
-      value: () => {
-        flushes.push(written);
-        return written ? [userOpacity, retargeted, own, keyframes] : [userOpacity, userBorder];
-      },
-    });
+    const consumer = document.createElement('div');
+    consumer.style.cssText =
+      'border:2px solid var(--b1);box-shadow:0 0 4px var(--g2);transition:all .2s';
+    document.body.appendChild(consumer);
+    void getComputedStyle(consumer).borderColor;
+    const ga = vi.fn(() => [] as Animation[]);
+    Object.defineProperty(document, 'getAnimations', { configurable: true, value: ga });
     try {
       await vi.advanceTimersByTimeAsync(TICK);
-      // One flush before the write (pending user changes start with transitions on), one after.
-      expect(flushes).toEqual([false, true]);
-      expect(own.cancel).toHaveBeenCalledTimes(1);
-      for (const a of [userOpacity, userBorder, retargeted, keyframes]) expect(a.cancel).not.toHaveBeenCalled();
-      // A re-apply (user edit) keeps its normal transitions: no flush, no cancel.
-      flushes.length = 0;
-      applyLiquidNeonV2Tokens(preset('cyber'), COSMIC, el);
-      expect(flushes).toEqual([]);
+      expect(ga).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(TICK * 3);
+      expect(ga).toHaveBeenCalledTimes(4);
+      expect(el.hasAttribute('data-ln-breathe-tick')).toBe(false);
     } finally {
       delete (document as unknown as Record<string, unknown>).getAnimations;
+      consumer.remove();
     }
   });
 

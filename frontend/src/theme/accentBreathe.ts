@@ -5,15 +5,15 @@
 // animation, no transition on the tokens. Phase 0 equals the static engine
 // output, so turning it on is seamless and turning it off restores the theme.
 //
-// Each tick cancels only the CSS transitions its own write started: rendered
-// consumers with `transition: all`/box-shadow/border transitions (7 on a fresh
+// Each tick suppresses descendant transitions only for the synchronous write:
+// rendered consumers with `transition: all`/box-shadow/border (7 on a fresh
 // window, 49 with Settings open) would otherwise restart on every color step
 // and keep repainting (measured: 5–9% dropped frames ON vs 0% OFF under xvfb).
-// `getAnimations()` is filtered to token-consumer transition properties so busy
-// documents (e.g. perf proxy DOM) do not spend two full animation scans per
-// 250 ms tick on unrelated transitions.
-// Transitions already running or pending before the tick (user hover, toggle,
-// panel) are never touched, and no global transition override is used.
+// Steady ticks: one `getAnimations()` flush, then `data-ln-breathe-tick` blocks
+// new consumer transitions for the synchronous write (second full scan removed).
+// If a user transition is already running on a descendant, fall back to the
+// legacy cancel-new-only path (two flushes) so hover/toggle transitions are
+// never snapped. No standing global transition override.
 //
 // Off (static theme, no timer): toggle off, in-app Reduce motion, OS
 // prefers-reduced-motion, prefers-contrast: more, forced-colors, the app's
@@ -176,12 +176,18 @@ function write(c: Controller, t: Record<string, string>): void {
   }
 }
 
-/** True when a transition is on token-driven paint (skip unrelated animations in the tick scan). */
-function isTokenConsumerTransition(a: Animation): boolean {
-  const prop = (a as CSSTransition).transitionProperty;
-  if (typeof prop !== 'string') return false;
-  if (prop === 'all') return true;
-  return /border|box-shadow|color|background|outline|filter/i.test(prop);
+const TICK_ATTR = 'data-ln-breathe-tick';
+const TICK_STYLE_ID = 'ln-breathe-tick-css';
+
+/** One stylesheet; only active while TICK_ATTR is on the theme root during writeTick. */
+function ensureTickSuppressStyle(doc: Document): void {
+  if (doc.getElementById(TICK_STYLE_ID)) return;
+  const css = doc.createElement('style');
+  css.id = TICK_STYLE_ID;
+  css.textContent =
+    'html[' + TICK_ATTR + '] *,html[' + TICK_ATTR + '] *::before,html[' + TICK_ATTR + '] *::after{' +
+    'transition-property:none!important;transition-duration:0s!important;transition-delay:0s!important}';
+  doc.head.appendChild(css);
 }
 
 /** `target|pseudo|property` of a running CSS transition, or null for any other animation. */
@@ -189,27 +195,13 @@ function transitionKey(a: Animation, ids: Map<Element, number>): string | null {
   const prop = (a as CSSTransition).transitionProperty;
   const fx = a.effect as KeyframeEffect | null;
   if (typeof prop !== 'string' || !fx?.target) return null;
-  if (!isTokenConsumerTransition(a)) return null;
   let id = ids.get(fx.target);
   if (id === undefined) ids.set(fx.target, (id = ids.size));
   return id + '|' + (fx.pseudoElement ?? '') + '|' + prop;
 }
 
-/**
- * A tick's write, then cancel the transitions that write started. The first
- * getAnimations() flushes any pending (user) style change with transitions on
- * and records what is already running; the second flushes the token write.
- * A new transition is the tick's own unless it replaced one that was already
- * running on the same property (a retargeted user transition keeps running).
- * One style recalc per tick, no global transition override.
- */
-function writeTick(c: Controller, t: Record<string, string>): void {
-  if (!ACCENT_BREATHE_KEYS.some((k) => t[k] !== undefined && t[k] !== c.last[k])) return;
-  const doc = c.el.ownerDocument;
-  if (typeof doc.getAnimations !== 'function') {
-    write(c, t);
-    return;
-  }
+/** Legacy #1774 cancel: two flushes; used when user transitions are already running. */
+function writeTickCancelNew(c: Controller, t: Record<string, string>, doc: Document): void {
   const ids = new Map<Element, number>();
   const before = new Set<Animation>();
   const busy = new Set<string>();
@@ -224,6 +216,35 @@ function writeTick(c: Controller, t: Record<string, string>): void {
     const key = transitionKey(a, ids);
     if (key && !busy.has(key)) a.cancel();
   }
+}
+
+/**
+ * Steady breathe: one flush, suppress transitions for the synchronous write, no
+ * second document scan. When user transitions are already running (hover/toggle),
+ * fall back to the legacy cancel-new-only path so we never snap them.
+ */
+function writeTick(c: Controller, t: Record<string, string>): void {
+  if (!ACCENT_BREATHE_KEYS.some((k) => t[k] !== undefined && t[k] !== c.last[k])) return;
+  const doc = c.el.ownerDocument;
+  if (typeof doc.getAnimations !== 'function') {
+    write(c, t);
+    return;
+  }
+  const runningBefore = doc.getAnimations();
+  const userTransitionActive = runningBefore.some((a) => {
+    const target = (a.effect as KeyframeEffect | null)?.target;
+    return target instanceof Element && target !== c.el;
+  });
+  if (userTransitionActive) {
+    writeTickCancelNew(c, t, doc);
+    return;
+  }
+  void runningBefore; // flush pending style changes before suppress
+  ensureTickSuppressStyle(doc);
+  c.el.setAttribute(TICK_ATTR, '');
+  write(c, t);
+  void getComputedStyle(c.el).getPropertyValue('--b1');
+  c.el.removeAttribute(TICK_ATTR);
 }
 
 function clearTimer(c: Controller): void {
