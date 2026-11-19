@@ -1251,15 +1251,14 @@ const notesRootForStoryVault = (storyVaultRoot: string): string | null => {
 };
 const getNotesVaultRoot = (): string => {
   const storyRoot = getVaultRoot();
-  if (!storyRoot) {
-    const fromSettings = loadVaultSettings().notesVaultRoot;
-    if (fromSettings && isExistingUsableVaultRoot(fromSettings)) return fromSettings;
-    return defaultNotesVaultRoot();
-  }
-  const structural = notesRootForStoryVault(storyRoot);
-  if (structural && isExistingUsableVaultRoot(structural)) return structural;
   const fromSettings = loadVaultSettings().notesVaultRoot;
-  if (fromSettings && isExistingUsableVaultRoot(fromSettings)) return fromSettings;
+  if (storyRoot && isExistingUsableVaultRoot(storyRoot)) {
+    const structural = notesRootForStoryVault(storyRoot);
+    if (structural && isExistingUsableVaultRoot(structural)) return structural;
+  }
+  if (fromSettings !== undefined && fromSettings !== '') {
+    return fromSettings;
+  }
   return defaultNotesVaultRoot();
 };
 // SKY-10952: Agent Vault lives as a sibling inside a v2 MythosVault root.
@@ -1667,6 +1666,14 @@ function ensureNotesVaultDir() {
   }
   const storyRoot = getVaultRoot();
   if (!storyRoot || !isExistingUsableVaultRoot(storyRoot)) {
+    return;
+  }
+  const configuredNotes = loadVaultSettings().notesVaultRoot;
+  if (
+    configuredNotes !== undefined
+    && configuredNotes !== ''
+    && !isExistingUsableVaultRoot(configuredNotes)
+  ) {
     return;
   }
   // M5: the Notes Vault half of a MythosVault v2 never receives the SKY-15

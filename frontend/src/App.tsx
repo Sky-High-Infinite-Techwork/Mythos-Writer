@@ -51,6 +51,7 @@ function App() {
 
       try {
         const vaults = await window.api.vaultGetPaths();
+        const activeRoot = await window.api.getVaultRoot?.().catch(() => ({ vaultRoot: null as string | null }));
         const [storyResult, notesResult] = await Promise.all([
           window.api.validatePath(vaults.storyVaultPath).catch(() => ({ valid: false })),
           window.api.validatePath(vaults.notesVaultPath).catch(() => ({ valid: false })),
@@ -59,10 +60,22 @@ function App() {
         const notesValid = isVaultPathValid(notesResult);
 
         if (!storyValid && !notesValid) {
+          // F3#9 / no-vault: Skip or cleared vaultRoot — land on the shell, not
+          // VaultNotFoundScreen (Probe #33). A configured root that is missing
+          // on disk also surfaces as null from vault:get-root.
+          if (!activeRoot?.vaultRoot) {
+            setView({ kind: 'shell', settings: nextSettings });
+            return;
+          }
           setView({ kind: 'missing-vault', settings: nextSettings, vaultPath: vaults.storyVaultPath });
           return;
         }
       } catch {
+        const activeRoot = await window.api.getVaultRoot?.().catch(() => ({ vaultRoot: null as string | null }));
+        if (!activeRoot?.vaultRoot) {
+          setView({ kind: 'shell', settings: nextSettings });
+          return;
+        }
         setView({ kind: 'missing-vault', settings: nextSettings });
         return;
       }

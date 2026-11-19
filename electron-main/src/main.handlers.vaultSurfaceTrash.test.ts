@@ -283,10 +283,15 @@ describe('no configured vault — IPC must not scaffold defaults', () => {
   it('session lock and manifest read stay no-ops without mkdir on default paths', async () => {
     const phantomStory = path.join(paths.userData, 'vaults/Mythos Vault/Story Vault');
     expect(fs.existsSync(phantomStory)).toBe(false);
-    const sessionLock = handlers[IPC_CHANNELS.VAULT_CHECK_SESSION_LOCK] as () => Promise<{ lockfileConflict: unknown }>;
+    const sessionLock = handlers[IPC_CHANNELS.VAULT_CHECK_SESSION_LOCK] as unknown as () => Promise<{
+      lockfileConflict: unknown;
+    }>;
     await sessionLock();
     expect(fs.existsSync(phantomStory)).toBe(false);
-    const readManifest = handlers[IPC_CHANNELS.VAULT_MANIFEST_READ] as () => { stories: unknown[]; vaultRoot: string };
+    const readManifest = handlers[IPC_CHANNELS.VAULT_MANIFEST_READ] as unknown as () => {
+      stories: unknown[];
+      vaultRoot: string;
+    };
     const manifest = readManifest();
     expect(Array.isArray(manifest.stories)).toBe(true);
     expect(fs.existsSync(phantomStory)).toBe(false);
