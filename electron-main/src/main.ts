@@ -2320,10 +2320,13 @@ export const handlers: IpcHandlers = {
     return deleteVaultFile(getVaultRoot(), payload.path);
   },
   [IPC_CHANNELS.VAULT_MANIFEST_READ]: () => {
+    const vaultRoot = getVaultRoot();
+    if (!vaultRoot || !isExistingUsableVaultRoot(vaultRoot)) {
+      return { ...defaultManifest(''), vaultRoot: vaultRoot ?? '' };
+    }
     ensureVaultDir();
     // Reindex on open so direct markdown edits sync back.
     // Warm-start: load the per-vault mtime+size cache to skip unchanged files.
-    const vaultRoot = getVaultRoot();
     const manifest = readManifest(getManifestPath());
     const cacheDir = getVaultIndexCacheDir();
     const cache = loadVaultIndexCache(cacheDir, vaultRoot, app.getVersion(), SCHEMA_VERSION);
@@ -8677,6 +8680,9 @@ export const handlers: IpcHandlers = {
 
   [IPC_CHANNELS.VAULT_CHECK_SESSION_LOCK]: async (): Promise<import('./ipc.js').VaultCheckSessionLockResponse> => {
     const vaultRoot = getVaultRoot();
+    if (!vaultRoot || !isExistingUsableVaultRoot(vaultRoot)) {
+      return { lockfileConflict: null, dismissed: false };
+    }
     const ts = () => new Date().toISOString();
 
     // SKY-1128: acquireLockfile is atomic (O_CREAT|O_EXCL / 'ax'). It returns

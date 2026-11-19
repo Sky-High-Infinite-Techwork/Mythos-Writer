@@ -65,7 +65,7 @@ export function formatCompactCount(n: number, locale?: string): string {
 }
 
 function splitCountText(pane1: number, pane2: number): string {
-  return `Pane 1: ${pane1.toLocaleString()} words · Pane 2: ${pane2.toLocaleString()} words`;
+  return `Pane 1: ${(pane1 ?? 0).toLocaleString()} words · Pane 2: ${(pane2 ?? 0).toLocaleString()} words`;
 }
 
 export default function BottomBar({
@@ -153,8 +153,8 @@ export default function BottomBar({
   const goalMet = showGoalChip && goalStats!.dailyGoal > 0 && goalStats!.todayWords >= goalStats!.dailyGoal;
   const goalAriaLabel = goalStats !== null
     ? goalStats.dailyGoal > 0
-      ? `Today: ${goalStats.todayWords.toLocaleString()} words / ${goalStats.dailyGoal.toLocaleString()} word goal`
-      : `Today: ${goalStats.todayWords.toLocaleString()} words`
+      ? `Today: ${(goalStats.todayWords ?? 0).toLocaleString()} words / ${(goalStats.dailyGoal ?? 0).toLocaleString()} word goal`
+      : `Today: ${(goalStats.todayWords ?? 0).toLocaleString()} words`
     : undefined;
 
   const sceneTitleText = selectedScene
@@ -230,10 +230,10 @@ export default function BottomBar({
             <span className="bottom-status-fallback bottom-status-fallback--title">{sceneTitleText}</span>
             <span className="bottom-stats" data-testid="bottom-live-stats">
               <span className="bottom-stats-lead" data-testid="bottom-stats-lead">
-                {wordCount.toLocaleString()} words
+                {(wordCount ?? 0).toLocaleString()} words
               </span>
               <span className="bottom-stats-chars" data-testid="bottom-stats-chars">
-                {' · '}{charCount.toLocaleString()} characters
+                {' · '}{(charCount ?? 0).toLocaleString()} characters
               </span>
               <span className="bottom-stats-tail">
                 {' · '}{readTime}
@@ -249,7 +249,7 @@ export default function BottomBar({
               </span>
             </span>
             <span className="bottom-status-fallback bottom-status-fallback--chars">
-              {charCount.toLocaleString()} characters
+              {(charCount ?? 0).toLocaleString()} characters
             </span>
             <span className="bottom-status-fallback bottom-status-fallback--tail">{tailText}</span>
           </>
@@ -281,8 +281,8 @@ export default function BottomBar({
           data-testid="bottom-daily-goal"
         >
           {goalStats!.dailyGoal > 0
-            ? `${goalStats!.todayWords.toLocaleString()} / ${goalStats!.dailyGoal.toLocaleString()} today`
-            : `${goalStats!.todayWords.toLocaleString()} today`}
+            ? `${(goalStats!.todayWords ?? 0).toLocaleString()} / ${(goalStats!.dailyGoal ?? 0).toLocaleString()} today`
+            : `${(goalStats!.todayWords ?? 0).toLocaleString()} today`}
         </span>
       )}
       {showGoalChip && goalAriaLabel && (

@@ -265,3 +265,32 @@ describe('handlers[VAULT_SURFACE_TRASH] — active vault fallout', () => {
     expect(readVaultSettings().notesVaultRoot).toBe(a.notes);
   });
 });
+
+describe('no configured vault — IPC must not scaffold defaults', () => {
+  let tmpRoot: string;
+
+  beforeEach(() => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-no-vault-ipc-'));
+    paths.userData = path.join(tmpRoot, 'userData');
+    fs.mkdirSync(paths.userData, { recursive: true });
+    fs.writeFileSync(path.join(paths.userData, 'app-settings.json'), JSON.stringify({ onboardingComplete: false }));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it('session lock and manifest read stay no-ops without mkdir on default paths', async () => {
+    const phantomStory = path.join(paths.userData, 'vaults/Mythos Vault/Story Vault');
+    expect(fs.existsSync(phantomStory)).toBe(false);
+    const sessionLock = handlers[IPC_CHANNELS.VAULT_CHECK_SESSION_LOCK] as () => Promise<{ lockfileConflict: unknown }>;
+    await sessionLock();
+    expect(fs.existsSync(phantomStory)).toBe(false);
+    const readManifest = handlers[IPC_CHANNELS.VAULT_MANIFEST_READ] as () => { stories: unknown[]; vaultRoot: string };
+    const manifest = readManifest();
+    expect(Array.isArray(manifest.stories)).toBe(true);
+    expect(fs.existsSync(phantomStory)).toBe(false);
+    const getRoot = handlers[IPC_CHANNELS.VAULT_GET_ROOT] as () => { vaultRoot: string | null };
+    expect(getRoot().vaultRoot).toBeNull();
+  });
+});
