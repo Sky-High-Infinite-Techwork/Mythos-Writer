@@ -389,9 +389,9 @@ test.describe.serial('#1774 Accent breathe', () => {
         .__mwAccentBreatheTickStats;
       return s ? { ...s } : { suppress: 0, cancelNew: 0, plain: 0 };
     });
-    const measure = async () => {
+    const measure = async (settleMs = 400) => {
       // Let toggle/proxy style changes finish so the 4 s window measures steady ON/OFF breathe.
-      await page.waitForTimeout(400);
+      await page.waitForTimeout(settleMs);
       await resetTickStats();
       const before = await metrics();
       const sampler = distinctB1Over(page, 4000, 100);
@@ -455,7 +455,7 @@ test.describe.serial('#1774 Accent breathe', () => {
     await closeSettings(page);
     await expect.poll(() => readState(page), { timeout: 3_000 }).toBe('running');
     await addProxy();
-    const on1 = await measure();
+    const on1 = await measure(1000);
     await removeProxy();
 
     await toggleBreathe(false);
@@ -469,7 +469,7 @@ test.describe.serial('#1774 Accent breathe', () => {
 
     await toggleBreathe(true);
     await addProxy();
-    const on2 = await measure();
+    const on2 = await measure(1000);
     await removeProxy();
     await toggleBreathe(false);
     await addProxy();
