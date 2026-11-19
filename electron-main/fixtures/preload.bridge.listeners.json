@@ -16,7 +16,9 @@
     "kind": "entries",
     "ipcPayload": [
       {
-        "bridge": true
+        "id": "bridge-id",
+        "agent": "bridge-sample",
+        "status": "running"
       }
     ]
   },
@@ -107,8 +109,9 @@
   "api.onNotesBoardWriteRefused": {
     "kind": "info",
     "ipcPayload": {
-      "reason": "lc",
-      "itemPath": "/tmp/bridge-sample"
+      "folderRelPath": "/tmp/bridge-sample",
+      "code": "lc",
+      "message": "lc-msg"
     }
   },
   "api.onNotesVaultRegistryChanged": {

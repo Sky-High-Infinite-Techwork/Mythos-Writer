@@ -466,6 +466,20 @@ function assertNoRawIpcSurface(value: unknown, pathKey: string, ipcRendererRef: 
   }
 }
 
+/** Only channels whose preload handler forwards an array to the user callback. */
+const LISTENER_ENTRIES_CHANNELS = new Set(['ai-activity:update']);
+
+const LISTENER_ENTRIES_BY_CHANNEL: Record<string, unknown[]> = {
+  'ai-activity:update': [{ id: SAMPLE.id, agent: SAMPLE.str, status: 'running' }],
+};
+
+/** Only channels whose preload handler is `cb(info)` with the board write-refused shape. */
+const LISTENER_INFO_CHANNELS = new Set(['notesBoard:writeRefused']);
+
+const LISTENER_INFO_BY_CHANNEL: Record<string, { folderRelPath: string; code: string; message: string }> = {
+  'notesBoard:writeRefused': { folderRelPath: SAMPLE.path, code: 'lc', message: 'lc-msg' },
+};
+
 const LISTENER_KIND_PROBE_ORDER: ListenerKind[] = [
   'noArg',
   'chunk',
@@ -473,9 +487,9 @@ const LISTENER_KIND_PROBE_ORDER: ListenerKind[] = [
   'text',
   'panelId',
   'storySlug',
-  'entries',
-  'info',
   'passthrough',
+  'info',
+  'entries',
 ];
 
 function listenerProbeMatchesKind(
@@ -494,6 +508,10 @@ function probeListenerKindForRecord(
   row: ExposedRow,
 ): ListenerKind {
   for (const kind of LISTENER_KIND_PROBE_ORDER) {
+    if (kind === 'entries' && !LISTENER_ENTRIES_CHANNELS.has(row.channel)) continue;
+    if (kind === 'info' && !LISTENER_INFO_CHANNELS.has(row.channel)) continue;
+    if (kind === 'passthrough' && LISTENER_ENTRIES_CHANNELS.has(row.channel)) continue;
+    if (kind === 'passthrough' && LISTENER_INFO_CHANNELS.has(row.channel)) continue;
     const ipcPayload = defaultIpcPayloadForListener(row, kind);
     const fixture: ListenerFixtureRow =
       ipcPayload === undefined ? { kind } : { kind, ipcPayload };
@@ -502,7 +520,11 @@ function probeListenerKindForRecord(
     bridgeFn(probeCb);
     const handler = onMock.mock.calls[0]?.[1] as ((...args: unknown[]) => void) | undefined;
     if (!handler) continue;
-    handler(...ipcInvokeArgsForListenerRow(fixture));
+    try {
+      handler(...ipcInvokeArgsForListenerRow(fixture));
+    } catch {
+      continue;
+    }
     if (listenerProbeMatchesKind(probeCb, fixture)) return kind;
   }
   throw new Error(`Could not probe listener callback shape for ${callKey(row)}`);
@@ -515,8 +537,12 @@ function defaultIpcPayloadForListener(row: ExposedRow, kind: ListenerKind): unkn
   if (kind === 'text') return { text: 'lc-text' };
   if (kind === 'panelId') return { panelId: SAMPLE.id };
   if (kind === 'storySlug') return { storySlug: 'lc-slug' };
-  if (kind === 'entries') return [SAMPLE.obj];
-  if (kind === 'info') return { reason: 'lc', itemPath: SAMPLE.path };
+  if (kind === 'entries') {
+    return LISTENER_ENTRIES_BY_CHANNEL[row.channel] ?? [{ id: SAMPLE.id, agent: SAMPLE.str, status: 'running' }];
+  }
+  if (kind === 'info') {
+    return LISTENER_INFO_BY_CHANNEL[row.channel] ?? { folderRelPath: SAMPLE.path, code: 'lc', message: 'lc-msg' };
+  }
   return LISTENER_PASSTHROUGH_BY_CHANNEL[row.channel] ?? LISTENER_SHARED_PASSTHROUGH;
 }
 
@@ -799,6 +825,19 @@ async function writeBridgeRecordedFixtureToDisk(
 }
 
 describe('preload bridge recorder proofs', () => {
+  it('listener fixture record matches committed JSON', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-bridge-listener-record-'));
+    const outPath = path.join(tmpDir, path.basename(BRIDGE_LISTENERS_PATH));
+    try {
+      await writeBridgeListenerFixtureToDisk(outPath);
+      const recorded = fs.readFileSync(outPath, 'utf8');
+      const committed = fs.readFileSync(BRIDGE_LISTENERS_PATH, 'utf8');
+      expect(recorded).toBe(committed);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('recorded invoke fixture is idempotent (back-to-back record)', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-bridge-record-'));
     const outPath = path.join(tmpDir, path.basename(BRIDGE_RECORDED_PATH));
