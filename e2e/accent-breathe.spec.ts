@@ -348,8 +348,14 @@ test.describe.serial('#1774 Accent breathe', () => {
   });
 
   test('perf: Accent breathe holds frame rate (ON vs OFF, same run)', async () => {
-    test.setTimeout(90_000);
+    const soakRuns = Math.max(1, Number(process.env.MYTHOS_ACCENT_PERF_SOAK ?? '1'));
+    test.setTimeout(90_000 * soakRuns);
     type Metrics = Record<string, number>;
+    for (let soak = 0; soak < soakRuns; soak++) {
+      if (soakRuns > 1) {
+        // eslint-disable-next-line no-console
+        console.log(`[perf] accent-breathe soak ${soak + 1}/${soakRuns}`);
+      }
     const client = await page.context().newCDPSession(page);
     await client.send('Performance.enable');
     const metrics = async (): Promise<Metrics> => {
@@ -499,13 +505,12 @@ test.describe.serial('#1774 Accent breathe', () => {
     expect(perChangeRecalcMs).toBeGreaterThan(0);
     expect(perTickRecalcMs).toBeLessThanOrEqual(perChangeRecalcMs * PER_TICK_RECALC_RATIO_MAX);
 
-    // Repeat-each: leave breathe on and strip probe/proxy so the next iteration
-    // matches the steady-state entry (fresh profile already warmed the driver).
     await toggleBreathe(true);
     await page.evaluate(() => {
       document.documentElement.style.removeProperty('--breathe-perf-probe');
     });
     await removeProxy();
     await closeSettings(page);
+    }
   });
 });
