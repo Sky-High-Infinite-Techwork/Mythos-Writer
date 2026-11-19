@@ -45,19 +45,19 @@ const BOX_CAPS_MS = {
 
 type PerfMetric = keyof typeof BOX_CAPS_MS;
 
-/** Report mode while the frame-accurate waits are re-baselined. */
-const ENFORCE_BUDGETS = false;
+/** Frame-accurate re-baseline: 20 repeats, nearest-rank p95, capped at the box. */
+const ENFORCE_BUDGETS = true;
 
 const BUDGETS_MS: { [K in PerfMetric]: number } = {
-  launch_empty_to_story_tree_ms: 2_682,
-  launch_300_to_story_tree_ms: 3_550,
-  open_big_scene_500kb_ms: 5_500,
-  switch_timeline_ms: 286,
-  switch_mythos_ms: 298,
-  switch_notes_editor_ms: 4_500,
-  export_docx_301_ms: 1_418,
-  export_epub_301_ms: 800,
-  export_pdf_301_ms: 7_482,
+  launch_empty_to_story_tree_ms: 1_860,
+  launch_300_to_story_tree_ms: 2_334,
+  open_big_scene_500kb_ms: 5_472,
+  switch_timeline_ms: 158,
+  switch_mythos_ms: 198,
+  switch_notes_editor_ms: 4_334,
+  export_docx_301_ms: 876,
+  export_epub_301_ms: 730,
+  export_pdf_301_ms: 4_234,
 };
 
 const METRICS = Object.keys(BOX_CAPS_MS) as PerfMetric[];
