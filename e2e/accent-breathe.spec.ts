@@ -348,14 +348,8 @@ test.describe.serial('#1774 Accent breathe', () => {
   });
 
   test('perf: Accent breathe holds frame rate (ON vs OFF, same run)', async () => {
-    const soakRuns = Math.max(1, Number(process.env.MYTHOS_ACCENT_PERF_SOAK ?? '1'));
-    test.setTimeout(90_000 * soakRuns);
+    test.setTimeout(90_000);
     type Metrics = Record<string, number>;
-    for (let soak = 0; soak < soakRuns; soak++) {
-      if (soakRuns > 1) {
-        // eslint-disable-next-line no-console
-        console.log(`[perf] accent-breathe soak ${soak + 1}/${soakRuns}`);
-      }
     const client = await page.context().newCDPSession(page);
     await client.send('Performance.enable');
     const metrics = async (): Promise<Metrics> => {
@@ -511,6 +505,5 @@ test.describe.serial('#1774 Accent breathe', () => {
     });
     await removeProxy();
     await closeSettings(page);
-    }
   });
 });
