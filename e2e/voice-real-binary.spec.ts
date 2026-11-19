@@ -227,11 +227,11 @@ test.describe('SKY-3191 — real whisper.cpp/Piper spawn through the running app
   let page: Page;
 
   test.beforeAll(async () => {
-    expect(
-      HOST_FIXTURES,
+    test.skip(
+      !HOST_FIXTURES,
       `no published whisper.cpp/Piper fixture binaries for ${HOST_KEY} — ` +
         'whisper.cpp v1.9.1 ships CLI builds for linux x64/arm64 (and Windows) only',
-    ).toBeTruthy();
+    );
     test.setTimeout(180_000);
     const fixtures = await ensureVoiceFixtures();
 

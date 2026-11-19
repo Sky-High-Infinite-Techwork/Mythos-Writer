@@ -182,6 +182,8 @@ test('TC-E-01: create entity (character) via Entity Browser', async () => {
 // entity after creation has no UI path until Entity Browser relocation
 // lands (M5.5 — see plans/fidelity-rebuild/PLAN.md §4, "Entity Browser
 // lives on per M5.5"). Tracked as a deferred product gap, not an M6 bug.
+test.skip('TC-E-02: add alias to entity via EntityDetail panel — product gap, no UI path opens EntityDetail until M5.5 lands', () => {});
+
 // ─── TC-E-03: Reference entity in prose editor via wiki-link ──────────────────
 
 test('TC-E-03: reference entity in prose editor via wiki-link syntax', async () => {

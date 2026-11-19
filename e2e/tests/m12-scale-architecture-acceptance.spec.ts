@@ -22,14 +22,14 @@ import { measureKeystrokeToPaint } from '../perf/ui-runtime/keystrokePaint';
  * disk -> back. Written from the epic's locked spec + each slice's
  * acceptance criteria only, NOT from any implementation. Neither M12.1 nor
  * M12.2 has landed a PR as of this run (no job/queue infra, no fact-ledger
- * table exist in the repo yet), so every case below was a named pending test
+ * table exist in the repo yet), so every case below is a named `test.fixme`
  * skeleton. Finalize the real interaction (launch app, drive UI, assert on
  * disk/IPC state) the moment the relevant slice's PR merges.
  *
  * Do not patch product code from this file. Route failures to the owning
  * slice's builder and report on the epic (SKY-10729), never self-fix here.
  * Un-skip owner: whoever merges M12.1 (SKY-10730) / M12.2 (SKY-10731) —
- * flip the matching pending case to a real interaction in that same PR's
+ * flip the matching `test.fixme` to a real interaction in that same PR's
  * verification pass, or file a fast-follow if the merging engineer can't.
  *
  * SKY-10768 (M12.1 re-issue, AC4/AC5) un-skipped the first M12.1 case below
@@ -122,6 +122,15 @@ test.describe('M12.1 — background job/queue infrastructure (real E2E)', () => 
     }
   });
 
+  test.fixme(
+    'killing the app mid-scan (force quit) and relaunching resumes the job from its last checkpoint, not from scratch',
+    async () => {}
+  );
+
+  test.fixme(
+    'the UI surfaces live progress/ETA for an in-flight background scan',
+    async () => {}
+  );
 });
 
 // M12.2 (SKY-10731) closeout, 2026-08-26: owner ruling SKY-11035 (applied by
