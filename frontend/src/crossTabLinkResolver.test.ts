@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { resolveCrossTabLink, resolveWikiLinkTarget, parseWikiSegments, wikiLinkDisplayText, crossTabLinkMatchKey, buildWikiLinkTitleIndex, isWikiLinkTargetResolved, buildSceneWikiLinkTitleIndex, wikiLinkTargetStem, notePathForUnresolvedLink, buildUnresolvedLinkNote } from './crossTabLinkResolver';
+import { resolveCrossTabLink, resolveWikiLinkTarget, parseWikiSegments, wikiLinkDisplayText, crossTabLinkMatchKey, buildWikiLinkTitleIndex, isWikiLinkTargetResolved, buildSceneWikiLinkTitleIndex, storyLinkTitleSignature, wikiLinkTargetStem, notePathForUnresolvedLink, buildUnresolvedLinkNote } from './crossTabLinkResolver';
 import type { EntityEntry, Story } from './types';
 
 const now = '2026-06-17T00:00:00.000Z';
@@ -340,6 +340,19 @@ describe('buildSceneWikiLinkTitleIndex', () => {
     const index = buildSceneWikiLinkTitleIndex([story()]);
     expect(index.has('chapter one')).toBe(false);
     expect(index.has('test story')).toBe(false);
+  });
+});
+
+describe('storyLinkTitleSignature', () => {
+  it('ignores scene prose and changes when a title changes', () => {
+    const a = story();
+    const b = story();
+    b.chapters[0]!.scenes[0]!.blocks = [{
+      id: 'b', type: 'prose', content: 'a completely different paragraph', order: 0, updatedAt: now,
+    }];
+    expect(storyLinkTitleSignature([b])).toBe(storyLinkTitleSignature([a]));
+    b.chapters[0]!.scenes[0]!.title = 'Renamed Scene';
+    expect(storyLinkTitleSignature([b])).not.toBe(storyLinkTitleSignature([a]));
   });
 });
 

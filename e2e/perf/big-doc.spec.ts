@@ -18,6 +18,7 @@ import { launchApp, firstWindow } from '../helpers/launchApp';
 import {
   BIG_SCENE_TITLE,
   BURST,
+  HEAD,
   SCENE_COUNT,
   STORY_TITLE,
   TAIL,
@@ -51,6 +52,32 @@ const SWITCH_BACK_MS = 2188;
 const BOARDS_MS = 1024;
 
 const TRACE = process.env.BIG_DOC_TRACE === '1';
+/** Log timings and skip budget asserts. Autosave still has to match the file bytes. */
+const REPORT = process.env.BIG_DOC_REPORT === '1';
+const KEYSTROKE_CHARS = 'x'.repeat(20);
+
+function manuscriptBody(bytes: Buffer): string {
+  const text = bytes.toString('utf8');
+  const fence = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/);
+  if (!fence) throw new Error('scene file has no frontmatter');
+  return text.slice(fence[0].length);
+}
+
+/** Typed characters land in the last paragraph, before the body's trailing newline. */
+function bodyWithTyped(body: string, typed: string): string {
+  if (body.endsWith('\n')) return `${body.slice(0, -1)}${typed}\n`;
+  return body + typed;
+}
+
+/**
+ * blocksToMarkdown writes a blank line after the closing frontmatter fence and
+ * another after the block. The prose between those is the saved manuscript.
+ */
+function savedProse(bytes: Buffer): string {
+  const body = manuscriptBody(bytes);
+  if (body.startsWith('\n') && body.endsWith('\n')) return body.slice(1, -1);
+  return body;
+}
 
 function perf(metric: string, ms: number, budget: number): void {
   // eslint-disable-next-line no-console
@@ -113,6 +140,7 @@ test.describe('big scene typing and view switch', () => {
   test('500KB scene stays responsive while typing and switching views', async () => {
     test.setTimeout(360_000);
     const seed: BigDocSeed = seedBigDoc(SCENE_COUNT);
+    const original = fs.readFileSync(seed.scenePath);
     const app = await launchApp(seed.userData);
     try {
       const page = await firstWindow(app);
@@ -124,11 +152,9 @@ test.describe('big scene typing and view switch', () => {
       }));
       // eslint-disable-next-line no-console
       console.log(`[perf] editor paras=${shape.paras} chars=${shape.chars} scenes=${SCENE_COUNT}`);
-      // The open editor is a window at the end of the scene, not all 9,000
-      // paragraphs. The full document stays on disk.
-      expect(shape.paras).toBeGreaterThan(0);
-      expect(shape.paras).toBeLessThan(200);
-      expect(fs.statSync(seed.scenePath).size).toBeGreaterThan(400_000);
+      expect(shape.paras).toBeGreaterThan(1000);
+      expect(shape.chars).toBeGreaterThan(400_000);
+      expect(manuscriptBody(original).startsWith(`${HEAD}\n`)).toBe(true);
 
       if (TRACE) {
         await focusEditorAtEnd(page);
@@ -175,12 +201,14 @@ test.describe('big scene typing and view switch', () => {
       if (TRACE) logLongTasks('burst', burst.top);
       perf('burst_20_ms', burst.result, BURST_MS);
 
+      const typed = KEYSTROKE_CHARS + BURST;
+      const expectedProse = bodyWithTyped(manuscriptBody(original), typed);
       let saved = false;
       try {
-        await expect.poll(() => {
-          const bytes = fs.readFileSync(seed.scenePath);
-          return bytes.includes(Buffer.from(BURST)) && bytes.includes(Buffer.from('Lorem ipsum dolor sit amet'));
-        }, { timeout: 8_000, intervals: [200, 400, 800] }).toBe(true);
+        await expect.poll(() => savedProse(fs.readFileSync(seed.scenePath)) === expectedProse, {
+          timeout: 8_000,
+          intervals: [200, 400, 800],
+        }).toBe(true);
         saved = true;
       } catch {
         saved = false;
@@ -209,12 +237,14 @@ test.describe('big scene typing and view switch', () => {
       perf('switch_boards_ms', boards.result, BOARDS_MS);
 
       expect(keystroke.samples.length).toBeGreaterThanOrEqual(10);
-      expect(keystroke.p95).toBeLessThanOrEqual(KEYSTROKE_P95_MS);
-      expect(burst.result).toBeLessThanOrEqual(BURST_MS);
-      expect(saved, 'autosave wrote the typed characters into the scene file').toBe(true);
-      expect(timeline.result).toBeLessThanOrEqual(TIMELINE_MS);
-      expect(back.result).toBeLessThanOrEqual(SWITCH_BACK_MS);
-      expect(boards.result).toBeLessThanOrEqual(BOARDS_MS);
+      expect(saved, 'autosave kept the original prose and appended the typed characters').toBe(true);
+      if (!REPORT) {
+        expect(keystroke.p95).toBeLessThanOrEqual(KEYSTROKE_P95_MS);
+        expect(burst.result).toBeLessThanOrEqual(BURST_MS);
+        expect(timeline.result).toBeLessThanOrEqual(TIMELINE_MS);
+        expect(back.result).toBeLessThanOrEqual(SWITCH_BACK_MS);
+        expect(boards.result).toBeLessThanOrEqual(BOARDS_MS);
+      }
     } finally {
       await app.close().catch(() => undefined);
       rmBigDoc(seed);

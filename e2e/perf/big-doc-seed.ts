@@ -11,6 +11,7 @@ import path from 'path';
 export const NOW = '2026-07-01T00:00:00.000Z';
 export const STORY_TITLE = 'Audit Perf Story';
 export const BIG_SCENE_TITLE = 'Big Scene';
+export const HEAD = 'HEAD-MARKER-QVX-UNIQUE';
 export const TAIL = 'AUDIT-TAIL-MARKER-ZQX';
 export const BURST = 'abcdefghijklmnopqrst';
 export const SCENE_COUNT = 300;
@@ -94,7 +95,7 @@ export function seedBigDoc(sceneCount = SCENE_COUNT): BigDocSeed {
     ].join('\n'),
   );
 
-  const bigBody = `${prose(BIG_BYTES).replace(/\. /g, '.\n\n')}\n\n${TAIL}\n`;
+  const bigBody = `${HEAD}\n\n${prose(BIG_BYTES).replace(/\. /g, '.\n\n')}\n\n${TAIL}\n`;
   const scenePath = path.join(chapterDir, 'Scene 000.md');
   fs.writeFileSync(
     scenePath,

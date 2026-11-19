@@ -48,24 +48,52 @@ export interface UseRichEditorOptions {
 }
 
 /**
- * Plain-paragraph documents serialize as text separated by a blank line.
- * Returns null when a block isn't a left-aligned paragraph or any inline
- * node carries a mark — the markdown extension owns those.
+ * Same character escapes as prosemirror-markdown `MarkdownSerializerState.esc`,
+ * after tiptap-markdown's `escapeHTML` (`<` / `>`). `startOfLine` matches
+ * `atBlockStart` for a paragraph's text.
+ */
+export function escapeMarkdownText(text: string, startOfLine: boolean): string {
+  const html = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  let out = html.replace(/[`*\\~\[\]_]/g, (m, index: number) => {
+    if (
+      m === '_' &&
+      index > 0 &&
+      index + 1 < html.length &&
+      /\w/.test(html[index - 1] ?? '') &&
+      /\w/.test(html[index + 1] ?? '')
+    ) {
+      return m;
+    }
+    return `\\${m}`;
+  });
+  if (startOfLine) {
+    out = out
+      .replace(/^(\+[ ]|[-*>])/, '\\$&')
+      .replace(/^(\s*)(#{1,6})(\s|$)/, '$1\\$2$3')
+      .replace(/^(\s*\d+)\.\s/, '$1\\. ');
+  }
+  return out;
+}
+
+/**
+ * Plain left-aligned paragraphs, serialized like tiptap-markdown without
+ * walking `atBlank()` over a growing string. Returns null for anything else
+ * (marks, headings, lists, hard breaks, alignment) so the caller uses the
+ * markdown extension.
  *
- * prosemirror-markdown's serializer calls atBlank() on every block, which
- * flattens the growing output string. On a 500KB scene that is thousands of
- * paragraphs, autosave and view-switch flushes spend seconds copying that
- * string. An array join is one pass.
+ * Empty paragraphs do not emit their own blank line: `closeBlock` only
+ * replaces the pending close, and a trailing close is never flushed. A
+ * leading empty paragraph flushes as a single newline.
  */
 export function serializePlainParagraphs(doc: PMNode): string | null {
-  const parts: string[] = [];
+  const paras: Array<{ empty: true } | { empty: false; text: string }> = [];
   for (let i = 0; i < doc.childCount; i++) {
     const node = doc.child(i);
     if (node.type.name !== 'paragraph') return null;
     const align = node.attrs?.textAlign as string | null | undefined;
     if (align && align !== 'left') return null;
     if (node.childCount === 0) {
-      parts.push('');
+      paras.push({ empty: true });
       continue;
     }
     let text = '';
@@ -74,9 +102,27 @@ export function serializePlainParagraphs(doc: PMNode): string | null {
       if (!child.isText || child.marks.length > 0) return null;
       text += child.text ?? '';
     }
-    parts.push(text);
+    paras.push({ empty: false, text });
   }
-  return parts.join('\n\n');
+
+  let out = '';
+  let pendingClose = false;
+  for (const para of paras) {
+    if (para.empty) {
+      pendingClose = true;
+      continue;
+    }
+    if (pendingClose) {
+      const atBlank = out === '' || out.endsWith('\n');
+      if (!atBlank) out += '\n';
+      out += '\n';
+      pendingClose = false;
+    }
+    const lines = para.text.split('\n');
+    out += lines.map((line) => escapeMarkdownText(line, true)).join('\n');
+    pendingClose = true;
+  }
+  return out;
 }
 
 /**

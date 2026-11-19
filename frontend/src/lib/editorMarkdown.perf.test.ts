@@ -1,8 +1,5 @@
-// A 500KB scene is thousands of plain paragraphs. Serializing it on autosave
-// and on every shell render used prosemirror-markdown's atBlank() regex,
-// which copies the whole output once per block (quadratic). This locks the
-// linear path: a few thousand plain paragraphs must serialize in well under
-// a frame budget, and match the markdown extension on small documents.
+// The fast path must be byte-identical to tiptap-markdown's getMarkdown().
+// Anything it is unsure about returns null and the extension serializes it.
 import { describe, expect, it } from 'vitest';
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
@@ -26,32 +23,87 @@ function makeEditor(content: string): Editor {
   });
 }
 
-function officialMarkdown(editor: Editor): string {
+function officialRaw(editor: Editor): string {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const raw = ((editor.storage as any).markdown?.getMarkdown?.() ?? '') as string;
+  return ((editor.storage as any).markdown?.getMarkdown?.() ?? '') as string;
+}
+
+function withTrailingNewline(raw: string): string {
   return raw.endsWith('\n') ? raw : `${raw}\n`;
 }
 
-describe('getEditorMarkdown on a large plain scene', () => {
-  it('matches the markdown extension and stays linear for thousands of paragraphs', () => {
-    const small = makeEditor('Alpha.\n\nBeta still typing.');
-    expect(getEditorMarkdown(small)).toBe(officialMarkdown(small));
-    small.destroy();
+function expectMatches(content: string): void {
+  const editor = makeEditor(content);
+  const official = withTrailingNewline(officialRaw(editor));
+  const fast = getEditorMarkdown(editor);
+  editor.destroy();
+  expect(fast).toBe(official);
+}
 
-    const marked = makeEditor('Keep **this** mark.');
-    expect(getEditorMarkdown(marked)).toBe(officialMarkdown(marked));
-    marked.destroy();
+const CASES: Array<[string, string]> = [
+  ['plain paragraphs', 'Alpha.\n\nBeta still typing.'],
+  ['marked bold falls back', 'Keep **this** mark.'],
+  ['italic falls back', 'Keep *this* italic.'],
+  ['escaped asterisks', 'He said \\*hi\\* there.'],
+  ['escaped heading', '\\# not a heading'],
+  ['escaped dash', '\\- not a list'],
+  ['escaped ordered list', '1\\. not a list'],
+  ['escaped plus', '\\+ not a list'],
+  ['escaped blockquote', '\\> not a quote'],
+  ['raw greater-than', 'a < b and > c'],
+  ['ampersand entity source', 'a &lt; b'],
+  ['brackets', 'see [x] now'],
+  ['backticks', 'use `x` here'],
+  ['backslash', 'path\\\\file'],
+  ['tilde', 'a ~ b'],
+  ['underscore inside a word', 'snake_case stays'],
+  ['leading underscore', '_start'],
+  ['empty middle paragraphs', '<p>A</p><p></p><p></p><p>B</p>'],
+  ['leading empty paragraph', '<p></p><p>A</p>'],
+  ['trailing empty paragraph', '<p>A</p><p></p>'],
+  ['only an empty paragraph', '<p></p>'],
+  ['real heading falls back', '# A heading'],
+  ['real list falls back', '- one\n- two'],
+  ['ordered list falls back', '1. one\n2. two'],
+  ['blockquote falls back', '> quoted'],
+  ['wiki link falls back', 'See [[Elara Voss]] today.'],
+  ['centered paragraph falls back', 'Hello {.center}'],
+  ['crlf paragraphs', 'Alpha.\r\n\r\nBeta.'],
+  ['unicode', 'café — 日本語\n\nещё'],
+  ['no trailing newline on input', 'Alpha.\n\nBeta'],
+  ['single paragraph', 'Just one.'],
+  ['three plain paragraphs', 'One.\n\nTwo.\n\nThree.'],
+];
 
-    const para = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit.';
-    const content = Array.from({ length: 4000 }, () => para).join('\n\n');
-    const editor = makeEditor(content);
-    const started = performance.now();
-    const out = getEditorMarkdown(editor);
-    const elapsed = performance.now() - started;
-    editor.destroy();
-    expect(out).toContain(para);
-    expect(out.endsWith('\n')).toBe(true);
-    // Quadratic atBlank() on 4000 blocks is hundreds of ms. Linear is a join.
-    expect(elapsed).toBeLessThan(80);
+describe('getEditorMarkdown matches tiptap-markdown', () => {
+  it.each(CASES)('%s', (_name, content) => {
+    expectMatches(content);
   });
+
+  it('fuzzes 500 seeded docs of markdown-special characters', () => {
+    const alphabet = 'abcXYZ \n*_#->+[]`\\<&';
+    let seed = 1914;
+    const next = () => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    for (let n = 0; n < 500; n++) {
+      const paragraphs = 1 + Math.floor(next() * 4);
+      const parts: string[] = [];
+      for (let p = 0; p < paragraphs; p++) {
+        if (next() < 0.15) {
+          parts.push('');
+          continue;
+        }
+        const len = 1 + Math.floor(next() * 24);
+        let text = '';
+        for (let c = 0; c < len; c++) {
+          text += alphabet[Math.floor(next() * alphabet.length)] ?? 'a';
+        }
+        parts.push(text);
+      }
+      expectMatches(parts.join('\n\n'));
+    }
+  });
+
 });

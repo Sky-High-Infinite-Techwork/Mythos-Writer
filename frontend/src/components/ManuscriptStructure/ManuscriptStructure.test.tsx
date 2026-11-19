@@ -199,6 +199,18 @@ describe('computeSynopsis', () => {
     expect(computeSynopsis(scene)).toBe('A short opening line.');
   });
 
+  it('keeps exactly 14 words and does not add an ellipsis', () => {
+    const words = Array.from({ length: 14 }, (_, i) => `w${i}`).join(' ');
+    expect(computeSynopsis(makeScene({ blocks: [makeBlock(words)] }))).toBe(words);
+  });
+
+  it('drops the 15th word and adds an ellipsis', () => {
+    const head = Array.from({ length: 14 }, (_, i) => `w${i}`).join(' ');
+    const synopsis = computeSynopsis(makeScene({ blocks: [makeBlock(`${head} HUGE`)] }));
+    expect(synopsis).toBe(`${head}…`);
+    expect(synopsis.includes('HUGE')).toBe(false);
+  });
+
   it('truncates to 14 words with an ellipsis', () => {
     const words = Array.from({ length: 20 }, (_, i) => `w${i}`).join(' ');
     const scene = makeScene({ blocks: [makeBlock(words)] });
