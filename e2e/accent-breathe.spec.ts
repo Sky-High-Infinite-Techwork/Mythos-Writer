@@ -84,16 +84,10 @@ function seedUserData(userData: string, vaultDir: string, notesVaultDir: string)
 
 async function launchApp(userData: string): Promise<ElectronApplication> {
   const extraArgs = (process.platform !== 'darwin' && !process.env.DISPLAY) ? ['--headless'] : [];
-  const app = await electron.launch({
+  return electron.launch({
     args: [MAIN_JS, `--user-data-dir=${userData}`, '--no-sandbox', ...extraArgs],
     timeout: 60_000,
   });
-  if (process.env.ACCENT_BREATHE_PERF_SOAK === 'legacy') {
-    await app.evaluateOnNewDocument(() => {
-      document.documentElement?.setAttribute('data-ln-breathe-legacy', '1');
-    });
-  }
-  return app;
 }
 
 async function firstWindow(app: ElectronApplication): Promise<Page> {
@@ -106,6 +100,9 @@ async function firstWindow(app: ElectronApplication): Promise<Page> {
       () => window.dispatchEvent(new PointerEvent('pointermove')), 1000,
     );
   });
+  if (process.env.ACCENT_BREATHE_PERF_SOAK === 'legacy') {
+    await pg.evaluate(() => document.documentElement.setAttribute('data-ln-breathe-legacy', '1'));
+  }
   return pg;
 }
 
@@ -382,7 +379,7 @@ test.describe.serial('#1774 Accent breathe', () => {
     if (soakVariant !== 'steady' && soakRep > 0) {
       await app?.close().catch(() => {});
       for (const dir of [userData, vaultDir, notesVaultDir]) {
-        if (dir) fs.rmSync(dir, { recursive: true, force: true });
+        if (dir) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
       }
       userData = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-breathe-user-'));
       vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-breathe-vault-'));
