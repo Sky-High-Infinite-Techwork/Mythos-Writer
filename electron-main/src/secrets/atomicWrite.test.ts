@@ -38,7 +38,7 @@ describe('atomicWrite', () => {
     const target = path.join(dir, 'secrets.json');
     const a = atomicTempPath(target);
     const b = atomicTempPath(target);
-    expect(a).toMatch(/^.*\/secrets\.json\.\d+-[0-9a-f]{12}\.tmp$/);
+    expect(path.basename(a)).toMatch(/^secrets\.json\.\d+-[0-9a-f]{12}\.tmp$/);
     expect(b).not.toBe(a);
     expect(path.dirname(a)).toBe(dir);
   });
@@ -100,16 +100,17 @@ describe('atomicWrite', () => {
     fs.writeFileSync(shortName, 'tmp', 'utf-8');
     fs.writeFileSync(wrongPattern, 'tmp', 'utf-8');
     fs.writeFileSync(wrongBase, 'tmp', 'utf-8');
-    const subdir = `${target}.${process.pid}-dirnamed.tmp`;
+    const subdir = `${target}.${process.pid}-dddddddddddd.tmp`;
     fs.mkdirSync(subdir);
-    const sym = `${target}.${process.pid}-symlink.tmp`;
-    if (trySymlink(target, sym)) {
-      deleteLeftoverAtomicTemps([target]);
-      expect(fs.existsSync(goodTemp)).toBe(false);
-      expect(fs.existsSync(shortName)).toBe(true);
-      expect(fs.existsSync(wrongPattern)).toBe(true);
-      expect(fs.existsSync(wrongBase)).toBe(true);
-      expect(fs.existsSync(subdir)).toBe(true);
+    const sym = `${target}.${process.pid}-eeeeeeeeeeee.tmp`;
+    const symlinked = trySymlink(target, sym);
+    deleteLeftoverAtomicTemps([target]);
+    expect(fs.existsSync(goodTemp)).toBe(false);
+    expect(fs.existsSync(shortName)).toBe(true);
+    expect(fs.existsSync(wrongPattern)).toBe(true);
+    expect(fs.existsSync(wrongBase)).toBe(true);
+    expect(fs.existsSync(subdir)).toBe(true);
+    if (symlinked) {
       expect(fs.lstatSync(sym).isSymbolicLink()).toBe(true);
     }
   });
