@@ -230,8 +230,8 @@ function writeTick(c: Controller, t: Record<string, string>): void {
     write(c, t);
     return;
   }
-  const runningBefore = doc.getAnimations();
-  const userTransitionActive = runningBefore.some((a) => {
+  const active = doc.getAnimations();
+  const userTransitionActive = active.some((a) => {
     const target = (a.effect as KeyframeEffect | null)?.target;
     return target instanceof Element && target !== c.el;
   });
@@ -239,7 +239,6 @@ function writeTick(c: Controller, t: Record<string, string>): void {
     writeTickCancelNew(c, t, doc);
     return;
   }
-  void runningBefore; // flush pending style changes before suppress
   ensureTickSuppressStyle(doc);
   c.el.setAttribute(TICK_ATTR, '');
   write(c, t);

@@ -370,9 +370,21 @@ test.describe.serial('#1774 Accent breathe', () => {
   });
 
   test('perf: Accent breathe holds frame rate (ON vs OFF, same run)', async ({}, testInfo) => {
-    test.setTimeout(90_000);
     const soakRep = testInfo.repeatEachIndex;
     const soakVariant = process.env.ACCENT_BREATHE_PERF_SOAK ?? 'steady';
+    test.setTimeout(soakVariant !== 'steady' ? 120_000 : 90_000);
+    if (soakVariant !== 'steady' && soakRep > 0) {
+      await app?.close().catch(() => {});
+      for (const dir of [userData, vaultDir, notesVaultDir]) {
+        if (dir) fs.rmSync(dir, { recursive: true, force: true });
+      }
+      userData = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-breathe-user-'));
+      vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-breathe-vault-'));
+      notesVaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-breathe-notes-'));
+      seedUserData(userData, vaultDir, notesVaultDir);
+      app = await launchApp(userData);
+      page = await firstWindow(app);
+    }
     type Metrics = Record<string, number>;
     const client = await page.context().newCDPSession(page);
     await client.send('Performance.enable');
@@ -465,11 +477,33 @@ test.describe.serial('#1774 Accent breathe', () => {
     // change at the tick rate, flushed the way the driver flushes its write.
     await page.evaluate((tickMs) => {
       const w = window as unknown as { __probe?: ReturnType<typeof setInterval> };
+      const styleId = 'ln-breathe-probe-css';
+      if (!document.getElementById(styleId)) {
+        const css = document.createElement('style');
+        css.id = styleId;
+        css.textContent =
+          'html[data-ln-breathe-tick] *,html[data-ln-breathe-tick] *::before,html[data-ln-breathe-tick] *::after{' +
+          'transition-property:none!important;transition-duration:0s!important}';
+        document.head.appendChild(css);
+      }
       let n = 0;
       w.__probe = setInterval(() => {
-        document.getAnimations();
-        document.documentElement.style.setProperty('--breathe-perf-probe', String(++n));
-        document.getAnimations();
+        const root = document.documentElement;
+        const before = document.getAnimations();
+        const userActive = before.some((a) => {
+          const target = (a.effect as KeyframeEffect | null)?.target;
+          return target instanceof Element && target !== root;
+        });
+        if (userActive) {
+          root.setAttribute('data-ln-breathe-probe', 'legacy');
+          root.style.setProperty('--breathe-perf-probe', String(++n));
+          root.removeAttribute('data-ln-breathe-probe');
+          return;
+        }
+        root.setAttribute('data-ln-breathe-tick', '');
+        root.style.setProperty('--breathe-perf-probe', String(++n));
+        void getComputedStyle(root).getPropertyValue('--breathe-perf-probe');
+        root.removeAttribute('data-ln-breathe-tick');
       }, tickMs);
     }, TICK_MS);
     const probe = await measure();
