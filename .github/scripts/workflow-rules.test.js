@@ -334,8 +334,8 @@ test('gate scripts run outside workspace without PR-base bootstrap fallback', ()
   assert.doesNotMatch(text, /_gate-base/);
   assert.doesNotMatch(text, /Install trusted gate scripts/);
   assert.match(text, /mythos-gate-scripts/);
-  assert.match(text, /\$RUNNER_TEMP\/mythos-gate-scripts\/\.github\/scripts\/ci-tier1-gate\.sh/);
-  assert.match(text, /\$RUNNER_TEMP\/mythos-gate-scripts\/\.github\/scripts\/ci-aggregator\.sh/);
+  assert.match(text, /\$GITHUB_WORKSPACE\/mythos-gate-scripts\/\.github\/scripts\/ci-tier1-gate\.sh/);
+  assert.match(text, /\$GITHUB_WORKSPACE\/mythos-gate-scripts\/\.github\/scripts\/ci-aggregator\.sh/);
   assert.match(text, /Stage gate resolver scripts/);
   assert.match(text, /git show "HEAD:\.github\/scripts\//);
   const doc = loadWorkflow('ci.yml');

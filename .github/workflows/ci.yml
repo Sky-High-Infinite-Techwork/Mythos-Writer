@@ -1175,7 +1175,7 @@ jobs:
       - name: Checkout gate scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: ${{ runner.temp }}/mythos-gate-scripts
+          path: mythos-gate-scripts
           persist-credentials: false
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: true
@@ -1189,7 +1189,7 @@ jobs:
             ${{ needs.diff-guard.result }}
             ${{ needs.paths-filter.result }}
             ${{ needs.contracts.result }}
-        run: bash "$RUNNER_TEMP/mythos-gate-scripts/.github/scripts/ci-tier1-gate.sh"
+        run: bash "$GITHUB_WORKSPACE/mythos-gate-scripts/.github/scripts/ci-tier1-gate.sh"
 
   ci:
     # Required check aggregator — always runs (if: always()) so branch protection
@@ -1210,7 +1210,7 @@ jobs:
       - name: Checkout gate scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: ${{ runner.temp }}/mythos-gate-scripts
+          path: mythos-gate-scripts
           persist-credentials: false
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: true
@@ -1228,7 +1228,7 @@ jobs:
           NEEDS_E2E_SHARD_4_RESULT: ${{ needs.e2e-shard-4.result }}
           PATHS_FILTER_RUN_E2E: ${{ needs.paths-filter.outputs.run-e2e }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
-        run: bash "$RUNNER_TEMP/mythos-gate-scripts/.github/scripts/ci-aggregator.sh"
+        run: bash "$GITHUB_WORKSPACE/mythos-gate-scripts/.github/scripts/ci-aggregator.sh"
 
   build-linux:
     # SKY-8081: moved PR guard from step-level to job-level so PRs don't allocate
