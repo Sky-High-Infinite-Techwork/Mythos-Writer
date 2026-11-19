@@ -498,5 +498,14 @@ test.describe.serial('#1774 Accent breathe', () => {
     // A tick costs about one root-token change: no extra whole-tree recalc.
     expect(perChangeRecalcMs).toBeGreaterThan(0);
     expect(perTickRecalcMs).toBeLessThanOrEqual(perChangeRecalcMs * PER_TICK_RECALC_RATIO_MAX);
+
+    // Repeat-each: leave breathe on and strip probe/proxy so the next iteration
+    // matches the steady-state entry (fresh profile already warmed the driver).
+    await toggleBreathe(true);
+    await page.evaluate(() => {
+      document.documentElement.style.removeProperty('--breathe-perf-probe');
+    });
+    await removeProxy();
+    await closeSettings(page);
   });
 });
