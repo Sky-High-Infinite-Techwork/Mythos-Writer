@@ -218,11 +218,7 @@ function writeTickCancelNew(c: Controller, t: Record<string, string>, doc: Docum
   }
 }
 
-/**
- * Steady breathe: one flush, suppress transitions for the synchronous write, no
- * second document scan. When user transitions are already running (hover/toggle),
- * fall back to the legacy cancel-new-only path so we never snap them.
- */
+/** Soak B only: pre-suppress steady path (dual getAnimations every tick). */
 function writeTick(c: Controller, t: Record<string, string>): void {
   if (!ACCENT_BREATHE_KEYS.some((k) => t[k] !== undefined && t[k] !== c.last[k])) return;
   const doc = c.el.ownerDocument;
@@ -230,20 +226,7 @@ function writeTick(c: Controller, t: Record<string, string>): void {
     write(c, t);
     return;
   }
-  const active = doc.getAnimations();
-  const userTransitionActive = active.some((a) => {
-    const target = (a.effect as KeyframeEffect | null)?.target;
-    return target instanceof Element && target !== c.el;
-  });
-  if (userTransitionActive) {
-    writeTickCancelNew(c, t, doc);
-    return;
-  }
-  ensureTickSuppressStyle(doc);
-  c.el.setAttribute(TICK_ATTR, '');
-  write(c, t);
-  void getComputedStyle(c.el).getPropertyValue('--b1');
-  c.el.removeAttribute(TICK_ATTR);
+  writeTickCancelNew(c, t, doc);
 }
 
 function clearTimer(c: Controller): void {
