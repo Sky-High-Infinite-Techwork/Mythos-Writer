@@ -10,6 +10,8 @@
  *
  * Big-doc typing, switch-back to Story Writer, and Boards are slice 11.
  *
+ * The key-actions gate runs from `test:e2e:wallpaper-picker` on shard 4 until it gets its own CI step (a carve-out for Skyy).
+ *
  * Report mode logged `[perf] metric=<name> ms=<n>` for 20 CI runs.
  * Budgets are max(2× CI p95, 1.25× CI max), nearest-rank p95, and never
  * above BOX_CAPS_MS. ENFORCE_BUDGETS fails the test when a sample exceeds
