@@ -12,8 +12,12 @@ import type { Expect } from '@playwright/test';
 
 export const ABBA_DROP_DELTA_MAX_PP = 2;
 export const ABBA_FPS_FLOOR_TOLERANCE = 3;
-/** Either OFF window above this dropped-frame % is a stalled baseline (fail closed). */
-export const ABBA_OFF_DROP_STALL_MAX_PP = ABBA_DROP_DELTA_MAX_PP;
+/**
+ * Either OFF window above this absolute dropped-frame % is a stalled baseline
+ * (fail closed). Higher than the +2pp delta bar so xvfb timing noise (~2.1pp OFF)
+ * does not false-stall; Critic's fail-open case uses ~5–6% OFF.
+ */
+export const ABBA_OFF_DROP_STALL_MAX_PP = 4;
 
 export type AbbaPairDroppedPct = {
   onDroppedPct: number;
