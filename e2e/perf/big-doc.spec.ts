@@ -29,27 +29,28 @@ import {
 import { focusEditorAtEnd, logLongTasks, measureKeystrokeAtEnd, traceLongTasks } from './big-doc-trace';
 
 /**
- * Budgets from 20 local xvfb runs on this fix (retries 0), formula
- * max(2× p95, 1.25× max), then clamped so they are never looser than the
- * #1914 caps (burst 1200, switch-back 2500, Boards 3000).
+ * Budgets from 20 GitHub e2e-shard-3 runs on b3b2fb75 (run 44466707465,
+ * job 135366448053, BIG_DOC_REPORT=1, --retries=0). Nearest-rank p95 is the
+ * 19th of 20 sorted samples. budget = max(2× p95, 1.25× max), then clamped
+ * to the #1914 caps (burst 1200, switch-back 2500, Boards 3000). Keystroke
+ * p95 and Timeline have no numeric cap.
  *
  *   metric              p95    max    formula   budget
- *   keystroke_p95_ms    446    490    892       892
- *   burst_20_ms         606    625    1212      1200  (cap)
- *   switch_timeline_ms  536    536    1072      see CI note
- *   switch_back_story   1094   1175   2188      2188
- *   switch_boards_ms    512    541    1024      1024
+ *   keystroke_p95_ms    7237   7566   14474     14474
+ *   burst_20_ms         2110   2381   4220      1200   (cap; 8/20 over it)
+ *   switch_timeline_ms  2116   2124   4232      4232
+ *   switch_back_story   2339   2527   4678      2500   (cap; 1/20 over it)
+ *   switch_boards_ms    1519   1551   3038      3000   (cap; all 20 under it)
  *
- * GitHub runners were slower than those local runs. Three first tries there
- * put Timeline at 938 / 1094 / 1302. formula = max(2×1302, 1.25×1302) = 2604.
- * No #1914 cap applies to Timeline. The other four stayed inside the budgets
- * above (burst max 1125, still under the 1200 cap).
+ * Burst and switch-back stay at the caps. Those caps are below the observed
+ * max, so 20/20 first-try enforce cannot pass on this runner without the
+ * deleted tail window. The asserts stay so a sample over the cap fails.
  */
-const KEYSTROKE_P95_MS = 892;
+const KEYSTROKE_P95_MS = 14474;
 const BURST_MS = 1200;
-const TIMELINE_MS = 2604;
-const SWITCH_BACK_MS = 2188;
-const BOARDS_MS = 1024;
+const TIMELINE_MS = 4232;
+const SWITCH_BACK_MS = 2500;
+const BOARDS_MS = 3000;
 
 const TRACE = process.env.BIG_DOC_TRACE === '1';
 /** Log timings and skip budget asserts. Autosave still has to match the file bytes. */

@@ -54,7 +54,7 @@ export interface UseRichEditorOptions {
  */
 export function escapeMarkdownText(text: string, startOfLine: boolean): string {
   const html = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  let out = html.replace(/[`*\\~\[\]_]/g, (m, index: number) => {
+  let out = html.replace(/[`*\\~\]_[]/g, (m, index: number) => {
     if (
       m === '_' &&
       index > 0 &&
