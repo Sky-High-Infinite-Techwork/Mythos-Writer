@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useEditor } from '@tiptap/react';
 import type { AnyExtension, Editor, EditorOptions } from '@tiptap/core';
+import type { Node as PMNode } from '@tiptap/pm/model';
 import StarterKit from '@tiptap/starter-kit';
 import { registerActiveEditor, unregisterActiveEditor } from './activeEditorRegistry';
 import TextAlign from '@tiptap/extension-text-align';
@@ -47,6 +48,38 @@ export interface UseRichEditorOptions {
 }
 
 /**
+ * Plain-paragraph documents serialize as text separated by a blank line.
+ * Returns null when a block isn't a left-aligned paragraph or any inline
+ * node carries a mark — the markdown extension owns those.
+ *
+ * prosemirror-markdown's serializer calls atBlank() on every block, which
+ * flattens the growing output string. On a 500KB scene that is thousands of
+ * paragraphs, autosave and view-switch flushes spend seconds copying that
+ * string. An array join is one pass.
+ */
+export function serializePlainParagraphs(doc: PMNode): string | null {
+  const parts: string[] = [];
+  for (let i = 0; i < doc.childCount; i++) {
+    const node = doc.child(i);
+    if (node.type.name !== 'paragraph') return null;
+    const align = node.attrs?.textAlign as string | null | undefined;
+    if (align && align !== 'left') return null;
+    if (node.childCount === 0) {
+      parts.push('');
+      continue;
+    }
+    let text = '';
+    for (let j = 0; j < node.childCount; j++) {
+      const child = node.child(j);
+      if (!child.isText || child.marks.length > 0) return null;
+      text += child.text ?? '';
+    }
+    parts.push(text);
+  }
+  return parts.join('\n\n');
+}
+
+/**
  * Read the current document as Markdown from a Tiptap editor.
  * Always appends a trailing newline for tooling compatibility
  * (tiptap-markdown v0.9 omits the trailing newline).
@@ -58,9 +91,12 @@ export interface UseRichEditorOptions {
  * against. Fall back to an empty doc rather than crashing the render.
  */
 export function getEditorMarkdown(editor: Editor): string {
+  // Destroyed editor: storage.markdown and state are gone (SKY-9404).
+  if (editor.isDestroyed) return '\n';
+  const plain = serializePlainParagraphs(editor.state.doc);
   // tiptap-markdown attaches storage.markdown at runtime — cast is unavoidable
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const raw = ((editor.storage as any).markdown?.getMarkdown?.() ?? '') as string;
+  const raw = plain ?? (((editor.storage as any).markdown?.getMarkdown?.() ?? '') as string);
   return raw.endsWith('\n') ? raw : `${raw}\n`;
 }
 

@@ -7392,7 +7392,9 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
                     onClose: () => setShowSceneHistory(false),
                     sceneId: selectedScene.id,
                     scenePath: selectedScene.path,
-                    currentContent: editorApiRef.current?.getMarkdown() ?? selectedScene.blocks.map(b => b.content).join('\n\n'),
+                    currentContent: showSceneHistory
+                      ? (editorApiRef.current?.getMarkdown() ?? selectedScene.blocks.map(b => b.content).join('\n\n'))
+                      : selectedScene.blocks.map(b => b.content).join('\n\n'),
                     onRestore: handleSceneRestore,
                   } : undefined}
                   sceneEditor={viewDepth === 'scene' ? sceneLiveEditor : null}
