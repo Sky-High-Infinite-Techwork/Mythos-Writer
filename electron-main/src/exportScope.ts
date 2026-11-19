@@ -123,6 +123,9 @@ export function resolveExportScope(
         if (sc) { found = sc; break outer; }
       }
     }
+    if (!found) {
+      found = (manifest.scenes ?? []).find((s: SceneEntry) => s.id === scope.sceneId) ?? null;
+    }
     if (!found) throw new Error(`Scene not found: ${scope.sceneId}`);
     const scene = readProse(found);
     return { title: found.title, chapters: [{ id: found.id, title: found.title, scenes: [scene] }], missingSceneIds: [...missing] };
