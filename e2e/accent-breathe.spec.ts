@@ -350,7 +350,7 @@ test.describe.serial('#1774 Accent breathe', () => {
   test('perf: Accent breathe holds frame rate (ON vs OFF, same run)', async () => {
     test.setTimeout(90_000);
     // --repeat-each soak: each iteration needs a clean Electron + CDP counter
-    // (cumulative runner drift made recalc ratio fail on repeats 4–8 without this).
+    // (cumulative runner drift made recalc ratio fail without this).
     const repeatIndex = test.info().repeatEachIndex;
     if (repeatIndex > 0) {
       await app?.close().catch(() => {});
@@ -448,6 +448,8 @@ test.describe.serial('#1774 Accent breathe', () => {
     await addProxy();
     const on2 = await measure();
     await removeProxy();
+    await toggleBreathe(false);
+    await addProxy();
     // Baseline, still OFF with the proxy: the cost of one root custom-property
     // change at the tick rate, flushed the way the driver flushes its write.
     await page.evaluate((tickMs) => {
