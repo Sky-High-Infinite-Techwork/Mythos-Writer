@@ -23,7 +23,7 @@ import './BlockEditor.css';
 export interface BlockEditorApi {
   jumpToText: (text: string) => void;
   /** Return the editor's current Markdown without waiting for the debounced scene state sync. */
-  getMarkdown: () => string;
+  getMarkdown: () => string | null;
   /** Apply all current auto-linker suggestions as a single undoable transaction. */
   applyAutoLinks: () => void;
   /** Insert plain text at the current cursor position (used by voice transcript). */

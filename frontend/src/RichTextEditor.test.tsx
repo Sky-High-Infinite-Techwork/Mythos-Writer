@@ -134,6 +134,44 @@ describe('RichTextEditor shared extension set', () => {
 // ---------------------------------------------------------------------------
 
 describe('RichTextEditor markdown round-trip', () => {
+  it('leaves the saved scene intact when a heading has no markdown serializer', async () => {
+    vi.useFakeTimers();
+    try {
+      const saved = { text: '# Kept heading\n' };
+      const onChangeMarkdown = vi.fn((markdown: string) => {
+        saved.text = markdown;
+      });
+      let editor: Editor | null = null;
+      const { unmount } = render(
+        <RichTextEditor
+          content="# Kept heading"
+          autofocus={false}
+          showToolbar={false}
+          debounceMs={0}
+          suppressInitialChange
+          onEditorChange={(ed) => { editor = ed; }}
+          onChangeMarkdown={onChangeMarkdown}
+        />,
+      );
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(editor).not.toBeNull();
+      const ed = editor as unknown as Editor;
+      delete (ed.storage as { markdown?: unknown }).markdown;
+      expect(getEditorMarkdown(ed)).toBeNull();
+      act(() => {
+        const end = Math.max(1, ed.state.doc.content.size - 1);
+        ed.view.dispatch(ed.state.tr.insertText('!', end));
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      unmount();
+      expect(onChangeMarkdown).not.toHaveBeenCalledWith('\n');
+      expect(saved.text).toContain('Kept heading');
+      expect(saved.text).not.toBe('\n');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('round-trips marks, wiki-links and headings through getEditorMarkdown', async () => {
     const md = '# Title\n\nSome **bold**, *italic*, and a [[Character: Elara]] link.\n';
     const { editor, unmount } = await mountCore({ content: md });
@@ -142,7 +180,8 @@ describe('RichTextEditor markdown round-trip', () => {
     expect(out).toContain('**bold**');
     expect(out).toContain('*italic*');
     expect(out).toContain('[[Character: Elara]]');
-    expect(out.endsWith('\n')).toBe(true);
+    expect(out).toBeTruthy();
+    expect(out!.endsWith('\n')).toBe(true);
     unmount();
   });
 
@@ -176,7 +215,7 @@ describe('RichTextEditor markdown round-trip', () => {
     expect(saved).toContain('{.right}');
     unmount();
 
-    const { editor: reloaded, unmount: unmountReloaded } = await mountCore({ content: saved });
+    const { editor: reloaded, unmount: unmountReloaded } = await mountCore({ content: saved ?? '' });
     const reloadedJson = reloaded.getJSON();
     expect(reloadedJson.content?.[0]?.attrs?.textAlign).toBe('center');
     expect(reloadedJson.content?.[1]?.attrs?.textAlign).toBe('right');

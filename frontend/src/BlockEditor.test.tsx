@@ -612,7 +612,7 @@ describe('BlockEditor scene backup/restore heading round trip', () => {
       { id: 'prose-1', type: 'prose', content: headingMarkdown, order: 0, updatedAt: '2026-07-02T00:00:00.000Z' },
     ]);
 
-    let editorApi: { getMarkdown: () => string } | undefined;
+    let editorApi: { getMarkdown: () => string | null } | undefined;
     render(
       <BlockEditor
         scene={scene}
@@ -649,7 +649,7 @@ describe('Beta 4 M2 — no in-editor stat row', () => {
       { id: 'prose-1', type: 'prose', content: 'Ten little words march bravely into the cold dark night.', order: 0, updatedAt: '2026-07-02T00:00:00.000Z' },
     ]);
 
-    let editorApi: { getMarkdown: () => string } | undefined;
+    let editorApi: { getMarkdown: () => string | null } | undefined;
     const { container } = render(
       <BlockEditor
         scene={scene}
@@ -698,7 +698,7 @@ describe('BlockEditor heading focus (GH #631)', () => {
   }
 
   async function renderWithFocus() {
-    let editorApi: { getMarkdown: () => string } | undefined;
+    let editorApi: { getMarkdown: () => string | null } | undefined;
     render(
       <BlockEditor
         scene={makeFocusScene()}
@@ -802,7 +802,7 @@ describe('BlockEditor heading focus (GH #631)', () => {
       '',
       'Beta text.',
     ].join('\n');
-    let editorApi: { jumpToText: (text: string) => void; getMarkdown: () => string } | undefined;
+    let editorApi: { jumpToText: (text: string) => void; getMarkdown: () => string | null } | undefined;
     render(
       <BlockEditor
         scene={makeSceneWithBlocks([

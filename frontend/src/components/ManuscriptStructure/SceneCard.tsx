@@ -28,8 +28,19 @@ export function computeSynopsis(scene: Scene): string {
     .sort((a, b) => a.order - b.order)
     .find((b) => b.content.trim());
   if (!first) return '';
-  const words = first.content.trim().split(/\s+/);
-  return words.slice(0, 14).join(' ') + (words.length > 14 ? '…' : '');
+  const trimmed = first.content.trim();
+  const words: string[] = [];
+  const word = /\S+/g;
+  let match: RegExpExecArray | null;
+  let hasMore = false;
+  while ((match = word.exec(trimmed))) {
+    if (words.length === 14) {
+      hasMore = true;
+      break;
+    }
+    words.push(match[0]);
+  }
+  return words.join(' ') + (hasMore ? '…' : '');
 }
 
 /** Scene POV label (prototype card top-right, e.g. "POV Mira"). */

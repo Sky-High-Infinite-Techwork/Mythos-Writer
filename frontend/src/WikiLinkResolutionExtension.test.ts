@@ -9,7 +9,7 @@ import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from 'tiptap-markdown';
 import { WikiLink } from './WikiLinkExtension';
-import { WikiLinkResolutionExtension, WIKI_LINK_RESOLUTION_META, targetStem } from './WikiLinkResolutionExtension';
+import { WikiLinkResolutionExtension, WIKI_LINK_RESOLUTION_META, targetStem, wikiDecorationBuilds } from './WikiLinkResolutionExtension';
 
 function makeEditor(content: string, resolvedTitles: ReadonlySet<string>) {
   const editor = new Editor({
@@ -111,6 +111,52 @@ describe('WikiLinkResolutionExtension scene-kind decorations (M16)', () => {
     editor.destroy();
     expect(span?.classList.contains('wiki-link-unresolved')).toBe(true);
     expect(span?.classList.contains('wiki-link-scene')).toBe(false);
+  });
+
+  it('keeps an unresolved mark when another paragraph is edited', () => {
+    const editor = makeEditor('[[Nobody Here]]\n\nPlain.', new Set(['elara voss']));
+    editor.commands.focus('end');
+    editor.commands.insertContent('x');
+    const span = editor.view.dom.querySelector('span[data-wiki-link]');
+    editor.destroy();
+    expect(span?.classList.contains('wiki-link-unresolved')).toBe(true);
+  });
+
+  it('does not rebuild decorations on a plain keystroke', () => {
+    const editor = makeEditor('[[Nobody Here]]\n\nPlain.', new Set());
+    const before = wikiDecorationBuilds;
+    editor.commands.focus('end');
+    editor.commands.insertContent('x');
+    editor.destroy();
+    expect(wikiDecorationBuilds).toBe(before);
+  });
+
+  it('rebuilds decorations when a wiki link target changes without a text edit', () => {
+    const editor = makeEditor('[[Elara Voss]]', new Set(['elara voss']));
+    expect(editor.view.dom.querySelector('span[data-wiki-link]')?.classList.contains('wiki-link-unresolved')).toBe(false);
+    let pos = -1;
+    editor.state.doc.descendants((node, nodePos) => {
+      if (node.type.name === 'wikiLink') {
+        pos = nodePos;
+        return false;
+      }
+      return true;
+    });
+    expect(pos).toBeGreaterThanOrEqual(0);
+    editor.view.dispatch(editor.state.tr.setNodeAttribute(pos, 'target', 'Nobody Here'));
+    const span = editor.view.dom.querySelector('span[data-wiki-link]');
+    editor.destroy();
+    expect(span?.getAttribute('data-wiki-link')).toBe('Nobody Here');
+    expect(span?.classList.contains('wiki-link-unresolved')).toBe(true);
+  });
+
+  it('decorates a wiki link inserted after load', () => {
+    const editor = makeEditor('Plain.', new Set(['elara voss']));
+    editor.commands.focus('end');
+    editor.commands.insertContent({ type: 'wikiLink', attrs: { target: 'Nobody Here' } });
+    const span = editor.view.dom.querySelector('span[data-wiki-link]');
+    editor.destroy();
+    expect(span?.classList.contains('wiki-link-unresolved')).toBe(true);
   });
 
   it('still accepts the legacy bare-Set meta shape (back-compat)', () => {
