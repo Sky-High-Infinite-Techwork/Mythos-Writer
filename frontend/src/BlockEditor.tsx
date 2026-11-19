@@ -519,8 +519,6 @@ export default function BlockEditor({ scene, onBlocksChange, onDraftStateChange,
     </div>
   );
 
-  const longDoc = scene.blocks.some((block) => block.content.length > 80_000);
-
   return (
     <div className={`block-editor${chromeless ? ' block-editor--chromeless' : ''}`}>
       {/* SKY-10925/SKY-10998: at scene depth (chromeless) the title + draft-state
@@ -572,7 +570,7 @@ export default function BlockEditor({ scene, onBlocksChange, onDraftStateChange,
         wrapRef={editorWrapRef}
         toolbarActions={toolbarActions}
         wrapClassName="tiptap-editor-wrap"
-        contentClassName={longDoc ? 'tiptap-content tiptap-content--long' : 'tiptap-content'}
+        contentClassName="tiptap-content"
         onWrapMouseOver={handleHintMouseOver}
         onWrapMouseLeave={handleHintMouseLeave}
       >

@@ -48,6 +48,24 @@ export interface UseRichEditorOptions {
 }
 
 /**
+ * Characters `escapeMarkdownText` can change: HTML `<`/`>`, the `esc`
+ * set, and the start-of-line markers (`+`, `-`, `#`, digits). Any other
+ * line is already equal to the escaped form, so the regexes can be skipped.
+ */
+const MARKDOWN_ESCAPE_CHARS = new Uint8Array(128);
+for (const ch of '<>`*\\~[]_+-#0123456789') {
+  MARKDOWN_ESCAPE_CHARS[ch.charCodeAt(0)] = 1;
+}
+
+function lineNeedsMarkdownEscape(line: string): boolean {
+  for (let i = 0; i < line.length; i++) {
+    const code = line.charCodeAt(i);
+    if (code < 128 && MARKDOWN_ESCAPE_CHARS[code] === 1) return true;
+  }
+  return false;
+}
+
+/**
  * Same character escapes as prosemirror-markdown `MarkdownSerializerState.esc`,
  * after tiptap-markdown's `escapeHTML` (`<` / `>`). `startOfLine` matches
  * `atBlockStart` for a paragraph's text.
@@ -105,24 +123,33 @@ export function serializePlainParagraphs(doc: PMNode): string | null {
     paras.push({ empty: false, text });
   }
 
-  let out = '';
+  // Track blankness instead of calling endsWith on the growing output.
+  // That call flattens the string once per paragraph.
+  const chunks: string[] = [];
   let pendingClose = false;
+  let atBlank = true;
   for (const para of paras) {
     if (para.empty) {
       pendingClose = true;
       continue;
     }
     if (pendingClose) {
-      const atBlank = out === '' || out.endsWith('\n');
-      if (!atBlank) out += '\n';
-      out += '\n';
+      if (!atBlank) chunks.push('\n');
+      chunks.push('\n');
       pendingClose = false;
+      atBlank = true;
     }
-    const lines = para.text.split('\n');
-    out += lines.map((line) => escapeMarkdownText(line, true)).join('\n');
+    const rendered = para.text
+      .split('\n')
+      .map((line) => (lineNeedsMarkdownEscape(line) ? escapeMarkdownText(line, true) : line))
+      .join('\n');
+    if (rendered.length > 0) {
+      chunks.push(rendered);
+      atBlank = rendered.endsWith('\n');
+    }
     pendingClose = true;
   }
-  return out;
+  return chunks.join('');
 }
 
 /**

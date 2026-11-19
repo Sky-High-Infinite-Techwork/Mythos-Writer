@@ -106,4 +106,38 @@ describe('getEditorMarkdown matches tiptap-markdown', () => {
     }
   });
 
+  it('serializes a 500KB plain doc at least 5x faster than getMarkdown', () => {
+    const sentence = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit.';
+    let body = '';
+    while (body.length < 500 * 1024) body += `${sentence}\n\n`;
+    const editor = makeEditor(body);
+    const official = () => officialRaw(editor);
+    const fast = () => getEditorMarkdown(editor);
+    expect(fast()).toBe(withTrailingNewline(official()));
+
+    const runs = 5;
+    const time = (fn: () => string): number[] => {
+      const samples: number[] = [];
+      for (let i = 0; i < runs; i++) {
+        const started = performance.now();
+        fn();
+        samples.push(performance.now() - started);
+      }
+      return samples;
+    };
+    const median = (samples: number[]): number => {
+      const sorted = [...samples].sort((a, b) => a - b);
+      return sorted[Math.floor(sorted.length / 2)] ?? 0;
+    };
+    official();
+    fast();
+    const oldMs = median(time(official));
+    const fastMs = median(time(fast));
+    editor.destroy();
+    expect(
+      oldMs / fastMs,
+      `median getMarkdown ${oldMs.toFixed(1)}ms, fast path ${fastMs.toFixed(1)}ms`,
+    ).toBeGreaterThanOrEqual(5);
+  });
+
 });
