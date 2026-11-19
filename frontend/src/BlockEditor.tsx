@@ -15,6 +15,14 @@ import { getEditorMarkdown } from './lib/useRichEditor';
 import RichTextEditor from './RichTextEditor';
 import type { FormatToolbarActions } from './FormatToolbar';
 import { HeadingFocusExtension, headingFocusKey } from './HeadingFocusExtension';
+import {
+  LONG_SCENE_PARAS,
+  LONG_SCENE_WINDOW,
+  splitSceneParagraphs,
+  stitchWindow,
+  visibleSlice,
+  windowStartForEnd,
+} from './lib/longSceneWindow';
 import { levelsPresent, focusState, stepFocus, headingsAtLevel, reconcileFocusLevel } from './lib/headingFocus';
 import { PrismExtension, PRISM_META, type PrismEditorConfig } from './prism/PrismExtension';
 import { usePrismBookForScene, usePrismCurrentBookId, usePrismSettingsById } from './prism/usePrism';
@@ -197,15 +205,35 @@ export default function BlockEditor({ scene, onBlocksChange, onDraftStateChange,
     applyingAutoLinksRef.current = false;
   }, []);
 
+  // Long scenes mount only the tail window. null = the whole doc fits.
+  const longSceneRef = useRef<{ parts: string[]; start: number; count: number } | null | undefined>(undefined);
+  const [windowEpoch, setWindowEpoch] = useState(0);
+  if (longSceneRef.current === undefined) {
+    const all = splitSceneParagraphs(blocksToMarkdownBody(scene.blocks));
+    longSceneRef.current = all.length > LONG_SCENE_PARAS
+      ? { parts: all, start: windowStartForEnd(all.length), count: Math.min(LONG_SCENE_WINDOW, all.length) }
+      : null;
+  }
+
+  const fullMarkdown = useCallback((windowMarkdown: string): string => {
+    const slot = longSceneRef.current;
+    if (!slot) return windowMarkdown;
+    const stitched = stitchWindow(slot.parts, slot.start, slot.count, windowMarkdown);
+    slot.parts = stitched.parts;
+    slot.count = stitched.windowCount;
+    const joined = stitched.parts.join('\n\n');
+    return joined.endsWith('\n') ? joined : `${joined}\n`;
+  }, []);
+
   const handleChangeMarkdown = useCallback((markdown: string) => {
     onBlocksChangeRef.current([{
       id: blockIdRef.current,
       type: 'prose',
-      content: markdown,
+      content: fullMarkdown(markdown),
       order: 0,
       updatedAt: new Date().toISOString(),
     }]);
-  }, []);
+  }, [fullMarkdown]);
 
   const handleSelectionUpdate = useCallback((ed: Editor) => {
     const { from, to } = ed.state.selection;
@@ -276,7 +304,7 @@ export default function BlockEditor({ scene, onBlocksChange, onDraftStateChange,
           editor.commands.scrollIntoView();
         }
       },
-      getMarkdown: () => getEditorMarkdown(editor),
+      getMarkdown: () => fullMarkdown(getEditorMarkdown(editor)),
       applyAutoLinks: () => {
         const linkerState = getAutoLinkerState(editor.state);
         if (!linkerState || linkerState.mode === 'off') return;
@@ -519,6 +547,20 @@ export default function BlockEditor({ scene, onBlocksChange, onDraftStateChange,
     </div>
   );
 
+  const longScene = longSceneRef.current;
+  const editorContent = longScene
+    ? visibleSlice(longScene.parts, longScene.start, longScene.count)
+    : blocksToMarkdownBody(scene.blocks);
+  const showEarlier = () => {
+    const slot = longSceneRef.current;
+    if (!slot || !editor) return;
+    fullMarkdown(getEditorMarkdown(editor));
+    const nextStart = Math.max(0, slot.start - LONG_SCENE_WINDOW);
+    slot.count = slot.start - nextStart + slot.count;
+    slot.start = nextStart;
+    setWindowEpoch((epoch) => epoch + 1);
+  };
+
   return (
     <div className={`block-editor${chromeless ? ' block-editor--chromeless' : ''}`}>
       {/* SKY-10925/SKY-10998: at scene depth (chromeless) the title + draft-state
@@ -552,8 +594,14 @@ export default function BlockEditor({ scene, onBlocksChange, onDraftStateChange,
           {headingFocusGroup}
         </div>
       )}
+      {longScene && longScene.start > 0 && (
+        <button type="button" className="block-editor-earlier" onClick={showEarlier}>
+          Show earlier paragraphs
+        </button>
+      )}
       <RichTextEditor
-        content={blocksToMarkdownBody(scene.blocks)}
+        key={windowEpoch}
+        content={editorContent}
         extraExtensions={STORY_EXTENSIONS}
         autofocus={!autoFocus ? false : (initialCursorPos && initialCursorPos > 0 ? Math.max(1, initialCursorPos) : 'end')}
         onEditorChange={setEditor}
@@ -570,7 +618,7 @@ export default function BlockEditor({ scene, onBlocksChange, onDraftStateChange,
         wrapRef={editorWrapRef}
         toolbarActions={toolbarActions}
         wrapClassName="tiptap-editor-wrap"
-        contentClassName={scene.blocks.some((block) => block.content.length > 80_000) ? 'tiptap-content tiptap-content--long' : 'tiptap-content'}
+        contentClassName={longScene ? 'tiptap-content tiptap-content--long' : 'tiptap-content'}
         onWrapMouseOver={handleHintMouseOver}
         onWrapMouseLeave={handleHintMouseLeave}
       >

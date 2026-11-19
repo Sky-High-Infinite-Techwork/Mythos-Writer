@@ -124,8 +124,11 @@ test.describe('big scene typing and view switch', () => {
       }));
       // eslint-disable-next-line no-console
       console.log(`[perf] editor paras=${shape.paras} chars=${shape.chars} scenes=${SCENE_COUNT}`);
-      expect(shape.paras).toBeGreaterThan(1000);
-      expect(shape.chars).toBeGreaterThan(400_000);
+      // The open editor is a window at the end of the scene, not all 9,000
+      // paragraphs. The full document stays on disk.
+      expect(shape.paras).toBeGreaterThan(0);
+      expect(shape.paras).toBeLessThan(200);
+      expect(fs.statSync(seed.scenePath).size).toBeGreaterThan(400_000);
 
       if (TRACE) {
         await focusEditorAtEnd(page);
@@ -176,7 +179,7 @@ test.describe('big scene typing and view switch', () => {
       try {
         await expect.poll(() => {
           const bytes = fs.readFileSync(seed.scenePath);
-          return bytes.includes(Buffer.from(BURST));
+          return bytes.includes(Buffer.from(BURST)) && bytes.includes(Buffer.from('Lorem ipsum dolor sit amet'));
         }, { timeout: 8_000, intervals: [200, 400, 800] }).toBe(true);
         saved = true;
       } catch {
