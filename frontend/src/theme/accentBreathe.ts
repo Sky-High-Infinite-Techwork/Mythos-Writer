@@ -242,7 +242,7 @@ function transitionKey(c: Controller, a: Animation): string | null {
   return elementId(c, fx.target) + '|' + (fx.pseudoElement ?? '') + '|' + prop;
 }
 
-function isProtectedUserTransition(c: Controller, a: Animation, root: Element): boolean {
+function isProtectedUserTransition(a: Animation, root: Element): boolean {
   const target = (a.effect as KeyframeEffect | null)?.target;
   if (!(target instanceof Element) || target === root) return false;
   if (!isCssTransition(a)) return false;
@@ -278,7 +278,7 @@ function writeTick(c: Controller, t: Record<string, string>): void {
   }
   cancelMarkedChurn(doc, c.el);
   const before = new Set(doc.getAnimations());
-  const protectedUsers = [...before].filter((a) => isProtectedUserTransition(c, a, c.el));
+  const protectedUsers = [...before].filter((a) => isProtectedUserTransition(a, c.el));
 
   const cancelTickStartedConsumers = (): void => {
     const nextChurn = new Set<string>();
