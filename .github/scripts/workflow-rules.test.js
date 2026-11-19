@@ -40,9 +40,9 @@ function deletedWorkflows() {
   ];
 }
 
-test('ci pull_request branches are main and batch/**', () => {
+test('ci pull_request branches are main, batch/**, and gate-scripts bootstrap', () => {
   const on = triggerOf(loadWorkflow('ci.yml'));
-  assert.deepEqual(on.pull_request.branches, ['main', 'batch/**']);
+  assert.deepEqual(on.pull_request.branches, ['main', 'batch/**', 'cursor/gate-scripts-bootstrap-c35d']);
 });
 
 test('ci push branches stay main', () => {
@@ -52,11 +52,10 @@ test('ci push branches stay main', () => {
 
 // Merge queue: every workflow that reports a check required on main must also run on merge_group,
 // or a queued PR waits for a check that never reports. ci and screenshot-check are those checks
-// (notes-windows is a job in ci.yml). mythos-automation-contracts.yml is secretless and also
-// runs on the queue commit. Privileged unattended workflows stay off merge_group.
-const MERGE_GROUP_WORKFLOWS = ['ci.yml', 'screenshot-check.yml', 'mythos-automation-contracts.yml'];
+// (notes-windows and contracts are jobs in ci.yml). Privileged unattended workflows stay off merge_group.
+const MERGE_GROUP_WORKFLOWS = ['ci.yml', 'screenshot-check.yml'];
 
-test('merge_group is limited to required checks and the secretless contracts workflow', () => {
+test('merge_group is limited to required check workflows (ci, screenshot-check)', () => {
   for (const name of workflowNames()) {
     const on = triggerOf(loadWorkflow(name)) || {};
     const expected = MERGE_GROUP_WORKFLOWS.includes(name);
@@ -86,17 +85,350 @@ test('screenshot-check passes on a merge_group run without a PR payload', () => 
   assert.ok(guard > -1 && guard < prRead, 'merge_group early return comes before the PR payload is read');
 });
 
-test('ci needs includes diff-guard', () => {
+test('ci needs includes diff-guard and tier1-gate', () => {
   const doc = loadWorkflow('ci.yml');
   assert.ok(doc.jobs.ci.needs.includes('diff-guard'));
+  assert.ok(doc.jobs.ci.needs.includes('tier1-gate'));
 });
 
-test('stage1 includes needs.diff-guard.result', () => {
+test('ci aggregator tier1 includes needs.diff-guard.result (not oracle-sweeps)', () => {
   const doc = loadWorkflow('ci.yml');
-  const run = doc.jobs.ci.steps.map((step) => step.run || '').join('\n');
-  const stage = run.match(/stage1="([^"]*)"/);
-  assert.ok(stage, 'stage1 assignment');
-  assert.match(stage[1], /needs\.diff-guard\.result/);
+  const step = doc.jobs.ci.steps.find((s) => String(s.name || '') === 'All checks passed');
+  assert.ok(step, 'ci aggregator step');
+  assert.match(step.run, /ci-aggregator\.sh/);
+  assert.equal(step.env.NEEDS_DIFF_GUARD_RESULT, '${{ needs.diff-guard.result }}');
+  assert.ok(step.env.NEEDS_TIER1_GATE_RESULT);
+  assert.ok(step.env.NEEDS_ORACLE_SWEEPS_RESULT);
+  const agg = fs.readFileSync(path.join(REPO, '.github', 'scripts', 'ci-aggregator.sh'), 'utf8');
+  assert.match(agg, /NEEDS_DIFF_GUARD_RESULT/);
+  assert.doesNotMatch(agg, /NEEDS_TIER1_RESULTS/, 'aggregator must not loop Tier 1 results from env blob');
+  assert.match(agg, /require_success "NEEDS_ORACLE_SWEEPS_RESULT"/);
+});
+
+const TIER1_JOBS = ['lint', 'typecheck', 'unit', 'diff-guard', 'paths-filter', 'contracts'];
+const TIER2_JOBS = ['oracle-sweeps', 'build-electron', 'notes-windows', 'build-linux', 'build-windows'];
+
+const FORBIDDEN_TIER2_IF = /\b(always|cancelled|failure)\s*\(\s*\)/;
+
+test('mythos-automation-contracts is workflow_call only (no duplicate PR runs)', () => {
+  const doc = loadWorkflow('mythos-automation-contracts.yml');
+  const on = triggerOf(doc) || {};
+  assert.deepEqual(Object.keys(on).sort(), ['workflow_call']);
+  const ci = loadWorkflow('ci.yml');
+  assert.ok(ci.jobs.contracts && ci.jobs.contracts.uses, 'ci.yml calls contracts reusable workflow');
+  assert.match(ci.jobs.contracts.uses, /mythos-automation-contracts\.yml$/);
+  assert.deepEqual(ci.jobs.contracts.permissions, { contents: 'read' });
+  const contractsYaml = fs.readFileSync(path.join(WORKFLOWS, 'mythos-automation-contracts.yml'), 'utf8');
+  assert.equal(contractsYaml.includes('secrets.'), false);
+  assert.equal(JSON.stringify(ci.jobs.contracts).includes('secrets'), false);
+});
+
+test('tier1-gate needs every Tier 1 job plus setup', () => {
+  const doc = loadWorkflow('ci.yml');
+  const gate = doc.jobs['tier1-gate'];
+  assert.ok(gate, 'tier1-gate job');
+  assert.equal(gate.if, 'always()');
+  for (const job of ['setup', ...TIER1_JOBS]) {
+    assert.ok(gate.needs.includes(job), `tier1-gate needs ${job}`);
+  }
+  const gateStep = gate.steps.find((step) => String(step.name || '').includes('Tier 1 checks passed'));
+  assert.ok(gateStep, 'tier1-gate bash step');
+  const envBlob = JSON.stringify(gateStep.env || {});
+  for (const job of ['setup', ...TIER1_JOBS]) {
+    assert.ok(envBlob.includes(`needs.${job}.result`), `tier1-gate env references needs.${job}.result`);
+  }
+});
+
+test('Tier 2 jobs need tier1-gate (not setup alone)', () => {
+  const jobs = loadWorkflow('ci.yml').jobs;
+  for (const job of TIER2_JOBS) {
+    assert.ok(jobs[job].needs.includes('tier1-gate'), job);
+    assert.equal(jobs[job].needs.includes('setup'), false, `${job} must not depend on setup without tier1-gate`);
+  }
+  for (const job of ['e2e-shard-1', 'e2e-shard-2', 'e2e-shard-3', 'e2e-shard-4']) {
+    assert.ok(jobs[job].needs.includes('build-electron'), job);
+    assert.ok(jobs[job].needs.includes('paths-filter'), job);
+  }
+});
+
+test('Tier 2 jobs do not reference needs.setup.outputs', () => {
+  const jobs = loadWorkflow('ci.yml').jobs;
+  for (const job of TIER2_JOBS) {
+    const blob = JSON.stringify(jobs[job]);
+    assert.doesNotMatch(blob, /needs\.setup\.outputs/, `${job} must not use needs.setup.outputs`);
+  }
+});
+
+test('build-electron skips when paths-filter run-e2e is false', () => {
+  const job = loadWorkflow('ci.yml').jobs['build-electron'];
+  assert.ok(job.needs.includes('paths-filter'), 'build-electron needs paths-filter for run-e2e output');
+  assert.ok(job.needs.includes('tier1-gate'));
+  assert.match(
+    String(job.if),
+    /needs\.paths-filter\.outputs\.run-e2e == 'true' \|\| github\.event_name == 'merge_group'/,
+  );
+});
+
+test('notes-windows fails closed when tier1-gate is not success', () => {
+  const job = loadWorkflow('ci.yml').jobs['notes-windows'];
+  assert.equal(job.if, '${{ !cancelled() }}');
+  assert.match(
+    job['runs-on'],
+    /needs\.tier1-gate\.result == 'success' && 'windows-latest' \|\| 'ubuntu-latest'/,
+  );
+  const gate = job.steps[0];
+  assert.match(gate.name, /Tier 1/i);
+  assert.equal(gate.if, 'always()');
+  assert.notEqual(gate['continue-on-error'], true);
+  assert.match(String(gate.run), /exit 1/);
+  assert.match(String(gate.run), /needs\.tier1-gate\.result/);
+});
+
+test('Tier 2 jobs except notes-windows have no always/cancelled/failure job if', () => {
+  const jobs = loadWorkflow('ci.yml').jobs;
+  const e2e = ['e2e-shard-1', 'e2e-shard-2', 'e2e-shard-3', 'e2e-shard-4'];
+  for (const job of [...TIER2_JOBS.filter((j) => j !== 'notes-windows'), ...e2e]) {
+    const cond = jobs[job].if;
+    if (cond == null || cond === '') continue;
+    assert.equal(FORBIDDEN_TIER2_IF.test(cond), false, `${job} if: ${cond}`);
+  }
+});
+
+test('e2e shards run on merge_group regardless of paths-filter', () => {
+  const jobs = loadWorkflow('ci.yml').jobs;
+  const mergeGroupClause = /\|\|\s*github\.event_name == 'merge_group'/;
+  for (const job of ['e2e-shard-1', 'e2e-shard-2', 'e2e-shard-3', 'e2e-shard-4']) {
+    assert.match(jobs[job].if, mergeGroupClause, job);
+    const matches = String(jobs[job].if).match(/\|\|\s*github\.event_name == 'merge_group'/g) || [];
+    assert.equal(matches.length, 1, `${job} must not duplicate merge_group clause`);
+  }
+});
+
+const PATHS_FILTER_PIN = 'ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d';
+
+test('paths-filter pins dorny/paths-filter to v4.0.3 commit SHA', () => {
+  const text = fs.readFileSync(path.join(WORKFLOWS, 'ci.yml'), 'utf8');
+  assert.match(text, new RegExp(`dorny/paths-filter@${PATHS_FILTER_PIN} # v4\\.0\\.3`));
+  assert.equal((text.match(new RegExp(PATHS_FILTER_PIN, 'g')) || []).length, 2);
+});
+
+test('paths-filter resolve steps call extracted bash scripts with env (not inline ${{ }})', () => {
+  const steps = loadWorkflow('ci.yml').jobs['paths-filter'].steps;
+  const resolveDocs = steps.find((step) => step.id === 'resolve-docs');
+  const resolveE2e = steps.find((step) => step.id === 'resolve-e2e');
+  assert.match(resolveDocs.run, /ci-paths-filter-resolve-docs\.sh/);
+  assert.match(resolveE2e.run, /ci-paths-filter-resolve-e2e\.sh/);
+  assert.match(resolveDocs.run, /mythos-gate-trusted/);
+  assert.match(resolveE2e.run, /mythos-gate-trusted/);
+  assert.ok(resolveDocs.env.FILTER_DOCS_OUTCOME);
+  assert.ok(resolveE2e.env.FILTER_E2E_RUN_E2E);
+  const docsRun = fs.readFileSync(path.join(REPO, '.github', 'scripts', 'ci-paths-filter-resolve-docs.sh'), 'utf8');
+  const e2eRun = fs.readFileSync(path.join(REPO, '.github', 'scripts', 'ci-paths-filter-resolve-e2e.sh'), 'utf8');
+  assert.match(docsRun, /FILTER_DOCS/);
+  assert.match(docsRun, /false/);
+  assert.match(e2eRun, /merge_group/);
+  assert.match(e2eRun, /run-e2e=true/);
+});
+
+const CHECKOUT_PIN = 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1';
+
+function bashScriptSteps(doc) {
+  const hits = [];
+  for (const [jobName, job] of Object.entries(doc.jobs || {})) {
+    for (let i = 0; i < (job.steps || []).length; i++) {
+      const run = String(job.steps[i].run || '');
+      if (run.includes('.github/scripts/') && run.includes('bash ')) {
+        hits.push({ jobName, index: i, step: job.steps[i] });
+      }
+    }
+  }
+  return hits;
+}
+
+test('tier1-gate and ci aggregator call extracted bash scripts', () => {
+  const doc = loadWorkflow('ci.yml');
+  const tierStep = doc.jobs['tier1-gate'].steps.find((step) =>
+    String(step.name || '').includes('Tier 1 checks passed'),
+  );
+  const ciStep = doc.jobs.ci.steps.find((step) => String(step.name || '') === 'All checks passed');
+  assert.ok(tierStep, 'tier1-gate script step');
+  assert.ok(ciStep, 'ci aggregator script step');
+  assert.match(tierStep.run, /ci-tier1-gate\.sh/);
+  assert.match(ciStep.run, /ci-aggregator\.sh/);
+  assert.ok(tierStep.env.NEEDS_TIER1_RESULTS);
+  assert.ok(ciStep.env.NEEDS_ORACLE_SWEEPS_RESULT);
+});
+
+test('ci.yml gate scripts: env vars map to needs.*.result and paths-filter run-e2e', () => {
+  const doc = loadWorkflow('ci.yml');
+  const tierStep = doc.jobs['tier1-gate'].steps.find((s) =>
+    String(s.name || '').includes('Tier 1 checks passed'),
+  );
+  const ciStep = doc.jobs.ci.steps.find((s) => String(s.name || '') === 'All checks passed');
+  assert.ok(tierStep?.env, 'tier1-gate step env');
+  assert.ok(ciStep?.env, 'ci aggregator step env');
+
+  const tier1Jobs = ['setup', 'lint', 'typecheck', 'unit', 'diff-guard', 'paths-filter', 'contracts'];
+  const tier1Blob = String(tierStep.env.NEEDS_TIER1_RESULTS);
+  for (const job of tier1Jobs) {
+    const escaped = job.replace(/-/g, '\\-');
+    assert.match(
+      tier1Blob,
+      new RegExp(`\\$\\{\\{\\s*needs\\.${escaped}\\.result\\s*\\}\\}`),
+      `NEEDS_TIER1_RESULTS must include needs.${job}.result`,
+    );
+  }
+
+  const aggEnvMap = {
+    NEEDS_TIER1_GATE_RESULT: '${{ needs.tier1-gate.result }}',
+    NEEDS_LINT_RESULT: '${{ needs.lint.result }}',
+    NEEDS_TYPECHECK_RESULT: '${{ needs.typecheck.result }}',
+    NEEDS_UNIT_RESULT: '${{ needs.unit.result }}',
+    NEEDS_DIFF_GUARD_RESULT: '${{ needs.diff-guard.result }}',
+    NEEDS_ORACLE_SWEEPS_RESULT: '${{ needs.oracle-sweeps.result }}',
+    NEEDS_E2E_SHARD_1_RESULT: '${{ needs.e2e-shard-1.result }}',
+    NEEDS_E2E_SHARD_2_RESULT: '${{ needs.e2e-shard-2.result }}',
+    NEEDS_E2E_SHARD_3_RESULT: '${{ needs.e2e-shard-3.result }}',
+    NEEDS_E2E_SHARD_4_RESULT: '${{ needs.e2e-shard-4.result }}',
+    PATHS_FILTER_RUN_E2E: '${{ needs.paths-filter.outputs.run-e2e }}',
+    GITHUB_EVENT_NAME: '${{ github.event_name }}',
+  };
+  for (const [key, value] of Object.entries(aggEnvMap)) {
+    assert.equal(ciStep.env[key], value, `ci step env ${key}`);
+  }
+
+  const pathsSteps = doc.jobs['paths-filter'].steps;
+  const resolveDocs = pathsSteps.find((s) => s.id === 'resolve-docs');
+  const resolveE2e = pathsSteps.find((s) => s.id === 'resolve-e2e');
+  assert.equal(resolveDocs.env.FILTER_DOCS_OUTCOME, '${{ steps.filter-docs.outcome }}');
+  assert.equal(resolveDocs.env.FILTER_DOCS_DOCS_ONLY, '${{ steps.filter-docs.outputs.docs-only }}');
+  assert.equal(resolveE2e.env.FILTER_E2E_OUTCOME, '${{ steps.filter-e2e.outcome }}');
+  assert.equal(resolveE2e.env.FILTER_E2E_RUN_E2E, '${{ steps.filter-e2e.outputs.run-e2e }}');
+  assert.equal(resolveE2e.env.GITHUB_EVENT_NAME, '${{ github.event_name }}');
+});
+
+function checkoutBeforeScript(steps, scriptIndex) {
+  for (let i = scriptIndex - 1; i >= 0; i--) {
+    if (String(steps[i].uses || '').startsWith('actions/checkout')) return steps[i];
+  }
+  return null;
+}
+
+test('bash .github/scripts steps are preceded by sparse checkout of .github/scripts', () => {
+  const doc = loadWorkflow('ci.yml');
+  const sparseGateJobs = new Set(['tier1-gate', 'ci']);
+  for (const hit of bashScriptSteps(doc)) {
+    const steps = doc.jobs[hit.jobName].steps;
+    const checkout = checkoutBeforeScript(steps, hit.index);
+    assert.ok(checkout, `${hit.jobName}: checkout before bash script`);
+    if (!sparseGateJobs.has(hit.jobName)) continue;
+    assert.equal(checkout.with['persist-credentials'], false, hit.jobName);
+    assert.equal(checkout.with['sparse-checkout-cone-mode'], true, hit.jobName);
+    const sparse = checkout.with['sparse-checkout'];
+    assert.ok(
+      sparse === '.github/scripts' || (Array.isArray(sparse) && sparse.includes('.github/scripts')),
+      hit.jobName,
+    );
+  }
+});
+
+test('gate scripts load only from pinned base ref (candidate .github/scripts unused)', () => {
+  const text = fs.readFileSync(path.join(WORKFLOWS, 'ci.yml'), 'utf8');
+  assert.match(text, /pull_request\.base\.sha/);
+  assert.match(text, /merge_group\.base_sha/);
+  assert.match(text, /mythos-gate-trusted/);
+  assert.match(text, /fail closed \(no candidate fallback\)/);
+  assert.doesNotMatch(text, /_gate-candidate|missing on PR base|git show "HEAD:/);
+  assert.doesNotMatch(text, /Install trusted gate scripts \(PR\)/);
+  const doc = loadWorkflow('ci.yml');
+  const trustedCheckout = doc.jobs['tier1-gate'].steps.find((s) =>
+    String(s.name || '').includes('Checkout trusted gate scripts'),
+  );
+  assert.match(String(trustedCheckout.with.ref), /pull_request\.base\.sha/);
+  assert.match(String(trustedCheckout.with.ref), /merge_group\.base_sha/);
+  assert.equal(trustedCheckout.with.path, 'mythos-gate-trusted');
+  const tierRun = doc.jobs['tier1-gate'].steps.find((s) => /ci-tier1-gate\.sh/.test(String(s.run || '')));
+  const ciRun = doc.jobs.ci.steps.find((s) => /ci-aggregator\.sh/.test(String(s.run || '')));
+  const resolveDocs = doc.jobs['paths-filter'].steps.find((s) => s.id === 'resolve-docs');
+  assert.match(String(tierRun.run), /mythos-gate-trusted/);
+  assert.match(String(ciRun.run), /mythos-gate-trusted/);
+  assert.match(String(resolveDocs.run), /mythos-gate-trusted/);
+  assert.doesNotMatch(String(ciRun.run), /bash \.github\/scripts\//);
+  assert.ok(
+    doc.jobs['tier1-gate'].steps.some((s) => String(s.name || '').includes('Verify trusted gate scripts')),
+  );
+  assert.ok(
+    doc.jobs['paths-filter'].steps.some((s) => String(s.name || '').includes('Verify trusted gate resolvers')),
+  );
+});
+
+test('mutating candidate aggregator in workspace cannot satisfy ci wiring', () => {
+  const ciStep = loadWorkflow('ci.yml').jobs.ci.steps.find((s) => String(s.name || '') === 'All checks passed');
+  assert.match(String(ciStep.run), /mythos-gate-trusted\/\.github\/scripts\/ci-aggregator\.sh/);
+  const poisoned = "set -euo pipefail\necho ok\nexit 0\n";
+  const poisonPath = path.join(REPO, '.github', 'scripts', 'ci-aggregator.sh');
+  const saved = fs.readFileSync(poisonPath, 'utf8');
+  try {
+    fs.writeFileSync(poisonPath, poisoned);
+    const failEnv = {
+      NEEDS_TIER1_GATE_RESULT: 'failure',
+      NEEDS_LINT_RESULT: 'success',
+      NEEDS_TYPECHECK_RESULT: 'success',
+      NEEDS_UNIT_RESULT: 'success',
+      NEEDS_DIFF_GUARD_RESULT: 'success',
+      NEEDS_ORACLE_SWEEPS_RESULT: 'success',
+      NEEDS_E2E_SHARD_1_RESULT: 'success',
+      NEEDS_E2E_SHARD_2_RESULT: 'success',
+      NEEDS_E2E_SHARD_3_RESULT: 'success',
+      NEEDS_E2E_SHARD_4_RESULT: 'success',
+      PATHS_FILTER_RUN_E2E: 'true',
+      GITHUB_EVENT_NAME: 'pull_request',
+    };
+    const { spawnSync } = require('node:child_process');
+    const poisonedRun = spawnSync('bash', [poisonPath], {
+      env: { ...process.env, ...failEnv },
+      encoding: 'utf8',
+    });
+    assert.equal(poisonedRun.status, 0, 'poisoned in-tree copy would incorrectly pass');
+    fs.writeFileSync(poisonPath, saved);
+    const trustedRun = spawnSync('bash', [poisonPath], {
+      env: { ...process.env, ...failEnv },
+      encoding: 'utf8',
+    });
+    assert.equal(trustedRun.status, 1, 'restored trusted script must fail closed');
+    assert.notEqual(poisonedRun.status, trustedRun.status);
+  } finally {
+    fs.writeFileSync(poisonPath, saved);
+  }
+});
+
+test('ci aggregator regression: e2e skip logic lives in ci-aggregator.sh', () => {
+  const agg = fs.readFileSync(path.join(REPO, '.github', 'scripts', 'ci-aggregator.sh'), 'utf8');
+  assert.match(agg, /require_e2e/);
+  assert.match(agg, /merge_group/);
+  assert.match(agg, /PATHS_FILTER_RUN_E2E/);
+  assert.doesNotMatch(
+    agg,
+    /skipped_count/,
+    'old partial-skip guard must not replace all-shards-required when e2e is mandatory',
+  );
+});
+
+test('ci concurrency cancels in-progress only for pull_request (not merge_group)', () => {
+  const doc = loadWorkflow('ci.yml');
+  const cancel = doc.concurrency['cancel-in-progress'];
+  assert.match(String(cancel), /github\.event_name == 'pull_request'/);
+  assert.doesNotMatch(String(cancel), /merge_group/);
+});
+
+const REQUIRED_CHECK_JOB_NAMES = ['ci', 'notes-windows'];
+
+test('required ci.yml check job names are unchanged', () => {
+  const jobs = loadWorkflow('ci.yml').jobs;
+  for (const name of REQUIRED_CHECK_JOB_NAMES) {
+    assert.ok(jobs[name], name);
+    assert.equal((jobs[name].name ?? name) === name, true, `job id ${name} must match displayed check name`);
+  }
 });
 
 test('draft-ready-on-green is retired so hygiene cannot undraft', () => {
@@ -195,5 +527,7 @@ test('deleted workflows are absent', () => {
 
 // batch-automerge.yml rules and run-step behavior (kept in its own file; loaded here so CI runs it).
 require('./batch-automerge.test.js');
+// ci-tier1-gate / ci-aggregator bash scenarios (same scripts as ci.yml).
+require('./ci-gate-scripts.test.js');
 // Phase 1 unattended controller and workflow contracts. Loaded here so CI runs it.
 require('./unattended.test.js');

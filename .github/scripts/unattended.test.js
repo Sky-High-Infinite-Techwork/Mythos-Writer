@@ -973,8 +973,10 @@ test('privileged workflows are inert controllers with pinned actions and split c
   assert.equal(contracts.includes('secrets.'), false);
   assert.equal(contractsDoc.jobs.contracts.environment, undefined);
   assert.deepEqual(contractsDoc.jobs.contracts.permissions, { contents: 'read' });
-  assert.ok(Object.prototype.hasOwnProperty.call(triggerOf(contractsDoc), 'pull_request'));
-  assert.deepEqual(triggerOf(contractsDoc).merge_group, { types: ['checks_requested'] });
+  assert.deepEqual(Object.keys(triggerOf(contractsDoc) || {}).sort(), ['workflow_call']);
+  assert.match(
+    fs.readFileSync(path.join(WORKFLOWS, 'ci.yml'), 'utf8'),
+  /uses:\s+\.\/\.github\/workflows\/mythos-automation-contracts\.yml/);
   assert.match(contracts, /npm ci --ignore-scripts/);
 });
 
