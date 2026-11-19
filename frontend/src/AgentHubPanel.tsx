@@ -375,6 +375,7 @@ function PartnerChatView({
     ?? (writerBusy ? 'writer' : brainstormActivity.active ? null : null);
   const [pastOpen, setPastOpen] = useState(false);
   const pastToggleRef = useRef<HTMLButtonElement>(null);
+  const openTipsRef = useRef<HTMLButtonElement>(null);
   // FD-9 #3 — the session pill stays mounted while Past chats is closed
   // (TC-8537-02). Escape is handled only inside this region.
   const onPastChatsKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -447,6 +448,7 @@ function PartnerChatView({
 
       {!showWriterTips && (
         <button
+          ref={openTipsRef}
           type="button"
           className="ahp-open-tips-btn"
           data-testid="ahp-open-writer-tips"
@@ -466,7 +468,10 @@ function PartnerChatView({
               type="button"
               className="ahp-hand-close"
               data-testid="ahp-close-writer"
-              onClick={() => setShowWriterTips(false)}
+              onClick={() => {
+                setShowWriterTips(false);
+                requestAnimationFrame(() => openTipsRef.current?.focus());
+              }}
             >
               Close
             </button>

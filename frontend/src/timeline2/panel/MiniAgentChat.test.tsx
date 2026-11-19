@@ -32,6 +32,8 @@ function makeChat(opts?: {
     busy: false,
     stalled: false,
     error: null,
+    canRetry: false,
+    retryLast: vi.fn(),
     store: {
       activeSession: {
         id: 's1',
@@ -56,6 +58,27 @@ function makeChat(opts?: {
     postActionResult: vi.fn(),
   };
 }
+
+describe('MiniAgentChat error strip', () => {
+  it('shows Retry when the chat hook exposes canRetry', () => {
+    const retryLast = vi.fn();
+    render(
+      <MiniAgentChat
+        chat={{
+          ...makeChat(),
+          error: 'Network error',
+          canRetry: true,
+          retryLast,
+        }}
+        accent="brainstorm"
+        placeholder="Message…"
+        testidPrefix="ahp-partner"
+      />,
+    );
+    fireEvent.click(screen.getByTestId('ahp-partner-chat-retry'));
+    expect(retryLast).toHaveBeenCalled();
+  });
+});
 
 describe('MiniAgentChat voice (unified composer)', () => {
   beforeEach(() => {

@@ -185,7 +185,17 @@ export default function MiniAgentChat({
         )}
         {chat.error && (
           <div className="trp-chat-error" role="alert" data-testid={`${testidPrefix}-chat-error`}>
-            {chat.error}
+            <span className="trp-chat-error-text">{chat.error}</span>
+            {chat.canRetry && (
+              <button
+                type="button"
+                className="trp-chat-error-retry"
+                onClick={() => chat.retryLast()}
+                data-testid={`${testidPrefix}-chat-retry`}
+              >
+                Retry
+              </button>
+            )}
           </div>
         )}
       </div>
