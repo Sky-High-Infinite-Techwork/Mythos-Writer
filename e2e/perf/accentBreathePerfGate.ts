@@ -4,20 +4,14 @@
  *
  * Fail-closed: baseline OFF drop rate = min(off1, off2). Worst ON drop rate =
  * max(on1, on2). Pass drop when (worstOn − offBaseline) ≤ +2 pp. Fps: worst ON
- * p95 floor vs best OFF p95 floor within −3 fps. If either OFF window exceeds
- * the OFF stall bar on its own, baseline stalled → never pass.
+ * p95 floor vs best OFF p95 floor within −3 fps. Baseline stalled when
+ * min(off1, off2) > ABBA_DROP_DELTA_MAX_PP (both OFF windows unhealthy).
  */
 
 import type { Expect } from '@playwright/test';
 
 export const ABBA_DROP_DELTA_MAX_PP = 2;
 export const ABBA_FPS_FLOOR_TOLERANCE = 3;
-/**
- * Either OFF window above this absolute dropped-frame % is a stalled baseline
- * (fail closed). Higher than the +2pp delta bar so xvfb timing noise (~2.1pp OFF)
- * does not false-stall; Critic's fail-open case uses ~5–6% OFF.
- */
-export const ABBA_OFF_DROP_STALL_MAX_PP = 4;
 
 export type AbbaPairDroppedPct = {
   onDroppedPct: number;
@@ -52,11 +46,9 @@ export type AbbaBreathePerfGateResult = {
 };
 
 function offStallReason(off1: number, off2: number): string | null {
-  if (off1 > ABBA_OFF_DROP_STALL_MAX_PP) {
-    return `baseline stalled: off1 dropped ${off1.toFixed(2)}% > ${ABBA_OFF_DROP_STALL_MAX_PP}pp`;
-  }
-  if (off2 > ABBA_OFF_DROP_STALL_MAX_PP) {
-    return `baseline stalled: off2 dropped ${off2.toFixed(2)}% > ${ABBA_OFF_DROP_STALL_MAX_PP}pp`;
+  const minOff = Math.min(off1, off2);
+  if (minOff > ABBA_DROP_DELTA_MAX_PP) {
+    return `baseline stalled: min OFF dropped ${minOff.toFixed(2)}% > ${ABBA_DROP_DELTA_MAX_PP}pp`;
   }
   return null;
 }

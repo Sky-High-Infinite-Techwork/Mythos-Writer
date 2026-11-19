@@ -356,10 +356,10 @@ test.describe.serial('#1774 Accent breathe', () => {
     expect(gate.dropDeltaPp).toBeGreaterThan(2);
   });
 
-  test('red-on-revert: stalled OFF baseline fails closed', () => {
+  test('red-on-revert: min OFF > +2pp stalls baseline (OFF 3.9/3.9 vs ON 5.8/5.8)', () => {
     const gate = evaluateAbbaBreathePerfGate({
-      pair1Drop: { onDroppedPct: 5.8, offDroppedPct: 0.2 },
-      pair2Drop: { onDroppedPct: 7.1, offDroppedPct: 6 },
+      pair1Drop: { onDroppedPct: 5.8, offDroppedPct: 3.9 },
+      pair2Drop: { onDroppedPct: 5.8, offDroppedPct: 3.9 },
       pair1Fps: { onP95Fps: 59.5, offP95Fps: 59.9 },
       pair2Fps: { onP95Fps: 59.5, offP95Fps: 59.9 },
     });
