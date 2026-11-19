@@ -334,6 +334,18 @@ describe('ExportDialog steps (M14)', () => {
     expect(screen.getByRole('button', { name: /export md/i })).toBeInTheDocument();
     expect(mockOnClose).not.toHaveBeenCalled();
   });
+
+  it('alerts when EPUB resolves success without a path (empty export)', async () => {
+    mockExportEpub.mockResolvedValue({ path: null, cancelled: false });
+    renderDialog({ kind: 'story', storyId: 'story-1' });
+
+    fireEvent.click(screen.getByRole('radio', { name: /epub/i }));
+    fireEvent.click(screen.getByRole('button', { name: /export epub/i }));
+
+    await waitFor(() => expect(mockAlert).toHaveBeenCalledWith('Export failed: Export failed.'));
+    expect(screen.getByRole('button', { name: /export epub/i })).toBeInTheDocument();
+    expect(mockOnClose).not.toHaveBeenCalled();
+  });
 });
 
 // ─── SKY-7108 — missing scene .md file warning on the Done state ───

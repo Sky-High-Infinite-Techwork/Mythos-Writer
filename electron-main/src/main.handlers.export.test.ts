@@ -15,24 +15,15 @@ import { saveSnapshot } from './snapshots.js';
 import { writeSceneFile, defaultManifest, writeManifest } from './vault.js';
 import type { ChapterEntry, Manifest, SceneEntry, StoryEntry } from './ipc.js';
 
-const db = vi.hoisted(() => {
-  const bag: Record<string, ReturnType<typeof vi.fn>> = {};
-  const proxy = new Proxy(bag, {
-    get(target, prop) {
-      if (typeof prop !== 'string' || prop === 'then') return undefined;
-      if (!target[prop]) target[prop] = vi.fn();
-      return target[prop];
-    },
-  });
+const sqliteStub = vi.hoisted(() => {
   const stmt = {
     run: vi.fn().mockReturnValue({ changes: 0 }),
     get: vi.fn(),
     all: vi.fn().mockReturnValue([]),
   };
-  const sqlite = {
+  return {
     prepare: vi.fn(() => stmt),
   };
-  return { proxy, sqlite };
 });
 
 const paths = vi.hoisted(() => ({ userData: '' }));
@@ -115,7 +106,7 @@ vi.mock('./jobs/jobWorker?nodeWorker', () => ({
   default: () => ({ postMessage() {}, terminate() {}, on() {}, once() {} }),
 }));
 vi.mock('./db.js', () => ({
-  getDb: () => db.sqlite,
+  getDb: () => sqliteStub,
   openDb: vi.fn(),
   closeDb: vi.fn(),
   insertAuditLog: vi.fn(),
@@ -128,7 +119,7 @@ let vaultRoot: string;
 let notesRoot: string;
 let outDir: string;
 
-function makeScene(id: string, order: number, prose: string): SceneEntry {
+function makeScene(id: string, order: number): SceneEntry {
   return {
     id,
     title: `Scene ${id}`,
@@ -141,8 +132,8 @@ function makeScene(id: string, order: number, prose: string): SceneEntry {
 }
 
 function seedExportVault(): { manifest: Manifest; storyId: string; sceneIds: string[] } {
-  const scene1 = makeScene('exp-sc-1', 0, 'First scene export prose.');
-  const scene2 = makeScene('exp-sc-2', 1, 'Second scene export prose.');
+  const scene1 = makeScene('exp-sc-1', 0);
+  const scene2 = makeScene('exp-sc-2', 1);
   const chapter: ChapterEntry = {
     id: 'exp-ch-1',
     title: 'Export Chapter',
@@ -219,8 +210,7 @@ describe('export handlers write real files with ordered prose', () => {
   it('export:markdown writes .md bytes containing scene prose in order', async () => {
     const target = path.join(outDir, 'story.md');
     vi.mocked(dialog.showSaveDialog).mockResolvedValue({ canceled: false, filePath: target });
-    const { storyId } = seedExportVault();
-    const result = await exportMarkdown({ scope: { kind: 'story', storyId } });
+    const result = await exportMarkdown({ scope: { kind: 'story', storyId: 'exp-story-1' } });
     expect(result.cancelled).toBe(false);
     expect(result.path).toBe(target);
     const text = fs.readFileSync(target, 'utf-8');
@@ -325,11 +315,9 @@ describe('export handlers write real files with ordered prose', () => {
 });
 
 describe('export handlers — read-only target', () => {
-  it('export:markdown rejects a non-writable directory without leaving a file', async (ctx) => {
-    if (process.platform === 'win32') {
-      ctx.skip('chmod 0o555 does not reliably deny writes on Windows');
-    }
-
+  it.runIf(process.platform !== 'win32' && process.getuid?.() !== 0)(
+    'export:markdown rejects a non-writable directory without leaving a file',
+    async () => {
     const lockedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mw-export-ro-'));
     const target = path.join(lockedDir, 'blocked.md');
     try {
@@ -345,7 +333,8 @@ describe('export handlers — read-only target', () => {
       fs.chmodSync(lockedDir, 0o700);
       fs.rmSync(lockedDir, { recursive: true, force: true });
     }
-  });
+    },
+  );
 });
 
 describe('app:backupAppData → change → app:restoreAppData', () => {

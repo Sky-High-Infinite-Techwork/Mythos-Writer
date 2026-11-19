@@ -597,6 +597,7 @@ test.describe('real markdown/plaintext export pipelines', () => {
 
   test('AC-EXQ-12: export to a read-only directory surfaces failure and writes no file', async () => {
     test.skip(process.platform === 'win32', 'chmod 0o555 does not reliably deny writes on Windows CI');
+    test.skip(process.getuid?.() === 0, 'root can write chmod 0o555 directories; read-only export cannot be asserted');
 
     const lockedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-export-ro-'));
     try {

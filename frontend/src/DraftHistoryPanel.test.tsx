@@ -55,7 +55,8 @@ describe('DraftHistoryPanel', () => {
     fireEvent.click(screen.getByLabelText('Restore this draft'));
     fireEvent.click(screen.getByRole('button', { name: /^Restore$/ }));
     await waitFor(() => expect(draftsRestore).toHaveBeenCalled());
-    await waitFor(() => expect(onRestore).not.toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Restore$/ })).toBeEnabled());
+    expect(onRestore).not.toHaveBeenCalled();
     expect(screen.getByRole('dialog', { name: 'Confirm restore' })).toBeInTheDocument();
     expect(screen.getByText('Checkpoint')).toBeInTheDocument();
   });
