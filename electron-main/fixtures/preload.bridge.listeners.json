@@ -1,0 +1,356 @@
+{
+  "api.jobs.onEvent": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "jobId": "bridge-id",
+      "event": "progress"
+    }
+  },
+  "api.onAiActivityTerminal": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onAiActivityUpdate": {
+    "kind": "entries",
+    "ipcPayload": [
+      {
+        "id": "bridge-id",
+        "agent": "bridge-sample",
+        "status": "running"
+      }
+    ]
+  },
+  "api.onArchiveContItemResolved": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onArchiveContScanError": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onArchiveContScanResult": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onArchiveContScanStart": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onBrainstormChunk": {
+    "kind": "chunk",
+    "ipcPayload": {
+      "chunk": "lc-chunk"
+    }
+  },
+  "api.onBrainstormError": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onBrainstormProposalQueued": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "proposals": [
+        {
+          "id": "p"
+        }
+      ]
+    }
+  },
+  "api.onBrainstormStreamStart": {
+    "kind": "requestId",
+    "ipcPayload": {
+      "requestId": "bridge-id",
+      "category": "lc-cat",
+      "message": "lc-msg"
+    }
+  },
+  "api.onBudgetCapHit": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onFlushBeforeQuit": {
+    "kind": "noArg"
+  },
+  "api.onNavHistoryBack": {
+    "kind": "noArg"
+  },
+  "api.onNavHistoryForward": {
+    "kind": "noArg"
+  },
+  "api.onNavigatorManifestChanged": {
+    "kind": "noArg"
+  },
+  "api.onNavigatorSceneChanged": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "sceneId": "bridge-id"
+    }
+  },
+  "api.onNavigatorSceneSynced": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "sceneId": "bridge-id"
+    }
+  },
+  "api.onNotesBoardWriteRefused": {
+    "kind": "info",
+    "ipcPayload": {
+      "folderRelPath": "/tmp/bridge-sample",
+      "code": "lc",
+      "message": "lc-msg"
+    }
+  },
+  "api.onNotesVaultRegistryChanged": {
+    "kind": "noArg"
+  },
+  "api.onObsidianImportProgress": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "current": 1,
+      "total": 2,
+      "lastAction": "lc"
+    }
+  },
+  "api.onPanelFloatBoundsChanged": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "panelId": "bridge-id",
+      "x": 0,
+      "y": 0,
+      "width": 1,
+      "height": 1
+    }
+  },
+  "api.onPanelFloatClosed": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "panelId": "bridge-id",
+      "docked": true,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1
+      }
+    }
+  },
+  "api.onPanelFloatPinChanged": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "panelId": "bridge-id",
+      "alwaysOnTop": false
+    }
+  },
+  "api.onPanelPopoutClosed": {
+    "kind": "panelId",
+    "ipcPayload": {
+      "panelId": "bridge-id"
+    }
+  },
+  "api.onPartnerThreadChanged": {
+    "kind": "noArg"
+  },
+  "api.onProjectSwitched": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "vaultRoot": "/tmp/bridge-sample",
+      "notesVaultRoot": "/tmp/bridge-sample-notes"
+    }
+  },
+  "api.onRenameCascadeProgress": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onSceneCrafterExternalEdit": {
+    "kind": "storySlug",
+    "ipcPayload": {
+      "storySlug": "lc-slug"
+    }
+  },
+  "api.onStoryVaultRegistryChanged": {
+    "kind": "noArg"
+  },
+  "api.onStreamEnd": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "streamId": "bridge-id"
+    }
+  },
+  "api.onStreamError": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "streamId": "bridge-id",
+      "category": "lc-cat",
+      "message": "lc-msg"
+    }
+  },
+  "api.onStreamReasoning": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "streamId": "bridge-id"
+    }
+  },
+  "api.onStreamToken": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "streamId": "bridge-id",
+      "token": "lc-token"
+    }
+  },
+  "api.onSttResult": {
+    "kind": "text",
+    "ipcPayload": {
+      "text": "lc-text"
+    }
+  },
+  "api.onUpdateStatus": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onVaultCheckChunk": {
+    "kind": "chunk",
+    "ipcPayload": {
+      "chunk": "lc-chunk"
+    }
+  },
+  "api.onVaultCheckError": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onVaultCheckStreamStart": {
+    "kind": "requestId",
+    "ipcPayload": {
+      "requestId": "bridge-id",
+      "category": "lc-cat",
+      "message": "lc-msg"
+    }
+  },
+  "api.onVaultFileChanged": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "path": "/tmp/bridge-sample"
+    }
+  },
+  "api.onVaultGraphTopologyChanged": {
+    "kind": "noArg"
+  },
+  "api.onVaultNotesAssetChanged": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "path": "/tmp/bridge-sample"
+    }
+  },
+  "api.onVaultNotesUpdated": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "count": 1,
+      "path": "/tmp/bridge-sample"
+    }
+  },
+  "api.onVaultsParentMoved": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onVoiceError": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onVoiceSpeakChunk": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onVoiceSpeakDone": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onVoiceSpeakError": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onVoiceTranscript": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onWritingAssistantChunk": {
+    "kind": "chunk",
+    "ipcPayload": {
+      "chunk": "lc-chunk"
+    }
+  },
+  "api.onWritingAssistantError": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onWritingAssistantScanError": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onWritingAssistantScanResult": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onWritingAssistantScanStart": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onWritingAssistantStreamStart": {
+    "kind": "requestId",
+    "ipcPayload": {
+      "requestId": "bridge-id",
+      "category": "lc-cat",
+      "message": "lc-msg"
+    }
+  },
+  "api.onWritingModeChanged": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  },
+  "api.onWritingScanResult": {
+    "kind": "passthrough",
+    "ipcPayload": {
+      "bridge": true
+    }
+  }
+}

@@ -1,0 +1,971 @@
+// Test gap 07 — preload bridge channels, argument passthrough, and listener teardown.
+//
+// Loads preload.ts with mocked electron, captures window.api / window.mythosIPC, and
+// asserts every frozen exposeInMainWorld entry from ipcSurface.contract.freeze.json.
+
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import freeze from './ipcSurface.contract.freeze.json';
+import { IPC_CHANNELS } from './ipc.js';
+
+const SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+type ExposedRow = { world: string; path: string; channel: string };
+
+const IPC_CHANNEL_VALUES = new Set(Object.values(IPC_CHANNELS) as string[]);
+
+function parseExposedLine(line: string): ExposedRow {
+  const parts = line.split(' ');
+  const world = parts[0]!;
+  const channel = parts[parts.length - 1]!;
+  const pathKey = parts.slice(1, -1).join(' ');
+  return { world, path: pathKey, channel };
+}
+
+const FROZEN_EXPOSED = (freeze.exposed as string[]).map(parseExposedLine);
+const FROZEN_IPC = FROZEN_EXPOSED.filter((row) => row.channel !== 'NON_IPC');
+
+function isListenerPath(pathKey: string): boolean {
+  const base = pathKey.split('.').pop() ?? pathKey;
+  if (base === 'onEvent') return true;
+  return /^on[A-Z]/.test(base);
+}
+
+const FROZEN_LISTENERS = FROZEN_IPC.filter((row) => isListenerPath(row.path));
+const FROZEN_CALLS = FROZEN_IPC.filter((row) => !isListenerPath(row.path));
+
+// ─── Mock electron (capture bridge + record IPC) ─────────────────────────────
+
+const harness = vi.hoisted(() => {
+  const invokeMock = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({
+    ok: true,
+    data: null,
+  }));
+  const sendMock = vi.fn<(...args: unknown[]) => void>(() => undefined);
+  const onMock = vi.fn<(...args: unknown[]) => void>(() => undefined);
+  const removeListenerMock = vi.fn<(...args: unknown[]) => void>(() => undefined);
+  const capturedWorlds: Record<string, unknown> = {};
+  return { invokeMock, sendMock, onMock, removeListenerMock, capturedWorlds };
+});
+
+const { invokeMock, sendMock, onMock, removeListenerMock, capturedWorlds } = harness;
+
+vi.mock('electron', () => ({
+  contextBridge: {
+    exposeInMainWorld: (name: string, value: unknown) => {
+      harness.capturedWorlds[name] = value;
+    },
+  },
+  ipcRenderer: {
+    invoke: (...args: unknown[]) => harness.invokeMock(...args),
+    send: (...args: unknown[]) => harness.sendMock(...args),
+    on: (...args: unknown[]) => harness.onMock(...args),
+    removeListener: (...args: unknown[]) => harness.removeListenerMock(...args),
+  },
+  webUtils: {
+    getPathForFile: (file: File) => `/mock/${file.name}`,
+  },
+}));
+
+import './preload.js';
+import { ipcRenderer } from 'electron';
+
+function getAtPath(root: unknown, dotPath: string): unknown {
+  let cur: unknown = root;
+  for (const seg of dotPath.split('.')) {
+    if (!cur || typeof cur !== 'object') return undefined;
+    cur = (cur as Record<string, unknown>)[seg];
+  }
+  return cur;
+}
+
+function walkFunctionPaths(root: unknown, prefix = ''): string[] {
+  if (!root || typeof root !== 'object') return [];
+  const out: string[] = [];
+  for (const [key, value] of Object.entries(root as Record<string, unknown>)) {
+    const pathKey = prefix ? `${prefix}.${key}` : key;
+    if (typeof value === 'function') {
+      out.push(pathKey);
+    } else if (value && typeof value === 'object') {
+      out.push(...walkFunctionPaths(value, pathKey));
+    }
+  }
+  return out.sort();
+}
+
+function allRuntimeFunctionPaths(): string[] {
+  const paths: string[] = [];
+  for (const [world, api] of Object.entries(capturedWorlds)) {
+    for (const p of walkFunctionPaths(api)) {
+      paths.push(`${world}.${p}`);
+    }
+  }
+  return paths.sort();
+}
+
+const SAMPLE = {
+  str: 'bridge-sample',
+  str2: 'bridge-sample-2',
+  path: '/tmp/bridge-sample',
+  path2: '/tmp/bridge-sample-notes',
+  id: 'bridge-id',
+  /** Distinct positional ids — order-sensitive forwarding must not reuse the same value. */
+  idA: 'bridge-id-a',
+  idB: 'bridge-id-b',
+  idC: 'bridge-id-c',
+  idD: 'bridge-id-d',
+  idE: 'bridge-id-e',
+  idF: 'bridge-id-f',
+  num: 7,
+  bool: true,
+  obj: { bridge: true },
+  arr: ['bridge'],
+  buf: new ArrayBuffer(4),
+  u8: new Uint8Array([1, 2, 3]),
+  file: new File(['bridge'], 'sample.txt'),
+  token: 'bridge-token',
+} as const;
+
+const NOTES_BOARD_TRASH_TARGETS = [
+  { kind: 'note' as const, itemPath: '/tmp/bridge-sample/note-a.md', label: 'note-a' },
+  { kind: 'furniture' as const, furnitureId: SAMPLE.id, label: 'desk-1' },
+];
+
+/** Per-path call shape: argument list and exact invoke/send payload (2nd argument). */
+type BridgeCallSpec = {
+  args: unknown[];
+  payload?: unknown;
+  op?: 'invoke' | 'send';
+  /** ipcRenderer.invoke was called with the channel string only (no payload argument). */
+  singleArgInvoke?: boolean;
+};
+
+type BridgeArgOverride = Pick<BridgeCallSpec, 'args' | 'op' | 'payload' | 'singleArgInvoke'>;
+
+/** Argument / op overrides where default arity sampling is not enough. */
+const BRIDGE_ARG_OVERRIDES: Record<string, BridgeArgOverride> = {
+  'api.agentBrainstorm': {
+    args: [SAMPLE.str, [{ role: 'user' as const, content: 'hi' }]],
+  },
+  'api.agentArchive': {
+    args: [SAMPLE.str, [{ role: 'user' as const, content: 'hi' }]],
+  },
+  'api.vaultSetPaths': {
+    args: [SAMPLE.path, SAMPLE.path2, { seedMode: 'default' as const, storyVaultToken: SAMPLE.token }],
+  },
+  'api.importHub.previewDropped': { args: [SAMPLE.file] },
+  'api.importHub.commit': { args: [SAMPLE.token, { story: true }] },
+  'api.importDocxToStoryVault': { args: [[SAMPLE.path]] },
+  'api.streamAck': { args: [SAMPLE.id, SAMPLE.num], op: 'send' },
+  'api.sttStart': { args: [], op: 'send', singleArgInvoke: true },
+  'api.sttStop': { args: [], op: 'send', singleArgInvoke: true },
+  'api.notifyFlushBeforeQuitDone': { args: [], op: 'send', singleArgInvoke: true },
+  'api.voiceAudioChunk': {
+    args: [SAMPLE.id, SAMPLE.buf],
+    op: 'send',
+    payload: { sessionId: SAMPLE.id, chunk: SAMPLE.buf },
+  },
+  'api.voiceLocalTranscript': { args: [SAMPLE.id, SAMPLE.str, true], op: 'send' },
+  'api.voiceSpeakCancel': { args: [SAMPLE.id], op: 'send' },
+  'api.cancelWritingAssistant': { args: [SAMPLE.id], op: 'send' },
+  'api.cancelBrainstorm': { args: [SAMPLE.id], op: 'send' },
+  'api.cancelVaultCheck': { args: [SAMPLE.id], op: 'send' },
+  'api.cancelAiActivity': { args: [SAMPLE.id], op: 'send' },
+  'api.getRefinementSuggestions': {
+    args: [{
+      original_text: 'orig',
+      refinement_action: 'shorten',
+      active_preset_id: 'preset-1',
+      additional_instruction: 'more',
+    }],
+  },
+  'api.exportDocx': { args: [SAMPLE.id, undefined, { includeSynopsis: true }] },
+  'api.installUpdate': { args: [false] },
+  'api.vaultGraphNodes': { args: ['notes' as const] },
+  'api.vaultGraphEdges': { args: ['both' as const] },
+  'api.notesThumbPut': {
+    args: [SAMPLE.path, 'v1', SAMPLE.u8],
+    payload: { src: SAMPLE.path, version: 'v1', bytes: SAMPLE.u8 },
+  },
+  'api.voicePickBinary': {
+    args: ['stt-binary' as const],
+    payload: { kind: 'stt-binary' },
+  },
+  'api.goalsLogWords': { args: ['2026-01-01', 100] },
+  'api.goalsSetGoal': { args: [500] },
+  'api.agentSessions.appendTurns': {
+    args: [SAMPLE.id, [{ role: 'user' as const, text: 'x', at: 't' }]],
+  },
+  'api.agentSessions.create': {
+    args: [SAMPLE.str, SAMPLE.str2, 'hi', SAMPLE.id],
+  },
+  'api.notesBoardTrashItems': {
+    args: [SAMPLE.path, NOTES_BOARD_TRASH_TARGETS],
+    payload: { folderPath: SAMPLE.path, targets: NOTES_BOARD_TRASH_TARGETS },
+  },
+  'api.tagsBulkApply': {
+    args: [[SAMPLE.id], 'scene' as const, [SAMPLE.str], [SAMPLE.str2]],
+  },
+  'api.obsidianPickFolderByPath': { args: [SAMPLE.path] },
+  'api.storyImportPickFile': { args: ['docx' as const] },
+  'api.panelFloat': {
+    args: [SAMPLE.id, { sourceSidebar: 'left' as const, x: 1, y: 2, width: 100, height: 200 }],
+  },
+  'api.settingsSet': {
+    args: [SAMPLE.obj, { sttBinaryToken: SAMPLE.token }],
+  },
+  'api.smartFolderUpdate': {
+    args: [SAMPLE.id, { name: SAMPLE.str, query: SAMPLE.str2 }],
+  },
+  'api.suggestionsList': {
+    args: [SAMPLE.str, SAMPLE.str2, { limit: 10, offset: 0 }],
+  },
+  'api.notesThumbResolve': { args: [[SAMPLE.path, SAMPLE.str2]] },
+  'api.agentSessions.delete': { args: [SAMPLE.id] },
+  'api.agentSessions.duplicate': { args: [SAMPLE.id] },
+  'api.agentSessions.read': { args: [SAMPLE.id] },
+  'api.agentSessions.list': { args: [SAMPLE.str] },
+  'api.customFieldsSet': { args: [[{ name: SAMPLE.str, type: 'text' as const }]] },
+  'api.generationLogRecent': { args: [{ limit: 10 }] },
+  'api.providerListModels': { args: [SAMPLE.obj] },
+};
+
+const SINGLE_ARG_SEND = new Set(['api.sttStart', 'api.sttStop', 'api.notifyFlushBeforeQuitDone']);
+
+const FIXTURES_DIR = path.join(SRC_DIR, '..', 'fixtures');
+const BRIDGE_RECORDED_PATH = path.join(FIXTURES_DIR, 'preload.bridge.recorded.json');
+const BRIDGE_LISTENERS_PATH = path.join(FIXTURES_DIR, 'preload.bridge.listeners.json');
+
+type BridgeRecordedFixture = { recorded: Record<string, unknown>; singles: string[] };
+
+let bridgeRecordedSourcePath: string = BRIDGE_RECORDED_PATH;
+const bridgeRecordedCacheByPath = new Map<string, BridgeRecordedFixture>();
+let listenerFixtureCache: Record<string, ListenerFixtureRow> | null = null;
+
+function invalidateBridgeFixturesCache(): void {
+  bridgeRecordedCacheByPath.delete(BRIDGE_RECORDED_PATH);
+  listenerFixtureCache = null;
+}
+
+function loadBridgeRecordedFixture(recordedPath: string): BridgeRecordedFixture {
+  if (!fs.existsSync(recordedPath)) {
+    return { recorded: {}, singles: [] };
+  }
+  return JSON.parse(fs.readFileSync(recordedPath, 'utf8')) as BridgeRecordedFixture;
+}
+
+function readBridgeRecordedFixtureAt(recordedPath: string): BridgeRecordedFixture {
+  const cached = bridgeRecordedCacheByPath.get(recordedPath);
+  if (cached !== undefined) return cached;
+  const loaded = loadBridgeRecordedFixture(recordedPath);
+  bridgeRecordedCacheByPath.set(recordedPath, loaded);
+  return loaded;
+}
+
+function getBridgeRecordedPayloads(recordedPath: string = bridgeRecordedSourcePath): Record<string, unknown> {
+  return readBridgeRecordedFixtureAt(recordedPath).recorded;
+}
+
+function getSingleArgInvokeSet(recordedPath: string = bridgeRecordedSourcePath): Set<string> {
+  return new Set(readBridgeRecordedFixtureAt(recordedPath).singles);
+}
+
+function getListenerFixture(): Record<string, ListenerFixtureRow> {
+  if (listenerFixtureCache === null) {
+    if (!fs.existsSync(BRIDGE_LISTENERS_PATH)) {
+      listenerFixtureCache = {};
+    } else {
+      listenerFixtureCache = JSON.parse(
+        fs.readFileSync(BRIDGE_LISTENERS_PATH, 'utf8'),
+      ) as Record<string, ListenerFixtureRow>;
+    }
+  }
+  return listenerFixtureCache;
+}
+
+type ListenerKind =
+  | 'noArg'
+  | 'passthrough'
+  | 'chunk'
+  | 'requestId'
+  | 'text'
+  | 'panelId'
+  | 'storySlug'
+  | 'entries'
+  | 'info';
+
+type ListenerFixtureRow = {
+  kind: ListenerKind;
+  ipcPayload?: unknown;
+};
+
+/** Minimal shared payload for generic `cb(data)` listeners without channel overrides. */
+const LISTENER_SHARED_PASSTHROUGH = SAMPLE.obj;
+
+const LISTENER_PASSTHROUGH_BY_CHANNEL: Record<string, unknown> = {
+  'jobs:event': { jobId: SAMPLE.id, event: 'progress' },
+  'navigator:scene-changed': { sceneId: SAMPLE.id },
+  'navigator:scene-synced': { sceneId: SAMPLE.id },
+  'project:switched': { vaultRoot: SAMPLE.path, notesVaultRoot: SAMPLE.path2 },
+  'vault:notes-asset-changed': { path: SAMPLE.path },
+  'vault:notes-updated': { count: 1, path: SAMPLE.path },
+  'vault:file-changed': { path: SAMPLE.path },
+  'vault:obsidian:import:progress': { current: 1, total: 2, lastAction: 'lc' },
+  'stream:reasoning': { streamId: SAMPLE.id },
+  'stream:token': { streamId: SAMPLE.id, token: 'lc-token' },
+  'stream:end': { streamId: SAMPLE.id },
+  'stream:error': { streamId: SAMPLE.id, category: 'lc-cat', message: 'lc-msg' },
+  'brainstorm:proposalQueued': { proposals: [{ id: 'p' }] },
+  'panel:float-closed': {
+    panelId: SAMPLE.id,
+    docked: true,
+    bounds: { x: 0, y: 0, width: 1, height: 1 },
+  },
+  'panel:float-bounds': { panelId: SAMPLE.id, x: 0, y: 0, width: 1, height: 1 },
+  'panel:float-pin-changed': { panelId: SAMPLE.id, alwaysOnTop: false },
+  'panel:popout-closed': { panelId: SAMPLE.id },
+  'scene-crafter:external-edit': { storySlug: 'lc-slug' },
+};
+
+const FAKE_IPC_RENDERER_EVENT = Object.freeze({
+  sender: { id: 4242, send: () => undefined },
+  preventDefault: () => undefined,
+});
+
+const INVOKE_ENVELOPE_CALL_KEYS = new Set([
+  'api.settingsGet',
+  'api.settingsSet',
+  'api.settingsTestConnection',
+  'api.betaReadScan',
+  'api.betaReportRun',
+  'api.productionRoleRun',
+]);
+
+const ORDERED_IDS = [SAMPLE.idA, SAMPLE.idB, SAMPLE.idC, SAMPLE.idD, SAMPLE.idE, SAMPLE.idF] as const;
+
+function singleArgDefault(row: ExposedRow): unknown {
+  const leaf = row.path.split('.').pop() ?? row.path;
+  const hay = `${row.path} ${row.channel} ${leaf}`.toLowerCase();
+
+  if (row.channel.includes('voice:pickBinary')) return 'stt-binary';
+  if (leaf === 'installUpdate') return false;
+  if (row.channel === 'vault:graphNodes') return 'notes';
+  if (row.channel === 'vault:graphEdges') return 'both';
+  if (row.channel === 'voice:stop' || leaf === 'voiceStop') return SAMPLE.id;
+  if (leaf === 'writeManifest' || row.channel === 'vault:manifest:write') return SAMPLE.obj;
+  if (
+    hay.includes('path') ||
+    hay.includes('folder') ||
+    hay.includes('root') ||
+    hay.includes('directory') ||
+    hay.includes('pickfolder')
+  ) {
+    return SAMPLE.path;
+  }
+  if (
+    hay.includes('sceneid') ||
+    hay.includes('sessionid') ||
+    hay.includes('storyid') ||
+    hay.includes('snapshotid') ||
+    hay.includes('entityid') ||
+    hay.includes('jobid') ||
+    hay.includes('streamid') ||
+    hay.includes('speakid') ||
+    hay.includes('requestid') ||
+    hay.includes('suggestionid') ||
+    hay.includes('proposalid') ||
+    hay.includes('furnitureid') ||
+    hay.includes('relationshipid') ||
+    hay.includes('panelid') ||
+    hay.includes('timelineid') ||
+    hay.includes('arcid') ||
+    hay.includes('itemid') ||
+    leaf.endsWith('id') ||
+    leaf.endsWith('byid')
+  ) {
+    return SAMPLE.id;
+  }
+  if (leaf === 'customfieldsset' || row.path === 'customFieldsSet') {
+    return [{ name: SAMPLE.str, type: 'text' as const }];
+  }
+  if (leaf.includes('generationlog') && leaf.includes('recent')) {
+    return { limit: 10 };
+  }
+  if (leaf.includes('providerlist') || leaf === 'providerListModels') {
+    return SAMPLE.obj;
+  }
+  return SAMPLE.str;
+}
+
+function defaultArgsFor(row: ExposedRow, fn: (...args: unknown[]) => unknown): unknown[] {
+  const key = callKey(row);
+  if (BRIDGE_ARG_OVERRIDES[key]?.args) return BRIDGE_ARG_OVERRIDES[key].args;
+  const n = fn.length;
+  if (n === 0) return [];
+  if (n === 1) return [singleArgDefault(row)];
+  const pathFirst =
+    row.path.includes('Vault') ||
+    row.path.includes('Path') ||
+    row.path.endsWith('Folder') ||
+    row.channel.startsWith('vault:') ||
+    row.channel.startsWith('notesVault:') ||
+    row.channel.startsWith('notesThumb:');
+  return Array.from({ length: n }, (_, i) => {
+    if (pathFirst && i === 0) return SAMPLE.path;
+    if (pathFirst && i === 1) return SAMPLE.path2;
+    return ORDERED_IDS[i] ?? SAMPLE.str;
+  });
+}
+
+function callKey(row: ExposedRow): string {
+  return `${row.world}.${row.path}`;
+}
+
+function firstIpcMockCall(mock: { mock: { calls: readonly unknown[][] } }): unknown[] {
+  const call = mock.mock.calls[0];
+  expect(call).toBeDefined();
+  return call as unknown[];
+}
+
+function resolveCallSpec(row: ExposedRow, fn: (...args: unknown[]) => unknown): BridgeCallSpec {
+  const key = callKey(row);
+  const override = BRIDGE_ARG_OVERRIDES[key];
+  const args = override?.args ?? defaultArgsFor(row, fn);
+  const op =
+    override?.op ??
+    (row.channel === 'stt:start' ||
+    row.channel === 'stt:stop' ||
+    row.channel === 'app:flushBeforeQuitDone'
+      ? 'send'
+      : 'invoke');
+  const singleArgInvoke =
+    override?.singleArgInvoke ?? (op === 'send' ? SINGLE_ARG_SEND.has(key) : getSingleArgInvokeSet().has(key));
+  const payload =
+    override?.payload ?? (singleArgInvoke ? undefined : getBridgeRecordedPayloads()[key]);
+  return { args, payload, op, singleArgInvoke };
+}
+
+function assertNoRawIpcSurface(value: unknown, pathKey: string, ipcRendererRef: unknown): void {
+  if (value === ipcRendererRef) {
+    throw new Error(`Exposed ipcRenderer at ${pathKey}`);
+  }
+  if (typeof value === 'function') {
+    const src = Function.prototype.toString.call(value);
+    if (/ipcRenderer\.(invoke|send|on)\(\s*[a-zA-Z_$]/.test(src)) {
+      throw new Error(`Exposed bridge forwards a dynamic channel at ${pathKey}`);
+    }
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    assertNoRawIpcSurface(v, `${pathKey}.${k}`, ipcRendererRef);
+  }
+}
+
+/** Only channels whose preload handler forwards an array to the user callback. */
+const LISTENER_ENTRIES_CHANNELS = new Set(['ai-activity:update']);
+
+const LISTENER_ENTRIES_BY_CHANNEL: Record<string, unknown[]> = {
+  'ai-activity:update': [{ id: SAMPLE.id, agent: SAMPLE.str, status: 'running' }],
+};
+
+/** Only channels whose preload handler is `cb(info)` with the board write-refused shape. */
+const LISTENER_INFO_CHANNELS = new Set(['notesBoard:writeRefused']);
+
+const LISTENER_INFO_BY_CHANNEL: Record<string, { folderRelPath: string; code: string; message: string }> = {
+  'notesBoard:writeRefused': { folderRelPath: SAMPLE.path, code: 'lc', message: 'lc-msg' },
+};
+
+const LISTENER_KIND_PROBE_ORDER: ListenerKind[] = [
+  'noArg',
+  'chunk',
+  'requestId',
+  'text',
+  'panelId',
+  'storySlug',
+  'passthrough',
+  'info',
+  'entries',
+];
+
+function listenerProbeMatchesKind(
+  probeCb: ReturnType<typeof vi.fn>,
+  row: ListenerFixtureRow,
+): boolean {
+  const expected = userCbArgsFromListenerRow(row);
+  if (probeCb.mock.calls.length !== 1) return false;
+  const actual = probeCb.mock.calls[0]!;
+  if (actual.length !== expected.length) return false;
+  return actual.every((arg, i) => JSON.stringify(arg) === JSON.stringify(expected[i]));
+}
+
+function probeListenerKindForRecord(
+  bridgeFn: (cb: (arg?: unknown) => void) => () => void,
+  row: ExposedRow,
+): ListenerKind {
+  for (const kind of LISTENER_KIND_PROBE_ORDER) {
+    if (kind === 'entries' && !LISTENER_ENTRIES_CHANNELS.has(row.channel)) continue;
+    if (kind === 'info' && !LISTENER_INFO_CHANNELS.has(row.channel)) continue;
+    if (kind === 'passthrough' && LISTENER_ENTRIES_CHANNELS.has(row.channel)) continue;
+    if (kind === 'passthrough' && LISTENER_INFO_CHANNELS.has(row.channel)) continue;
+    const ipcPayload = defaultIpcPayloadForListener(row, kind);
+    const fixture: ListenerFixtureRow =
+      ipcPayload === undefined ? { kind } : { kind, ipcPayload };
+    const probeCb = vi.fn<(arg?: unknown) => void>();
+    onMock.mockClear();
+    bridgeFn(probeCb);
+    const handler = onMock.mock.calls[0]?.[1] as ((...args: unknown[]) => void) | undefined;
+    if (!handler) continue;
+    try {
+      handler(...ipcInvokeArgsForListenerRow(fixture));
+    } catch {
+      continue;
+    }
+    if (listenerProbeMatchesKind(probeCb, fixture)) return kind;
+  }
+  throw new Error(`Could not probe listener callback shape for ${callKey(row)}`);
+}
+
+function defaultIpcPayloadForListener(row: ExposedRow, kind: ListenerKind): unknown | undefined {
+  if (kind === 'noArg') return undefined;
+  if (kind === 'chunk') return { chunk: 'lc-chunk' };
+  if (kind === 'requestId') return { requestId: SAMPLE.id, category: 'lc-cat', message: 'lc-msg' };
+  if (kind === 'text') return { text: 'lc-text' };
+  if (kind === 'panelId') return { panelId: SAMPLE.id };
+  if (kind === 'storySlug') return { storySlug: 'lc-slug' };
+  if (kind === 'entries') {
+    return LISTENER_ENTRIES_BY_CHANNEL[row.channel] ?? [{ id: SAMPLE.id, agent: SAMPLE.str, status: 'running' }];
+  }
+  if (kind === 'info') {
+    return LISTENER_INFO_BY_CHANNEL[row.channel] ?? { folderRelPath: SAMPLE.path, code: 'lc', message: 'lc-msg' };
+  }
+  return LISTENER_PASSTHROUGH_BY_CHANNEL[row.channel] ?? LISTENER_SHARED_PASSTHROUGH;
+}
+
+function userCbArgsFromListenerRow(row: ListenerFixtureRow): unknown[] {
+  const { kind, ipcPayload } = row;
+  if (kind === 'noArg') return [];
+  if (kind === 'chunk') return [(ipcPayload as { chunk: string }).chunk];
+  if (kind === 'requestId') return [(ipcPayload as { requestId: string }).requestId];
+  if (kind === 'text') return [(ipcPayload as { text: string }).text];
+  if (kind === 'panelId') return [(ipcPayload as { panelId: string }).panelId];
+  if (kind === 'storySlug') return [(ipcPayload as { storySlug: string }).storySlug];
+  if (kind === 'entries') return [ipcPayload];
+  if (kind === 'info') return [ipcPayload];
+  return [ipcPayload];
+}
+
+function ipcInvokeArgsForListenerRow(row: ListenerFixtureRow): unknown[] {
+  if (row.kind === 'noArg') return [FAKE_IPC_RENDERER_EVENT];
+  return [FAKE_IPC_RENDERER_EVENT, row.ipcPayload];
+}
+
+function recordListenerFixtureRow(row: ExposedRow): ListenerFixtureRow {
+  const bridgeFn = getAtPath(capturedWorlds[row.world], row.path) as (
+    cb: (arg?: unknown) => void,
+  ) => () => void;
+  const kind = probeListenerKindForRecord(bridgeFn, row);
+  const ipcPayload = defaultIpcPayloadForListener(row, kind);
+  const probeCb = vi.fn<(arg?: unknown) => void>();
+  onMock.mockClear();
+  bridgeFn(probeCb);
+  const handler = onMock.mock.calls[0]![1] as (...args: unknown[]) => void;
+  handler(...ipcInvokeArgsForListenerRow({ kind, ipcPayload }));
+  const fixture: ListenerFixtureRow = ipcPayload === undefined ? { kind } : { kind, ipcPayload };
+  expect(probeCb).toHaveBeenCalledWith(...userCbArgsFromListenerRow(fixture));
+  return fixture;
+}
+
+function assertListenerForwardsFromTable(
+  key: string,
+  ipcHandler: (...args: unknown[]) => void,
+  userCb: ReturnType<typeof vi.fn>,
+): void {
+  const spec = getListenerFixture()[key];
+  expect(spec, `missing listener fixture for ${key}`).toBeDefined();
+  userCb.mockClear();
+  ipcHandler(...ipcInvokeArgsForListenerRow(spec!));
+  expect(userCb).toHaveBeenCalledTimes(1);
+  expect(userCb).toHaveBeenCalledWith(...userCbArgsFromListenerRow(spec!));
+  for (const call of userCb.mock.calls) {
+    expect(call[0]).not.toBe(FAKE_IPC_RENDERER_EVENT);
+  }
+}
+
+describe.skipIf(!!process.env.PRELOAD_BRIDGE_RECORD)('preload bridge', () => {
+  beforeEach(() => {
+    invokeMock.mockClear();
+    sendMock.mockClear();
+    onMock.mockClear();
+    removeListenerMock.mockClear();
+  });
+
+  it('covers every frozen listener with a fixture table row', () => {
+    const missing = FROZEN_LISTENERS.map(callKey).filter((key) => !getListenerFixture()[key]);
+    expect(missing).toEqual([]);
+  });
+
+  it('covers every frozen exposeInMainWorld function (new key without a case fails)', () => {
+    const runtime = allRuntimeFunctionPaths();
+    const frozen = FROZEN_IPC.map(callKey).sort();
+    expect(runtime).toEqual(frozen);
+  });
+
+  it('invoke/send channels are IPC_CHANNELS or frozen literal exceptions', () => {
+    const literalNotInIpcTable = new Set([
+      'stt:start',
+      'stt:stop',
+      'stream:ack',
+      'stream:start',
+      'stream:cancel',
+      'voice:audio-chunk',
+      'voice:local-transcript',
+      'voice:speak:cancel',
+      'agent:writing-assistant:stream-cancel',
+      'agent:brainstorm:stream-cancel',
+      'agent:vault-check:stream-cancel',
+      'ai-activity:cancel',
+      'ai-activity:get-snapshot',
+      'preset:getAll',
+      'preset:getRubric',
+      'writing-assistant:set-active-scene',
+    ]);
+    const missing = FROZEN_CALLS.filter(
+      (row) =>
+        !literalNotInIpcTable.has(row.channel) &&
+        !IPC_CHANNEL_VALUES.has(row.channel),
+    ).map((row) => `${row.channel} (${callKey(row)})`);
+    expect(missing).toEqual([]);
+  });
+
+  it('does not expose ipcRenderer or dynamic-channel bridges', () => {
+    for (const [world, api] of Object.entries(capturedWorlds)) {
+      assertNoRawIpcSurface(api, world, ipcRenderer);
+    }
+  });
+
+  it.each(FROZEN_CALLS.map((row) => [callKey(row), row] as const))(
+    '%s forwards the exact IPC channel and payload',
+    async (_key, row) => {
+      const api = capturedWorlds[row.world];
+      const fn = getAtPath(api, row.path);
+      expect(typeof fn).toBe('function');
+      const spec = resolveCallSpec(row, fn as (...a: unknown[]) => unknown);
+      const result = (fn as (...a: unknown[]) => unknown)(...spec.args);
+      if (result && typeof (result as Promise<unknown>).then === 'function') {
+        await result;
+      }
+
+      const op = spec.op ?? 'invoke';
+      if (op === 'send') {
+        expect(sendMock).toHaveBeenCalledTimes(1);
+        if (spec.singleArgInvoke) {
+          expect(sendMock).toHaveBeenCalledWith(row.channel);
+        } else {
+          expect(sendMock).toHaveBeenCalledWith(row.channel, spec.payload);
+        }
+        expect(invokeMock).not.toHaveBeenCalled();
+        return;
+      }
+
+      expect(invokeMock).toHaveBeenCalledTimes(1);
+      if (spec.singleArgInvoke) {
+        expect(invokeMock).toHaveBeenCalledWith(row.channel);
+      } else {
+        expect(invokeMock).toHaveBeenCalledWith(row.channel, spec.payload);
+      }
+      expect(sendMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(FROZEN_LISTENERS.map((row) => [callKey(row), row] as const))(
+    '%s subscribe returns an unsubscribe that removes the same listener',
+    (_key, row) => {
+      const api = capturedWorlds[row.world];
+      const fn = getAtPath(api, row.path);
+      expect(typeof fn).toBe('function');
+
+      const cb = vi.fn<(arg?: unknown) => void>();
+      const unsub = (fn as (listener: (arg?: unknown) => void) => () => void)(cb);
+      expect(typeof unsub).toBe('function');
+      expect(onMock).toHaveBeenCalledTimes(1);
+      const onCall = firstIpcMockCall(onMock);
+      expect(onCall[0]).toBe(row.channel);
+      const handler = onCall[1] as (...args: unknown[]) => void;
+      expect(typeof handler).toBe('function');
+
+      assertListenerForwardsFromTable(callKey(row), handler, cb);
+
+      unsub();
+      expect(removeListenerMock).toHaveBeenCalledTimes(1);
+      expect(removeListenerMock).toHaveBeenCalledWith(row.channel, handler);
+    },
+  );
+
+  it.each(
+    FROZEN_CALLS.filter((row) => INVOKE_ENVELOPE_CALL_KEYS.has(callKey(row))).map(
+      (row) => [callKey(row), row] as const,
+    ),
+  )('%s unwraps invoke IPC envelopes (data and error)', async (_key, row) => {
+    const api = capturedWorlds[row.world];
+    const fn = getAtPath(api, row.path);
+    expect(typeof fn).toBe('function');
+    const spec = resolveCallSpec(row, fn as (...a: unknown[]) => unknown);
+
+    invokeMock.mockResolvedValueOnce({ ok: true, data: { probe: 'envelope-ok' } });
+    const ok = await (fn as (...a: unknown[]) => Promise<unknown>)(...spec.args);
+    expect(ok).toEqual({ probe: 'envelope-ok' });
+
+    invokeMock.mockResolvedValueOnce({ ok: false, code: 'ERR', message: 'envelope-fail' });
+    const err = await (fn as (...a: unknown[]) => Promise<unknown>)(...spec.args);
+    expect(err).toEqual({ error: 'envelope-fail' });
+  });
+
+  it('isPackaged is a boolean constant, not IPC', () => {
+    expect((capturedWorlds.api as { isPackaged: boolean }).isPackaged).toBe(false);
+  });
+
+  it('notesBoardTrashItems forwards every selected target to IPC (red-on-revert)', async () => {
+    const row = FROZEN_CALLS.find((r) => callKey(r) === 'api.notesBoardTrashItems');
+    expect(row).toBeDefined();
+    const override = BRIDGE_ARG_OVERRIDES['api.notesBoardTrashItems']!;
+    const targets = override.args[1] as typeof NOTES_BOARD_TRASH_TARGETS;
+    expect(targets).toHaveLength(2);
+    expect(targets[0]!.kind).not.toBe(targets[1]!.kind);
+    const api = capturedWorlds[row!.world];
+    const fn = getAtPath(api, row!.path) as (...a: unknown[]) => unknown;
+    await (fn(...override.args) as Promise<unknown>);
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock).toHaveBeenCalledWith(row!.channel, override.payload);
+    const payload = firstIpcMockCall(invokeMock)[1] as { targets: typeof NOTES_BOARD_TRASH_TARGETS };
+    expect(payload.targets).toEqual(targets);
+  });
+
+  it('vaultSetPaths golden encodes distinct story vs notes paths (red-on-revert)', () => {
+    const golden = getBridgeRecordedPayloads()['api.vaultSetPaths'] as {
+      storyVaultPath: string;
+      notesVaultPath: string;
+    };
+    expect(golden.storyVaultPath).toBe(SAMPLE.path);
+    expect(golden.notesVaultPath).toBe(SAMPLE.path2);
+    expect(golden.storyVaultPath).not.toBe(golden.notesVaultPath);
+  });
+
+  it('no-arg listener table rejects raw ipcRenderer.on(channel, cb) wiring (red-on-revert)', () => {
+    const key = 'api.onFlushBeforeQuit';
+    const cb = vi.fn<(arg?: unknown) => void>();
+    const rawUserCbOnChannel = cb as unknown as (...args: unknown[]) => void;
+    expect(() => assertListenerForwardsFromTable(key, rawUserCbOnChannel, cb)).toThrow();
+  });
+});
+
+function buildRecordedFixtureBody(entries: BridgeRecordedFixture): string {
+  const singles = [...entries.singles].sort((a, b) => a.localeCompare(b));
+  return JSON.stringify({ recorded: entries.recorded, singles }, null, 2);
+}
+
+async function writeBridgeListenerFixtureToDisk(
+  targetPath: string = BRIDGE_LISTENERS_PATH,
+): Promise<void> {
+  const table: Record<string, ListenerFixtureRow> = {};
+  for (const row of FROZEN_LISTENERS) {
+    table[callKey(row)] = recordListenerFixtureRow(row);
+  }
+  const body = JSON.stringify(table, null, 2);
+  fs.writeFileSync(targetPath, body);
+  if (targetPath === BRIDGE_LISTENERS_PATH) listenerFixtureCache = null;
+}
+
+async function writeBridgeRecordedFixtureToDisk(
+  targetPath: string = BRIDGE_RECORDED_PATH,
+  options?: { sourcePath?: string },
+): Promise<string> {
+  const sourcePath = options?.sourcePath ?? targetPath;
+  const previousSourcePath = bridgeRecordedSourcePath;
+  bridgeRecordedSourcePath = sourcePath;
+  bridgeRecordedCacheByPath.delete(sourcePath);
+  try {
+    const recorded: Record<string, unknown> = {};
+    const singles: string[] = [];
+    for (const row of FROZEN_CALLS) {
+      invokeMock.mockClear();
+      sendMock.mockClear();
+      const api = capturedWorlds[row.world];
+      const fn = getAtPath(api, row.path) as (...a: unknown[]) => unknown;
+      const spec = resolveCallSpec(row, fn);
+      const result = fn(...spec.args);
+      if (result && typeof (result as Promise<unknown>).then === 'function') await result;
+      const key = callKey(row);
+      if (sendMock.mock.calls.length) {
+        recorded[key] = firstIpcMockCall(sendMock)[1];
+      } else {
+        const invokeCall = firstIpcMockCall(invokeMock);
+        if (invokeCall.length === 1) {
+          singles.push(key);
+        } else {
+          recorded[key] = invokeCall[1];
+        }
+      }
+    }
+    const body = buildRecordedFixtureBody({ recorded, singles });
+    fs.writeFileSync(targetPath, body);
+    if (targetPath === BRIDGE_RECORDED_PATH) {
+      invalidateBridgeFixturesCache();
+    } else if (path.resolve(targetPath) === path.resolve(sourcePath)) {
+      bridgeRecordedCacheByPath.set(sourcePath, JSON.parse(body) as BridgeRecordedFixture);
+    }
+    return body;
+  } finally {
+    bridgeRecordedSourcePath = previousSourcePath;
+  }
+}
+
+describe('preload bridge recorder proofs', () => {
+  it('listener fixture record matches committed JSON', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-bridge-listener-record-'));
+    const outPath = path.join(tmpDir, path.basename(BRIDGE_LISTENERS_PATH));
+    try {
+      await writeBridgeListenerFixtureToDisk(outPath);
+      const recorded = fs.readFileSync(outPath, 'utf8');
+      const committed = fs.readFileSync(BRIDGE_LISTENERS_PATH, 'utf8');
+      expect(recorded).toBe(committed);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('recorded invoke fixture is idempotent (back-to-back record)', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-bridge-record-'));
+    const outPath = path.join(tmpDir, path.basename(BRIDGE_RECORDED_PATH));
+    try {
+      const first = await writeBridgeRecordedFixtureToDisk(outPath);
+      const second = await writeBridgeRecordedFixtureToDisk(outPath);
+      expect(second).toBe(first);
+      expect(fs.readFileSync(outPath, 'utf8')).toBe(first);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('buildRecordedFixtureBody sorts singles regardless of input order', () => {
+    const recorded = { 'api.sttStart': null };
+    const forward = ['api.agentSessions.list', 'api.sttStart', 'api.voiceStop'];
+    const reverse = [...forward].reverse();
+    const forwardBody = buildRecordedFixtureBody({ recorded, singles: forward });
+    const reverseBody = buildRecordedFixtureBody({ recorded, singles: reverse });
+    expect(reverseBody).toBe(forwardBody);
+    expect(JSON.parse(forwardBody).singles).toEqual(
+      [...forward].sort((a, b) => a.localeCompare(b)),
+    );
+  });
+
+  it('bootstraps recorded fixture when file is absent', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-bridge-record-'));
+    const outPath = path.join(tmpDir, path.basename(BRIDGE_RECORDED_PATH));
+    const readSpy = vi.spyOn(fs, 'readFileSync');
+    try {
+      expect(fs.existsSync(outPath)).toBe(false);
+      readSpy.mockClear();
+      const bootstrap = await writeBridgeRecordedFixtureToDisk(outPath, { sourcePath: outPath });
+      const repoReads = readSpy.mock.calls.filter(
+        (call) => path.resolve(String(call[0])) === path.resolve(BRIDGE_RECORDED_PATH),
+      );
+      expect(repoReads).toHaveLength(0);
+      expect(fs.existsSync(outPath)).toBe(true);
+      expect(fs.readFileSync(outPath, 'utf8')).toBe(bootstrap);
+      readSpy.mockClear();
+      const again = await writeBridgeRecordedFixtureToDisk(outPath, { sourcePath: outPath });
+      const repoReadsAgain = readSpy.mock.calls.filter(
+        (call) => path.resolve(String(call[0])) === path.resolve(BRIDGE_RECORDED_PATH),
+      );
+      expect(repoReadsAgain).toHaveLength(0);
+      expect(again).toBe(bootstrap);
+    } finally {
+      readSpy.mockRestore();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe.skipIf(!process.env.PRELOAD_BRIDGE_RECORD)('preload bridge recorder', () => {
+  it('refresh listener fixture table', async () => {
+    await writeBridgeListenerFixtureToDisk();
+    const onDisk = fs.readFileSync(BRIDGE_LISTENERS_PATH, 'utf8');
+    expect(JSON.parse(onDisk)).toEqual(JSON.parse(fs.readFileSync(BRIDGE_LISTENERS_PATH, 'utf8')));
+    expect(Object.keys(JSON.parse(onDisk)).length).toBe(FROZEN_LISTENERS.length);
+  });
+
+  it('refresh BRIDGE_RECORDED_PAYLOADS', async () => {
+    const body = await writeBridgeRecordedFixtureToDisk();
+    expect(fs.readFileSync(BRIDGE_RECORDED_PATH, 'utf8')).toBe(body);
+    expect(Object.keys(JSON.parse(body).recorded).length).toBeGreaterThan(0);
+  });
+});
+
+let mutatedPreloadDirForCleanup: string | undefined;
+
+function writeMutatedPreloadToTemp(channelNeedle: string, channelReplacement: string): string {
+  const original = fs.readFileSync(path.join(SRC_DIR, 'preload.ts'), 'utf8');
+  const mutated = original
+    .split(channelNeedle)
+    .join(channelReplacement)
+    .replace(/from '\.\/([^']+)'/g, (_match, rel: string) => {
+      const abs = path.join(SRC_DIR, rel).split(path.sep).join('/');
+      return `from '${abs}'`;
+    });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-bridge-mut-'));
+  const outPath = path.join(dir, 'preload.mutated.ts');
+  fs.writeFileSync(outPath, mutated, { flag: 'wx' });
+  mutatedPreloadDirForCleanup = dir;
+  return outPath;
+}
+
+async function assertReadVaultChannelContractUnderPreload(moduleHref: string): Promise<void> {
+  vi.resetModules();
+  for (const key of Object.keys(harness.capturedWorlds)) {
+    delete harness.capturedWorlds[key];
+  }
+  vi.doMock('electron', () => ({
+    contextBridge: {
+      exposeInMainWorld: (name: string, value: unknown) => {
+        harness.capturedWorlds[name] = value;
+      },
+    },
+    ipcRenderer: {
+      invoke: (...args: unknown[]) => harness.invokeMock(...args),
+      send: (...args: unknown[]) => harness.sendMock(...args),
+      on: (...args: unknown[]) => harness.onMock(...args),
+      removeListener: (...args: unknown[]) => harness.removeListenerMock(...args),
+    },
+    webUtils: {
+      getPathForFile: (file: File) => `/mock/${file.name}`,
+    },
+  }));
+  await import(`${moduleHref}?mut=${Date.now()}`);
+  invokeMock.mockClear();
+  invokeMock.mockResolvedValue({ ok: true, data: null });
+  const api = harness.capturedWorlds.api as { readVault: (pathArg: string) => Promise<unknown> };
+  await api.readVault(SAMPLE.path);
+  expect(invokeMock).toHaveBeenCalledWith('vault:read', { path: SAMPLE.path });
+}
+
+describe.skipIf(!!process.env.PRELOAD_BRIDGE_RECORD)('preload bridge mutation sentinel', () => {
+  afterAll(() => {
+    if (mutatedPreloadDirForCleanup) {
+      fs.rmSync(mutatedPreloadDirForCleanup, { recursive: true, force: true });
+    }
+  });
+
+  it('loads mutated preload and fails the vault:read channel contract', async () => {
+    const mutatedHref = pathToFileURL(
+      writeMutatedPreloadToTemp("'vault:read'", "'vault:read-MUTATION-1910'"),
+    ).href;
+    await expect(assertReadVaultChannelContractUnderPreload(mutatedHref)).rejects.toThrow(
+      /vault:read-MUTATION-1910/,
+    );
+  });
+});

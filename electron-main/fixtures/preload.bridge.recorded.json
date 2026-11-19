@@ -1,0 +1,1008 @@
+{
+  "recorded": {
+    "api.agentArchive": {
+      "prompt": "bridge-sample",
+      "history": [
+        {
+          "role": "user",
+          "content": "hi"
+        }
+      ]
+    },
+    "api.agentBrainstorm": {
+      "prompt": "bridge-sample",
+      "history": [
+        {
+          "role": "user",
+          "content": "hi"
+        }
+      ]
+    },
+    "api.agentPersonaRead": {
+      "agentName": "bridge-id-a",
+      "key": "bridge-id-b"
+    },
+    "api.agentPersonaReset": {
+      "agentName": "bridge-id-a",
+      "key": "bridge-id-b"
+    },
+    "api.agentPersonaWrite": {
+      "agentName": "bridge-id-a",
+      "key": "bridge-id-b",
+      "content": "bridge-id-c"
+    },
+    "api.agentSessions.appendTurns": {
+      "sessionId": "bridge-id",
+      "turns": [
+        {
+          "role": "user",
+          "text": "x",
+          "at": "t"
+        }
+      ]
+    },
+    "api.agentSessions.create": {
+      "agent": "bridge-sample",
+      "title": "bridge-sample-2",
+      "greeting": "hi",
+      "id": "bridge-id"
+    },
+    "api.agentSessions.delete": {
+      "sessionId": "bridge-id"
+    },
+    "api.agentSessions.duplicate": {
+      "sessionId": "bridge-id"
+    },
+    "api.agentSessions.list": {
+      "agent": "bridge-sample"
+    },
+    "api.agentSessions.read": {
+      "sessionId": "bridge-id"
+    },
+    "api.agentSessions.rename": {
+      "sessionId": "bridge-id-a",
+      "title": "bridge-id-b"
+    },
+    "api.agentVaultCheck": {
+      "sceneContent": "bridge-sample"
+    },
+    "api.agentVaultIndex": {},
+    "api.agentWritingAssistant": {
+      "prompt": "bridge-id-a",
+      "context": "bridge-id-b"
+    },
+    "api.agentsVaultSyncPartner": "bridge-sample",
+    "api.archive": {
+      "manuscript": "bridge-id-a",
+      "vaultPath": "bridge-id-b"
+    },
+    "api.archiveConfirm": {
+      "suggestionId": "bridge-id-a",
+      "action": "bridge-id-b"
+    },
+    "api.archiveListContinuity": "bridge-sample",
+    "api.archiveResolveContinuity": {
+      "itemId": "bridge-id-a",
+      "action": "bridge-id-b",
+      "note": "bridge-id-c"
+    },
+    "api.archiveScan": {
+      "sceneText": "bridge-id-a",
+      "scenePath": "bridge-id-b"
+    },
+    "api.archiveScanContinuity": {
+      "sceneId": "bridge-id-a",
+      "text": "bridge-id-b",
+      "scope": "bridge-id-c",
+      "checkType": "bridge-id-d"
+    },
+    "api.auditList": {
+      "suggestionId": "bridge-sample"
+    },
+    "api.autoLinkerSetSettings": "bridge-sample",
+    "api.backupAppData": {},
+    "api.betaReadCreate": {
+      "sceneId": "bridge-id-a",
+      "anchorText": "bridge-id-b",
+      "commentText": "bridge-id-c"
+    },
+    "api.betaReadDismiss": {
+      "id": "bridge-sample"
+    },
+    "api.betaReadList": {
+      "sceneId": "bridge-sample"
+    },
+    "api.betaReadScan": {
+      "sceneId": "bridge-id-a",
+      "prose": "bridge-id-b",
+      "scenePath": "bridge-id-c"
+    },
+    "api.betaReportGet": {
+      "id": "bridge-sample"
+    },
+    "api.betaReportList": {
+      "storyId": "bridge-sample"
+    },
+    "api.betaReportRun": "bridge-sample",
+    "api.brainstormBoard.write": {
+      "content": "bridge-sample"
+    },
+    "api.brainstormEnrichEntry": "bridge-sample",
+    "api.brainstormExtractProposals": "bridge-sample",
+    "api.brainstormProposalConfirm": "bridge-sample",
+    "api.brainstormProposalReject": "bridge-sample",
+    "api.brainstormResetCategoryRouting": {
+      "category": "bridge-sample"
+    },
+    "api.brainstormResolveRouting": "bridge-sample",
+    "api.brainstormSelectContext": "bridge-sample",
+    "api.brainstormWriteNote": "bridge-sample",
+    "api.brainstormer": {
+      "topic": "bridge-id-a",
+      "context": "bridge-id-b"
+    },
+    "api.cancelAiActivity": {
+      "requestId": "bridge-id"
+    },
+    "api.cancelBrainstorm": {
+      "requestId": "bridge-id"
+    },
+    "api.cancelVaultCheck": {
+      "requestId": "bridge-id"
+    },
+    "api.cancelWritingAssistant": {
+      "requestId": "bridge-id"
+    },
+    "api.chapterCreate": "bridge-sample",
+    "api.chooseVaultFolder": {
+      "title": "/tmp/bridge-sample",
+      "defaultPath": "/tmp/bridge-sample-notes"
+    },
+    "api.continuityMatchSelection": {
+      "selectedText": "bridge-id-a",
+      "notesVaultRoot": "bridge-id-b"
+    },
+    "api.continuityReadEntity": {
+      "path": "bridge-sample"
+    },
+    "api.continuitySearch": {
+      "query": "bridge-id-a",
+      "notesVaultRoot": "bridge-id-b"
+    },
+    "api.createBlankVault": {
+      "targetPath": "/tmp/bridge-sample",
+      "registrationToken": "/tmp/bridge-sample-notes"
+    },
+    "api.createVaultFromOptions": "bridge-sample",
+    "api.customFieldsSet": {
+      "fields": [
+        {
+          "name": "bridge-sample",
+          "type": "text"
+        }
+      ]
+    },
+    "api.deleteNotesVault": {
+      "path": "bridge-sample"
+    },
+    "api.deleteVault": {
+      "path": "bridge-sample"
+    },
+    "api.draftsCreate": {
+      "sceneId": "bridge-id-a",
+      "content": "bridge-id-b",
+      "label": "bridge-id-c"
+    },
+    "api.draftsDelete": {
+      "snapshotId": "bridge-sample"
+    },
+    "api.draftsLabel": {
+      "snapshotId": "bridge-id-a",
+      "label": "bridge-id-b"
+    },
+    "api.draftsList": {
+      "sceneId": "bridge-sample"
+    },
+    "api.draftsPreview": {
+      "snapshotId": "bridge-sample"
+    },
+    "api.draftsRestore": {
+      "snapshotId": "bridge-id-a",
+      "sceneId": "bridge-id-b",
+      "currentContent": "bridge-id-c"
+    },
+    "api.dryRunObsidianImport": {
+      "srcPath": "bridge-id-a",
+      "targetVaultKind": "bridge-id-b"
+    },
+    "api.entityBacklinks": {
+      "entityId": "bridge-sample"
+    },
+    "api.entityCreate": "bridge-sample",
+    "api.entityDelete": {
+      "id": "bridge-sample"
+    },
+    "api.entityLinkedScenes": {
+      "entityId": "bridge-sample"
+    },
+    "api.entityList": {
+      "type": "bridge-sample"
+    },
+    "api.entityRead": {
+      "id": "bridge-sample"
+    },
+    "api.entityRelationshipsCreate": {
+      "fromEntityId": "bridge-id-a",
+      "toEntityId": "bridge-id-b",
+      "label": "bridge-id-c"
+    },
+    "api.entityRelationshipsDelete": {
+      "relationshipId": "bridge-sample"
+    },
+    "api.entityRelationshipsList": {
+      "entityId": "bridge-sample"
+    },
+    "api.entityUpdate": "bridge-sample",
+    "api.exportDocx": {
+      "storyId": "bridge-id",
+      "options": {
+        "includeSynopsis": true
+      }
+    },
+    "api.exportEpub": {
+      "storyId": "bridge-id-a",
+      "metadata": "bridge-id-b",
+      "targetPath": "bridge-id-c",
+      "options": "bridge-id-d"
+    },
+    "api.exportMarkdown": {
+      "scope": "bridge-sample"
+    },
+    "api.exportPdf": {
+      "scope": "bridge-id-a",
+      "options": "bridge-id-b"
+    },
+    "api.exportPlaintext": {
+      "scope": "bridge-sample"
+    },
+    "api.generationLogGet": {
+      "id": "bridge-sample"
+    },
+    "api.generationLogList": {
+      "page": "bridge-id-a",
+      "pageSize": "bridge-id-b",
+      "agent": "bridge-id-c"
+    },
+    "api.generationLogRecent": {
+      "limit": 10
+    },
+    "api.getRefinementSuggestions": {
+      "messages": [
+        {
+          "role": "user",
+          "content": "Action: shorten\nAdditional instruction: more\nActive preset: preset-1\nOriginal suggestion:\norig"
+        }
+      ],
+      "system": "You are a creative writing refinement assistant. Apply the requested refinement to the suggestion below, maintaining prose quality. Return only the refined suggestion text — no preamble."
+    },
+    "api.goalsLogWords": {
+      "date": "2026-01-01",
+      "wordsAdded": 100
+    },
+    "api.goalsSetGoal": {
+      "dailyGoal": 500
+    },
+    "api.iconReadSvg": {
+      "packName": "bridge-id-a",
+      "iconName": "bridge-id-b"
+    },
+    "api.importDocxToStoryVault": {
+      "filePaths": [
+        "/tmp/bridge-sample"
+      ]
+    },
+    "api.importHub.commit": {
+      "token": "bridge-token",
+      "options": {
+        "story": true
+      }
+    },
+    "api.importHub.pick": {
+      "mode": "bridge-sample"
+    },
+    "api.importHub.previewDropped": {
+      "path": "/mock/sample.txt"
+    },
+    "api.importObsidianVault": "bridge-sample",
+    "api.importVault": {
+      "sourcePath": "/tmp/bridge-sample",
+      "registrationToken": "/tmp/bridge-sample-notes"
+    },
+    "api.importVaultCommit": {
+      "sourcePath": "bridge-sample"
+    },
+    "api.importVaultDryRun": {
+      "sourcePath": "bridge-sample"
+    },
+    "api.installUpdate": {
+      "quit": false
+    },
+    "api.jobs.cancel": {
+      "jobId": "bridge-sample"
+    },
+    "api.jobs.enqueue": {
+      "type": "bridge-id-a"
+    },
+    "api.jobs.list": "bridge-sample",
+    "api.jobs.progress": {
+      "jobId": "bridge-sample"
+    },
+    "api.listNotesVault": {
+      "root": "bridge-sample"
+    },
+    "api.listVault": {
+      "root": "bridge-sample"
+    },
+    "api.loadBgImage": {
+      "filePath": "bridge-sample"
+    },
+    "api.loadSampleProject": {},
+    "api.loadSampleTwoVault": {
+      "parentPath": "bridge-sample"
+    },
+    "api.migrationApply": {
+      "planId": "bridge-id-a",
+      "storyPath": "bridge-id-b"
+    },
+    "api.migrationDryRun": {
+      "storyPath": "bridge-sample"
+    },
+    "api.mkdirNotesVault": {
+      "path": "bridge-sample"
+    },
+    "api.moveNotesVault": {
+      "fromPath": "/tmp/bridge-sample",
+      "toPath": "/tmp/bridge-sample-notes"
+    },
+    "api.moveVault": {
+      "fromPath": "/tmp/bridge-sample",
+      "toPath": "/tmp/bridge-sample-notes"
+    },
+    "api.navigatorReportScene": {
+      "sceneId": "bridge-sample"
+    },
+    "api.navigatorSelectScene": {
+      "sceneId": "bridge-sample"
+    },
+    "api.noteBacklinks": {
+      "notePath": "bridge-sample"
+    },
+    "api.noteTemplateList": {
+      "kind": "bridge-sample"
+    },
+    "api.notesBoardCreateItem": {
+      "folderPath": "bridge-id-a",
+      "kind": "bridge-id-b",
+      "position": "bridge-id-c"
+    },
+    "api.notesBoardEmptyTrash": {},
+    "api.notesBoardFurnitureCreate": {
+      "folderPath": "bridge-id-a",
+      "item": "bridge-id-b"
+    },
+    "api.notesBoardFurnitureDelete": {
+      "folderPath": "bridge-id-a",
+      "furnitureId": "bridge-id-b"
+    },
+    "api.notesBoardFurnitureUpdate": {
+      "folderPath": "bridge-id-a",
+      "furnitureId": "bridge-id-b",
+      "patch": "bridge-id-c"
+    },
+    "api.notesBoardGet": {
+      "folderPath": "bridge-sample"
+    },
+    "api.notesBoardItemDelete": {
+      "folderPath": "bridge-id-a",
+      "itemPath": "bridge-id-b"
+    },
+    "api.notesBoardItemRename": {
+      "folderPath": "bridge-id-a",
+      "fromPath": "bridge-id-b",
+      "toPath": "bridge-id-c"
+    },
+    "api.notesBoardPatchColors": {
+      "folderPath": "bridge-id-a",
+      "itemPath": "bridge-id-b",
+      "color": "bridge-id-c"
+    },
+    "api.notesBoardPatchLayout": {
+      "folderPath": "bridge-id-a",
+      "itemPath": "bridge-id-b",
+      "patch": "bridge-id-c"
+    },
+    "api.notesBoardRecentlyDeletedList": {},
+    "api.notesBoardRenameItem": {
+      "folderPath": "bridge-id-a",
+      "itemPath": "bridge-id-b",
+      "newName": "bridge-id-c"
+    },
+    "api.notesBoardRestore": {
+      "id": "bridge-sample"
+    },
+    "api.notesBoardTrashItems": {
+      "folderPath": "/tmp/bridge-sample",
+      "targets": [
+        {
+          "kind": "note",
+          "itemPath": "/tmp/bridge-sample/note-a.md",
+          "label": "note-a"
+        },
+        {
+          "kind": "furniture",
+          "furnitureId": "bridge-id",
+          "label": "desk-1"
+        }
+      ]
+    },
+    "api.notesGet": {
+      "sceneId": "bridge-sample"
+    },
+    "api.notesSet": {
+      "sceneId": "bridge-id-a",
+      "content": "bridge-id-b"
+    },
+    "api.notesTagMerge": {
+      "sourceTag": "/tmp/bridge-sample",
+      "targetTag": "/tmp/bridge-sample-notes"
+    },
+    "api.notesTagRename": {
+      "oldTag": "/tmp/bridge-sample",
+      "newTag": "/tmp/bridge-sample-notes"
+    },
+    "api.notesThumbGet": {
+      "src": "bridge-sample"
+    },
+    "api.notesThumbImport": {
+      "sourcePath": "bridge-sample"
+    },
+    "api.notesThumbPut": {
+      "src": "/tmp/bridge-sample",
+      "version": "v1",
+      "bytes": {
+        "0": 1,
+        "1": 2,
+        "2": 3
+      }
+    },
+    "api.notesThumbResolve": {
+      "paths": [
+        "/tmp/bridge-sample",
+        "bridge-sample-2"
+      ]
+    },
+    "api.notesTierContext": {
+      "sceneId": "bridge-sample"
+    },
+    "api.notesVaultRegistryCreate": "bridge-sample",
+    "api.notesVaultRegistryRename": {
+      "id": "/tmp/bridge-sample",
+      "displayName": "/tmp/bridge-sample-notes"
+    },
+    "api.notesVaultRegistrySetActive": {
+      "id": "bridge-sample"
+    },
+    "api.notesVaultRegistrySetActivePreview": {
+      "id": "bridge-sample"
+    },
+    "api.notesVaultSetIcon": {
+      "path": "/tmp/bridge-sample",
+      "icon": "/tmp/bridge-sample-notes",
+      "color": "bridge-id-c"
+    },
+    "api.obsidianDryRun": {
+      "sourcePath": "/tmp/bridge-sample",
+      "registrationToken": "/tmp/bridge-sample-notes"
+    },
+    "api.obsidianPickFolderByPath": {
+      "sourcePath": "/tmp/bridge-sample"
+    },
+    "api.obsidianRegister": {
+      "sourcePath": "/tmp/bridge-sample",
+      "registrationToken": "/tmp/bridge-sample-notes"
+    },
+    "api.onboardingComplete": "bridge-sample",
+    "api.onboardingDetectMythosVault": {
+      "path": "bridge-sample"
+    },
+    "api.onboardingOpenExistingVault": {
+      "path": "bridge-sample"
+    },
+    "api.onboardingReset": "bridge-sample",
+    "api.onboardingValidatePath": {
+      "path": "/tmp/bridge-sample"
+    },
+    "api.outline.load": {
+      "storyVaultPath": "bridge-sample"
+    },
+    "api.outline.save": {
+      "storyVaultPath": "bridge-id-a",
+      "data": "bridge-id-b"
+    },
+    "api.panelFloat": {
+      "panelId": "bridge-id",
+      "sourceSidebar": "left",
+      "x": 1,
+      "y": 2,
+      "width": 100,
+      "height": 200
+    },
+    "api.panelFloatDockBack": {
+      "panelId": "bridge-sample"
+    },
+    "api.panelFloatSetPin": {
+      "panelId": "bridge-id-a",
+      "alwaysOnTop": "bridge-id-b"
+    },
+    "api.panelPopout": {
+      "panelId": "bridge-id-a",
+      "sceneId": "bridge-id-b"
+    },
+    "api.pickFolder": "/tmp/bridge-sample",
+    "api.productionRoleRun": "bridge-sample",
+    "api.projectIconSet": "bridge-sample",
+    "api.projectNameSet": "bridge-sample",
+    "api.projectSwitch": {
+      "vaultRoot": "bridge-id-a",
+      "notesVaultRoot": "bridge-id-b"
+    },
+    "api.provenanceUpsert": {
+      "entityId": "bridge-id-a",
+      "entityKind": "bridge-id-b",
+      "agentId": "bridge-id-c",
+      "agentType": "bridge-id-d",
+      "runId": "bridge-id-e"
+    },
+    "api.providerListModels": {
+      "bridge": true
+    },
+    "api.readNotesVault": {
+      "path": "bridge-sample"
+    },
+    "api.readVault": {
+      "path": "bridge-sample"
+    },
+    "api.reorderNotesVault": {
+      "parentPath": "/tmp/bridge-sample",
+      "orderedPaths": "/tmp/bridge-sample-notes"
+    },
+    "api.restoreAppData": {
+      "confirmed": "bridge-sample"
+    },
+    "api.sceneAppendBrainstormNote": {
+      "sceneId": "bridge-id-a",
+      "content": "bridge-id-b"
+    },
+    "api.sceneCrafterAddCard": "bridge-sample",
+    "api.sceneCrafterAddLane": {
+      "storySlug": "bridge-id-a",
+      "name": "bridge-id-b"
+    },
+    "api.sceneCrafterClose": {
+      "storySlug": "bridge-sample"
+    },
+    "api.sceneCrafterCreateBoard": {
+      "storyId": "bridge-id-a",
+      "storySlug": "bridge-id-b"
+    },
+    "api.sceneCrafterDeleteCard": "bridge-sample",
+    "api.sceneCrafterDeleteLane": "bridge-sample",
+    "api.sceneCrafterGetBoard": {
+      "storyId": "bridge-id-a",
+      "storySlug": "bridge-id-b"
+    },
+    "api.sceneCrafterMoveCard": "bridge-sample",
+    "api.sceneCrafterRenameLane": "bridge-sample",
+    "api.sceneCrafterReorderLanes": "bridge-sample",
+    "api.sceneCrafterSaveBoard": "bridge-sample",
+    "api.sceneCrafterSuggestionAccept": {
+      "suggestionId": "bridge-id-a",
+      "actor": "bridge-id-b"
+    },
+    "api.sceneCrafterSuggestionReject": {
+      "suggestionId": "bridge-id-a",
+      "actor": "bridge-id-b"
+    },
+    "api.sceneCrafterToggleCardDone": "bridge-sample",
+    "api.sceneCreate": "bridge-sample",
+    "api.scenePropsGet": {
+      "sceneId": "bridge-sample"
+    },
+    "api.scenePropsSet": {
+      "sceneId": "bridge-id-a",
+      "customFields": "bridge-id-b"
+    },
+    "api.sceneRename": "bridge-sample",
+    "api.sceneSave": "bridge-sample",
+    "api.sceneSetTags": "bridge-sample",
+    "api.searchVault": {
+      "query": "/tmp/bridge-sample",
+      "scope": "/tmp/bridge-sample-notes",
+      "limit": "bridge-id-c",
+      "filterTags": "bridge-id-d"
+    },
+    "api.sessionSaveScene": "bridge-sample",
+    "api.setAgentConfig": {
+      "agent": "bridge-id-a",
+      "config": "bridge-id-b"
+    },
+    "api.settingsSet": {
+      "settings": {
+        "bridge": true
+      },
+      "sttBinaryToken": "bridge-token"
+    },
+    "api.settingsTestConnection": {
+      "provider": "bridge-sample"
+    },
+    "api.smartFolderCreate": {
+      "name": "bridge-id-a",
+      "query": "bridge-id-b"
+    },
+    "api.smartFolderDelete": {
+      "id": "/tmp/bridge-sample"
+    },
+    "api.smartFolderQuery": {
+      "query": "/tmp/bridge-sample"
+    },
+    "api.smartFolderUpdate": {
+      "id": "bridge-id",
+      "name": "bridge-sample",
+      "query": "bridge-sample-2"
+    },
+    "api.snapshotDelete": {
+      "sceneId": "bridge-id-a",
+      "snapshotId": "bridge-id-b"
+    },
+    "api.snapshotDeleteAll": {
+      "sceneId": "bridge-sample"
+    },
+    "api.snapshotGet": {
+      "sceneId": "bridge-id-a",
+      "snapshotId": "bridge-id-b"
+    },
+    "api.snapshotList": {
+      "sceneId": "bridge-sample"
+    },
+    "api.snapshotRestore": {
+      "sceneId": "bridge-id-a",
+      "snapshotId": "bridge-id-b",
+      "scenePath": "bridge-id-c"
+    },
+    "api.snapshotSave": {
+      "sceneId": "bridge-id-a",
+      "content": "bridge-id-b",
+      "label": "bridge-id-c"
+    },
+    "api.storyImportPickFile": {
+      "format": "docx"
+    },
+    "api.storyImportRun": {
+      "format": "bridge-id-a",
+      "filePath": "bridge-id-b"
+    },
+    "api.storyStashRestore": "bridge-sample",
+    "api.storyStashSave": "bridge-sample",
+    "api.storyVaultRegistryCreate": "bridge-sample",
+    "api.storyVaultRegistryPair": {
+      "storyVaultId": "/tmp/bridge-sample",
+      "notesVaultId": "/tmp/bridge-sample-notes"
+    },
+    "api.storyVaultRegistryRename": {
+      "id": "/tmp/bridge-sample",
+      "displayName": "/tmp/bridge-sample-notes"
+    },
+    "api.storyVaultRegistrySetActive": {
+      "id": "bridge-sample"
+    },
+    "api.streamAck": {
+      "streamId": "bridge-id",
+      "count": 7
+    },
+    "api.streamCancel": {
+      "streamId": "bridge-sample"
+    },
+    "api.streamStart": "bridge-sample",
+    "api.suggestionsAccept": {
+      "id": "bridge-id-a",
+      "actor": "bridge-id-b"
+    },
+    "api.suggestionsBatchAction": "bridge-sample",
+    "api.suggestionsGet": {
+      "id": "bridge-sample"
+    },
+    "api.suggestionsIgnore": {
+      "id": "bridge-id-a",
+      "actor": "bridge-id-b"
+    },
+    "api.suggestionsList": {
+      "status": "bridge-sample",
+      "sourceAgent": "bridge-sample-2",
+      "limit": 10,
+      "offset": 0
+    },
+    "api.suggestionsReject": {
+      "id": "bridge-id-a",
+      "reason": "bridge-id-b",
+      "actor": "bridge-id-c"
+    },
+    "api.suggestionsRollback": {
+      "id": "bridge-id-a",
+      "actor": "bridge-id-b"
+    },
+    "api.suggestionsSearch": "bridge-sample",
+    "api.suggestionsUnifiedList": "bridge-sample",
+    "api.suggestionsUpsert": {
+      "suggestion": "bridge-sample"
+    },
+    "api.tagsBulkApply": {
+      "itemIds": [
+        "bridge-id"
+      ],
+      "itemKind": "scene",
+      "addTags": [
+        "bridge-sample"
+      ],
+      "removeTags": [
+        "bridge-sample-2"
+      ]
+    },
+    "api.tagsDelete": {
+      "id": "bridge-sample"
+    },
+    "api.tagsForItem": {
+      "itemId": "bridge-id-a",
+      "itemKind": "bridge-id-b"
+    },
+    "api.tagsItemsForTag": {
+      "tagName": "bridge-sample"
+    },
+    "api.tagsRename": {
+      "id": "bridge-id-a",
+      "name": "bridge-id-b"
+    },
+    "api.tagsSetForItem": {
+      "itemId": "bridge-id-a",
+      "itemKind": "bridge-id-b",
+      "tags": "bridge-id-c"
+    },
+    "api.tagsUpsert": {
+      "name": "bridge-id-a",
+      "color": "bridge-id-b"
+    },
+    "api.telemetryReport": {
+      "type": "bridge-id-a",
+      "meta": "bridge-id-b"
+    },
+    "api.templateDelete": {
+      "id": "bridge-sample"
+    },
+    "api.templateDuplicate": {
+      "id": "bridge-sample"
+    },
+    "api.templateExport": {
+      "id": "bridge-sample"
+    },
+    "api.templateImportFromPath": {
+      "filePath": "/tmp/bridge-sample"
+    },
+    "api.templateRename": {
+      "id": "bridge-id-a",
+      "name": "bridge-id-b"
+    },
+    "api.templateSaveAs": {
+      "name": "bridge-sample"
+    },
+    "api.templateScaffold": {
+      "templateId": "bridge-id-a",
+      "parentToken": "bridge-id-b"
+    },
+    "api.timelineGetScenes": {
+      "storyId": "bridge-sample"
+    },
+    "api.timelineGetSettings": {
+      "storyId": "bridge-sample"
+    },
+    "api.timelineInfer": {
+      "storyId": "bridge-sample"
+    },
+    "api.timelineList": {},
+    "api.timelineListArcs": {},
+    "api.timelineProposalResolve": {
+      "proposalId": "bridge-id-a",
+      "decision": "bridge-id-b"
+    },
+    "api.timelineProposalsGenerate": {
+      "storyId": "bridge-sample"
+    },
+    "api.timelineProposalsList": {
+      "storyId": "bridge-sample"
+    },
+    "api.timelineRebuild": {},
+    "api.timelineSaveSettings": {
+      "settings": "bridge-id-a",
+      "storyId": "bridge-id-b"
+    },
+    "api.timelineUpdateArcColor": {
+      "arcId": "bridge-id-a",
+      "color": "bridge-id-b",
+      "colorIsCustom": "bridge-id-c"
+    },
+    "api.timelineUpdateScene": "bridge-sample",
+    "api.timelineUpsert": "bridge-sample",
+    "api.timelinesDeleteItem": "bridge-sample",
+    "api.timelinesGetStore": {},
+    "api.timelinesSetActive": {
+      "timelineId": "bridge-sample"
+    },
+    "api.timelinesUpsert": "bridge-sample",
+    "api.timelinesUpsertItem": "bridge-sample",
+    "api.validatePath": {
+      "path": "/tmp/bridge-sample"
+    },
+    "api.vaultAccessSet": "bridge-sample",
+    "api.vaultCreateDefaultMythos": "bridge-sample",
+    "api.vaultCrossLinkAdd": "bridge-sample",
+    "api.vaultCrossLinkRemove": "bridge-sample",
+    "api.vaultGraphEdges": "both",
+    "api.vaultGraphNodes": "notes",
+    "api.vaultImportRun": "bridge-sample",
+    "api.vaultImportScan": {
+      "kind": "/tmp/bridge-sample",
+      "srcPath": "/tmp/bridge-sample-notes"
+    },
+    "api.vaultLocalFolderMove": "/tmp/bridge-sample",
+    "api.vaultSeedApplyBoth": "bridge-sample",
+    "api.vaultSetPaths": {
+      "storyVaultPath": "/tmp/bridge-sample",
+      "notesVaultPath": "/tmp/bridge-sample-notes",
+      "seedMode": "default",
+      "storyVaultToken": "bridge-token"
+    },
+    "api.vaultSurfaceBlastRadius": {
+      "mythosVaultRoot": "bridge-sample"
+    },
+    "api.vaultSurfaceHide": "bridge-sample",
+    "api.vaultSurfaceMoveVaultsParent": {
+      "newParentPath": "bridge-sample"
+    },
+    "api.vaultSurfaceRevealMythos": {
+      "mythosVaultRoot": "bridge-sample"
+    },
+    "api.vaultSurfaceTrash": "bridge-sample",
+    "api.vaultSurfaceUnhide": {
+      "vaultRoot": "bridge-sample"
+    },
+    "api.versionGet": {
+      "sceneId": "bridge-id-a",
+      "ts": "bridge-id-b"
+    },
+    "api.versionList": {
+      "sceneId": "bridge-sample"
+    },
+    "api.versionRollback": {
+      "sceneId": "bridge-id-a",
+      "ts": "bridge-id-b"
+    },
+    "api.versionSave": {
+      "sceneId": "bridge-id-a",
+      "content": "bridge-id-b",
+      "intent": "bridge-id-c"
+    },
+    "api.voiceAudioChunk": {
+      "sessionId": "bridge-id",
+      "chunk": {}
+    },
+    "api.voiceLocalTranscript": {
+      "sessionId": "bridge-id",
+      "text": "bridge-sample",
+      "isFinal": true
+    },
+    "api.voicePickBinary": {
+      "kind": "stt-binary"
+    },
+    "api.voiceSpeak": {
+      "text": "bridge-id-a",
+      "voiceId": "bridge-id-b"
+    },
+    "api.voiceSpeakCancel": {
+      "speakId": "bridge-id"
+    },
+    "api.voiceStart": {
+      "micDeviceId": "bridge-sample"
+    },
+    "api.voiceStop": {
+      "sessionId": "bridge-id"
+    },
+    "api.voiceTranscribe": {
+      "audio": "bridge-id-a",
+      "mimeType": "bridge-id-b",
+      "language": "bridge-id-c"
+    },
+    "api.writeManifest": {
+      "manifest": {
+        "bridge": true
+      }
+    },
+    "api.writeNotesVault": {
+      "path": "/tmp/bridge-sample",
+      "content": "/tmp/bridge-sample-notes"
+    },
+    "api.writeVault": {
+      "path": "/tmp/bridge-sample",
+      "content": "/tmp/bridge-sample-notes"
+    },
+    "api.writingAssistant": {
+      "manuscript": "bridge-id-a",
+      "scenePath": "bridge-id-b"
+    },
+    "api.writingAssistantCadenceChange": "bridge-sample",
+    "api.writingAssistantScanNow": "bridge-sample",
+    "api.writingAssistantSetActiveScene": "bridge-sample",
+    "api.writingAssistantSuggestionList": "bridge-sample",
+    "api.writingAssistantTipDecision": "bridge-sample",
+    "api.writingModeSet": "bridge-sample",
+    "api.writingScan": {
+      "sceneId": "bridge-id-a",
+      "prose": "bridge-id-b",
+      "scenePath": "bridge-id-c"
+    },
+    "mythosIPC.archive": {
+      "manuscript": "bridge-id-a",
+      "vaultPath": "bridge-id-b"
+    },
+    "mythosIPC.brainstormer": {
+      "topic": "bridge-id-a",
+      "context": "bridge-id-b"
+    },
+    "mythosIPC.deleteVaultFile": {
+      "path": "bridge-sample"
+    },
+    "mythosIPC.listVaultFiles": {
+      "root": "bridge-sample"
+    },
+    "mythosIPC.readVaultFile": {
+      "path": "bridge-sample"
+    },
+    "mythosIPC.writeManifest": {
+      "manifest": {
+        "bridge": true
+      }
+    },
+    "mythosIPC.writeVaultFile": {
+      "path": "/tmp/bridge-sample",
+      "content": "/tmp/bridge-sample-notes"
+    },
+    "mythosIPC.writingAssistant": {
+      "manuscript": "bridge-id-a",
+      "scenePath": "bridge-id-b"
+    }
+  },
+  "singles": [
+    "api.agentIndex.clean",
+    "api.agentIndex.getStats",
+    "api.agentIndex.rebuild",
+    "api.agentsVaultClearMemory",
+    "api.agentsVaultEnsure",
+    "api.agentsVaultReadPartner",
+    "api.agentsVaultReveal",
+    "api.agentsVaultStats",
+    "api.archiveListGlobalContradictions",
+    "api.brainstormBoard.migrateToNotes",
+    "api.brainstormBoard.migrationPreview",
+    "api.brainstormBoard.read",
+    "api.modelKeysShowItemInFolder",
+    "api.vaultAccessGetState",
+    "api.vaultMigrateMultiInner"
+  ]
+}

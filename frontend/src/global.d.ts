@@ -1208,7 +1208,7 @@ interface Window {
     onVaultCheckChunk: (cb: (chunk: string) => void) => () => void;
     getAppInfo: () => Promise<{ platform: string; electronVersion: string; appVersion: string }>;
     getSystemInfo: () => Promise<{ platform: string; electronVersion: string; nodeVersion: string }>;
-    onVaultFileChanged: (cb: (event: unknown, data: { path: string }) => void) => () => void;
+    onVaultFileChanged: (cb: (data: { path: string }) => void) => () => void;
 
     // Versioning — per-scene snapshots
     snapshotSave: (sceneId: string, content: string, label?: string) => Promise<SceneSnapshot>;
