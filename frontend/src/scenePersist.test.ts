@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  beginSceneWriteGeneration,
   markSceneFailureMissing,
   removeSceneFailure,
+  sceneFailuresForVault,
   sceneSaveFailureMessage,
+  shouldApplyScenePersistOutcome,
   upsertSceneFailure,
   vaultWriteRefused,
   writeSceneVault,
+  type SceneSaveFailureEntry,
 } from './scenePersist';
 
 describe('vaultWriteRefused', () => {
@@ -56,9 +60,50 @@ describe('writeSceneVault', () => {
   });
 });
 
+describe('scene write generation', () => {
+  it('ignores stale write outcomes when a newer write superseded this one', () => {
+    const gens = new Map<string, number>();
+    const first = beginSceneWriteGeneration(gens, 'sc-1');
+    beginSceneWriteGeneration(gens, 'sc-1');
+    const started = { vaultRoot: '/vault-a', vaultSwitchGeneration: 1, writeGeneration: first };
+    expect(
+      shouldApplyScenePersistOutcome(started, '/vault-a', 1, gens, 'sc-1'),
+    ).toBe(false);
+    expect(
+      shouldApplyScenePersistOutcome(
+        { vaultRoot: '/vault-a', vaultSwitchGeneration: 1, writeGeneration: 2 },
+        '/vault-a',
+        1,
+        gens,
+        'sc-1',
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('vault-isolated failure entries', () => {
+  const entryA: SceneSaveFailureEntry = {
+    storyId: 's', sceneId: '1', sceneTitle: 'A', vaultRoot: '/vault-a', vaultSwitchGeneration: 0,
+  };
+  const entryB: SceneSaveFailureEntry = {
+    storyId: 's', sceneId: '2', sceneTitle: 'B', vaultRoot: '/vault-b', vaultSwitchGeneration: 0,
+  };
+
+  it('only retries failures for the active vault generation', () => {
+    const map = upsertSceneFailure(upsertSceneFailure(new Map(), entryA), entryB);
+    expect(sceneFailuresForVault(map, '/vault-a', 0)).toEqual([{ ...entryA, missing: false }]);
+    expect(sceneFailuresForVault(map, '/vault-b', 0)).toEqual([{ ...entryB, missing: false }]);
+    expect(sceneFailuresForVault(map, '/vault-a', 1)).toEqual([]);
+  });
+});
+
 describe('scene save failure map', () => {
-  const a = { storyId: 'st-a', sceneId: 'sc-1', sceneTitle: 'Alpha' };
-  const b = { storyId: 'st-a', sceneId: 'sc-2', sceneTitle: 'Beta' };
+  const a: SceneSaveFailureEntry = {
+    storyId: 'st-a', sceneId: 'sc-1', sceneTitle: 'Alpha', vaultRoot: '/v', vaultSwitchGeneration: 0,
+  };
+  const b: SceneSaveFailureEntry = {
+    storyId: 'st-a', sceneId: 'sc-2', sceneTitle: 'Beta', vaultRoot: '/v', vaultSwitchGeneration: 0,
+  };
 
   it('keeps banner for the other scene when one entry clears', () => {
     let map = upsertSceneFailure(new Map(), a);

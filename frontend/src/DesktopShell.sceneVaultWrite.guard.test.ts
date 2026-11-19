@@ -19,4 +19,32 @@ describe('DesktopShell scene markdown writes (#1904)', () => {
       /await\s+window\.api\?\.writeVault\?\.\(\s*scene\.path\s*,\s*blocksToMarkdown\(scene\)\)/,
     );
   });
+
+  it('resolves storyId via resolveStoryIdForScene before interpreting writeVault outcome', () => {
+    expect(src).toMatch(/resolveStoryIdForScene\(storiesRef\.current,\s*scene\)/);
+    expect(src).not.toMatch(
+      /if\s*\(\s*!storyId\s*\)\s*\{[\s\S]*?return false;[\s\S]*?\}\s*if\s*\(\s*!ok\s*\)/,
+    );
+  });
+
+  it('clears scene save failures only after vault switch commits (applyProjectSwitched)', () => {
+    const switchBlock = src.match(
+      /const switchToVault = useCallback\(async \(vaultId: string\)[\s\S]*?\n  \}, \[activeVaultRoot/,
+    )?.[0] ?? '';
+    expect(switchBlock).not.toMatch(/setSceneSaveFailures\(new Map\(\)\)/);
+    expect(src).toMatch(
+      /const applyProjectSwitched = useCallback[\s\S]*?setSceneSaveFailures\(new Map\(\)\)/,
+    );
+  });
+
+  it('runs snapshotSave even when vault write failed (outside save-indicator gating)', () => {
+    expect(src).toMatch(
+      /persistSceneMarkdown\(updatedScene\)\.then\(\(saved\) => \{[\s\S]*?window\.api\.snapshotSave/,
+    );
+    const applyBlock = src.match(
+      /const applySceneBlocks = useCallback\([\s\S]*?\n  \}, \[updateManifest, persistSceneMarkdown/,
+    )?.[0] ?? '';
+    const scheduleSaved = applyBlock.match(/scheduleSaved:\s*\(\)\s*=>\s*\{([\s\S]*?)\n        \},/)?.[1] ?? '';
+    expect(scheduleSaved).not.toMatch(/snapshotSave/);
+  });
 });

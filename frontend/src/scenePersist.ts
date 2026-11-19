@@ -38,6 +38,45 @@ export interface SceneSaveFailureEntry {
   sceneId: string;
   sceneTitle: string;
   missing?: boolean;
+  /** Vault that was active when the write started — isolates banners across switches. */
+  vaultRoot: string;
+  vaultSwitchGeneration: number;
+}
+
+export interface ScenePersistContext {
+  vaultRoot: string;
+  vaultSwitchGeneration: number;
+  writeGeneration: number;
+}
+
+export function beginSceneWriteGeneration(generations: Map<string, number>, sceneId: string): number {
+  const next = (generations.get(sceneId) ?? 0) + 1;
+  generations.set(sceneId, next);
+  return next;
+}
+
+export function shouldApplyScenePersistOutcome(
+  started: ScenePersistContext,
+  currentVaultRoot: string,
+  currentVaultGeneration: number,
+  generations: Map<string, number>,
+  sceneId: string,
+): boolean {
+  return (
+    started.vaultRoot === currentVaultRoot
+    && started.vaultSwitchGeneration === currentVaultGeneration
+    && generations.get(sceneId) === started.writeGeneration
+  );
+}
+
+export function sceneFailuresForVault(
+  failures: ReadonlyMap<string, SceneSaveFailureEntry>,
+  vaultRoot: string,
+  vaultSwitchGeneration: number,
+): SceneSaveFailureEntry[] {
+  return [...failures.values()].filter(
+    (e) => e.vaultRoot === vaultRoot && e.vaultSwitchGeneration === vaultSwitchGeneration,
+  );
 }
 
 export function sceneFailureKey(storyId: string, sceneId: string): string {

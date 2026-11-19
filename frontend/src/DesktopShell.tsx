@@ -29,12 +29,19 @@ import { stripManifestContentForIpc } from './manifestIpc';
 import { BookSyncNotice, failedManifestRead, isLoadedManifest, manifestSaveOutcome, STORY_LIST_READ_FAILURE, type ManifestSaveOutcome } from './components/BookSyncNotice';
 import { SceneSaveNotice } from './components/SceneSaveNotice';
 import {
+  beginSceneWriteGeneration,
   markSceneFailureMissing,
   removeSceneFailure,
+  sceneFailuresForVault,
   type SceneSaveFailureEntry,
+  shouldApplyScenePersistOutcome,
   upsertSceneFailure,
   writeSceneVault,
 } from './scenePersist';
+import {
+  findSceneForFailureEntry,
+  resolveStoryIdForScene,
+} from './sceneSceneLookup';
 import { applySceneSaveIndicatorAfterPersist } from './sceneSaveIndicator';
 import {
   parseSceneNotes,
@@ -309,22 +316,6 @@ function blocksToMarkdown(scene: Scene): string {
     lines.push('');
   }
   return lines.join('\n');
-}
-
-function findSceneInStories(stories: Story[], storyId: string, sceneId: string): Scene | undefined {
-  const story = stories.find((s) => s.id === storyId);
-  if (!story) return undefined;
-  for (const ch of story.chapters) {
-    const sc = ch.scenes.find((s) => s.id === sceneId);
-    if (sc) return sc;
-  }
-  for (const part of story.parts ?? []) {
-    for (const ch of part.chapters) {
-      const sc = ch.scenes.find((s) => s.id === sceneId);
-      if (sc) return sc;
-    }
-  }
-  return undefined;
 }
 
 interface SearchResultItem {
@@ -656,6 +647,8 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
   // overwrites activeVaultRoot (and the nav-rail highlight) back to the vault
   // the user already switched away from. "Latest switch wins."
   const vaultSwitchGenRef = useRef(0);
+  /** Per-scene monotonic write generation — stale IPC completions must not touch UI. */
+  const sceneWriteGenerationRef = useRef(new Map<string, number>());
   const [editorSelectionText, setEditorSelectionText] = useState<string>('');
   const [continuityPeekOverlayOpen, setContinuityPeekOverlayOpen] = useState(false);
   const [layout, setLayout] = useState<LayoutPrefs>(DEFAULT_LAYOUT);
@@ -1798,6 +1791,7 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
 
   const applyProjectSwitched = useCallback((vaultRoot: string) => {
     vaultSwitchGenRef.current += 1; // SKY-11379: supersede any in-flight loadVault
+    setSceneSaveFailures(new Map()); // only after switch commits — not before flush/park
     pendingVaultThemeRootRef.current = vaultRoot; // Beta 4 M1: per-vault theme
     activeVaultRootRef.current = vaultRoot; // SKY-11236: key persists to the new vault at once
     setActiveVaultRoot(vaultRoot);
@@ -1953,7 +1947,6 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
 
   const switchToVault = useCallback(async (vaultId: string): Promise<boolean> => {
     if (vaultId === activeVaultRoot) return true;
-    setSceneSaveFailures(new Map());
     // Wait out any in-flight announce rollback before parking or switching.
     await vaultSwitchSerialRef.current;
     const ok = await flushOpenSettings();
@@ -3476,29 +3469,37 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
   // ─── Story/scene management ───
 
   const persistSceneMarkdown = useCallback(async (scene: Scene): Promise<boolean> => {
+    const storyId = resolveStoryIdForScene(storiesRef.current, scene);
+    const vaultRootAtStart = activeVaultRootRef.current;
+    const vaultGenAtStart = vaultSwitchGenRef.current;
+    const writeGeneration = beginSceneWriteGeneration(sceneWriteGenerationRef.current, scene.id);
+    const startedContext = {
+      vaultRoot: vaultRootAtStart,
+      vaultSwitchGeneration: vaultGenAtStart,
+      writeGeneration,
+    };
     const content = blocksToMarkdown(scene);
-    const write = () => writeSceneVault(
+    // SKY-11646 / #1904: tracked quit-critical so flush-before-quit drains in-flight writes.
+    const ok = await writeSceneVault(
       (path, body) => trackQuitCriticalWrite(window.api.writeVault(path, body)),
       scene.path,
       content,
     );
-    // SKY-11646 / #1904: every caller fires this without awaiting, so on quit the
-    // write can still be in flight when the window closes. Track it as
-    // quit-critical — the flush-before-quit handshake drains it before
-    // acking, which is what keeps the last keystrokes on disk.
-    const ok = await write();
-    const storyId = scene.storyId
-      ?? storiesRef.current.find((st) => st.chapters.some((ch) => ch.scenes.some((sc) => sc.id === scene.id)))?.id;
-    if (!storyId) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to write scene markdown: missing storyId', scene.id);
-      return false;
-    }
+    const applyOutcome = shouldApplyScenePersistOutcome(
+      startedContext,
+      activeVaultRootRef.current,
+      vaultSwitchGenRef.current,
+      sceneWriteGenerationRef.current,
+      scene.id,
+    );
+    if (!applyOutcome) return ok;
     if (!ok) {
       setSceneSaveFailures((prev) => upsertSceneFailure(prev, {
         storyId,
         sceneId: scene.id,
         sceneTitle: scene.title,
+        vaultRoot: vaultRootAtStart,
+        vaultSwitchGeneration: vaultGenAtStart,
       }));
       // eslint-disable-next-line no-console
       console.error('Failed to write scene markdown:', scene.id);
@@ -3509,10 +3510,13 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
   }, []);
 
   const retrySceneSave = useCallback(() => {
-    if (sceneSaveFailures.size === 0) return;
+    const vaultRoot = activeVaultRootRef.current;
+    const vaultGen = vaultSwitchGenRef.current;
+    const pending = sceneFailuresForVault(sceneSaveFailures, vaultRoot, vaultGen);
+    if (pending.length === 0) return;
     const latest = storiesRef.current;
-    for (const entry of sceneSaveFailures.values()) {
-      const scene = findSceneInStories(latest, entry.storyId, entry.sceneId);
+    for (const entry of pending) {
+      const scene = findSceneForFailureEntry(latest, entry);
       if (scene) {
         void persistSceneMarkdown(scene);
       } else {
@@ -3568,6 +3572,7 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
       });
     }
     void persistSceneMarkdown(updatedScene).then((saved) => {
+      window.api.snapshotSave?.(sceneId, content).catch(() => {});
       applySceneSaveIndicatorAfterPersist(saved, {
         clearPending: () => {
           if (saveIndicatorTimer.current) clearTimeout(saveIndicatorTimer.current);
@@ -3578,7 +3583,6 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
             checkGettingStartedItem('write-scene');
             setSeenEmptySceneHints((prev) => new Set(prev).add(sceneId));
           }
-          window.api.snapshotSave?.(sceneId, content).catch(() => {});
           if (saveIndicatorTimer.current) clearTimeout(saveIndicatorTimer.current);
           saveIndicatorTimer.current = setTimeout(() => {
             setSaveState('saved');
@@ -6779,7 +6783,10 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
           §3). Panel border overlays keep the neon look. */}
       <UpdateBanner />
       <BookSyncNotice outcome={bookSave} />
-      <SceneSaveNotice failures={[...sceneSaveFailures.values()]} onRetry={retrySceneSave} />
+      <SceneSaveNotice
+        failures={sceneFailuresForVault(sceneSaveFailures, activeVaultRoot, vaultSwitchGenRef.current)}
+        onRetry={retrySceneSave}
+      />
       {/* PLAN-058 L2 (06:55): the title bar is full window width. The nav
           rail starts in the row below and must not cover the top bar.
           Document tabs stay in the main column under that bar. */}
