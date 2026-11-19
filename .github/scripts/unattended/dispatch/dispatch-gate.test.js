@@ -8,7 +8,7 @@ const { createMockRefClient } = require('./mock-client');
 const { runDispatchPlan } = require('./dispatch-run');
 const { sweepDispatchRefs } = require('./claim');
 const { recordDispatchAttempt } = require('./slice-progress');
-const { attemptsRef, claimRef, leaseMessage, canaryScratchRef } = require('./constants');
+const { attemptsRef, claimRef, leaseMessage, canaryScratchRef, doneRef, MAX_DISPATCH_ATTEMPTS } = require('./constants');
 const { attemptsMessage } = require('./slice-progress');
 const { readDispatchSwitches } = require('./switch');
 const { runCanaryVerify } = require('./canary-verify');
@@ -661,6 +661,111 @@ test('assertDispatchRef rejects refs outside dispatch namespace', () => {
   assert.throws(() => refUpdateRenew(main, oid, oid));
 });
 
+test('act hold when grade pass is not ok', async () => {
+  const client = createMockRefClient();
+  client.issueComments = async () => planComments();
+  client.getIssue = async () => ({ ok: true, issue: { state: 'open' } });
+  const logs = [];
+  const orig = console.log;
+  console.log = (...a) => logs.push(a.join(' '));
+  try {
+    const code = await runDispatchPlan(actEnv(client, {
+      findBoundPlanPass: () => ({ ok: false, reason: 'no_pass_grade' }),
+    }));
+    assert.equal(code, 0);
+    assert.ok(logs.some((l) => l.includes('dispatch_hold') && l.includes('no_pass_grade')));
+    assert.equal(client.updateLog.length, 0);
+  } finally {
+    console.log = orig;
+  }
+});
+
+test('act dispatch_skip when slice is done', async () => {
+  const client = createMockRefClient();
+  client.issueComments = async () => planComments();
+  client.getIssue = async () => ({ ok: true, issue: { state: 'open' } });
+  await client.createRef({ ref: doneRef(1, 0), sha: MAIN });
+  const logs = [];
+  const orig = console.log;
+  console.log = (...a) => logs.push(a.join(' '));
+  try {
+    const code = await runDispatchPlan(actEnv(client));
+    assert.equal(code, 0);
+    assert.ok(logs.some((l) => l.includes('slice_done')));
+  } finally {
+    console.log = orig;
+  }
+});
+
+test('act dispatch_skip when attempts hit max_attempts', async () => {
+  const client = createMockRefClient();
+  client.issueComments = async () => planComments();
+  client.getIssue = async () => ({ ok: true, issue: { state: 'open' } });
+  const ref = attemptsRef(1, 0);
+  await client.createRef({ ref, sha: 'b'.repeat(40) });
+  client.setRefMessage(ref, attemptsMessage({
+    count: MAX_DISPATCH_ATTEMPTS,
+    lastAttemptAt: '2020-01-01T00:00:00Z',
+  }));
+  const logs = [];
+  const orig = console.log;
+  console.log = (...a) => logs.push(a.join(' '));
+  try {
+    const code = await runDispatchPlan(actEnv(client));
+    assert.equal(code, 0);
+    assert.ok(logs.some((l) => l.includes('"reason":"max_attempts"')));
+  } finally {
+    console.log = orig;
+  }
+});
+
+test('act dispatch_skip when attempts are in backoff', async () => {
+  const client = createMockRefClient();
+  client.issueComments = async () => planComments();
+  client.getIssue = async () => ({ ok: true, issue: { state: 'open' } });
+  const ref = attemptsRef(1, 0);
+  await client.createRef({ ref, sha: 'b'.repeat(40) });
+  client.setRefMessage(ref, attemptsMessage({ count: 1, lastAttemptAt: new Date().toISOString() }));
+  const logs = [];
+  const orig = console.log;
+  console.log = (...a) => logs.push(a.join(' '));
+  try {
+    const code = await runDispatchPlan(actEnv(client));
+    assert.equal(code, 0);
+    assert.ok(logs.some((l) => l.includes('"reason":"backoff"')));
+  } finally {
+    console.log = orig;
+  }
+});
+
+test('act fails on holder mismatch after claim', async () => {
+  const client = createMockRefClient();
+  client.issueComments = async () => planComments();
+  client.getIssue = async () => ({ ok: true, issue: { state: 'open' } });
+  const lane = 'refs/mythos/dispatch/lane-00';
+  const claimName = claimRef(1, 0);
+  const origGet = client.getRef.bind(client);
+  client.getRef = async (args) => {
+    const got = await origGet(args);
+    if (client.exists(lane) && client.exists(claimName) && got.ok) {
+      if (args.ref === lane || args.ref === claimName) {
+        return { ...got, sha: 'f'.repeat(40) };
+      }
+    }
+    return got;
+  };
+  const logs = [];
+  const origErr = console.error;
+  console.error = (...a) => logs.push(a.join(' '));
+  try {
+    const code = await runDispatchPlan(actEnv(client));
+    assert.equal(code, 1);
+    assert.ok(logs.some((l) => l.includes('dispatch_fail') && l.includes('lease_mismatch')));
+  } finally {
+    console.error = origErr;
+  }
+});
+
 test('fake gh e2e dry-run act claim and encoded ref paths', { timeout: 15000 }, async () => {
   const store = new Map();
   const commitMessages = new Map();
@@ -741,7 +846,12 @@ test('fake gh e2e dry-run act claim and encoded ref paths', { timeout: 15000 }, 
     }
     return { status: 0, stdout: '[]' };
   };
-  const { combined: client } = createDispatchClients({ readToken: 'r', writeToken: 'w', gh });
+  const { combined: client } = createDispatchClients({
+    readToken: 'r',
+    writeToken: 'w',
+    gh,
+    reReadSwitch: async () => ({ ok: true, enabled: true }),
+  });
   client.issueComments = async () => planComments();
   client.getIssue = async () => ({ ok: true, issue: { state: 'open' } });
   const dry = await runDispatchPlan({

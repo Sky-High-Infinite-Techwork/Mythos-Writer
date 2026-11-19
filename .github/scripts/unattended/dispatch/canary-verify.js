@@ -5,17 +5,24 @@ const { OID_HEX } = require('./refs-graphql');
 const { actWritesEnabled } = require('./switch');
 const { readCanaryOutcomesFromDir, evaluateCanaryOutcomes } = require('./canary-artifacts');
 
+const { CANARY_LEG_COUNT } = require('./canary-artifacts');
+
 function outcomesMatchRun(outcomes, runId, runAttempt) {
   const rid = Number.parseInt(String(runId), 10);
   const att = Number.parseInt(String(runAttempt), 10);
-  if (!Array.isArray(outcomes)) return false;
+  if (!Number.isInteger(rid) || rid < 1 || !Number.isInteger(att) || att < 1) return false;
+  if (!Array.isArray(outcomes) || outcomes.length !== CANARY_LEG_COUNT) return false;
+  let expectedScratch;
+  try {
+    expectedScratch = canaryScratchRef(rid, att);
+  } catch {
+    return false;
+  }
   for (const row of outcomes) {
     if (!row || Number(row.runId) !== rid || Number(row.runAttempt) !== att) {
       return false;
     }
-    if (row.scratchRef && row.scratchRef !== canaryScratchRef(rid, att)) {
-      return false;
-    }
+    if (row.scratchRef !== expectedScratch) return false;
   }
   return true;
 }

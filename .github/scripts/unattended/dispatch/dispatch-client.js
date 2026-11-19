@@ -67,7 +67,9 @@ function createDispatchClients({
   }
 
   async function assertWritesEnabledBeforeMutation() {
-    if (typeof reReadSwitch !== 'function') return { ok: true };
+    if (typeof reReadSwitch !== 'function') {
+      return { ok: false, fatal: true, error: 'switch_read' };
+    }
     const sw = await reReadSwitch();
     if (!sw || !sw.ok) return { ok: false, fatal: true, error: 'switch_read' };
     if (!actWritesEnabledFn(sw)) return { ok: false, fatal: true, error: 'switch_off' };
@@ -343,7 +345,13 @@ function createDispatchClients({
           errors,
         };
       }
-      if (!parsed || parsed.data === undefined || parsed.data === null || parsed.data.updateRefs === undefined) {
+      if (
+        !parsed
+        || parsed.data === undefined
+        || parsed.data === null
+        || parsed.data.updateRefs === undefined
+        || parsed.data.updateRefs === null
+      ) {
         return {
           ok: false,
           fatal: true,
@@ -366,21 +374,14 @@ function createDispatchClients({
       const target = afterOid || sha;
       return write.updateRefs([refUpdateCreate(ref, target)]);
     },
-    async createLeaseCommit(message, parentSha, options = {}) {
-      const { reReadSwitch, actWritesEnabled: writesEnabledFn } = options;
+    async createLeaseCommit(message, parentSha) {
       if (!writeToken) return { ok: false, error: 'no_write_token' };
       if (!OID_HEX.test(parentSha || '')) return { ok: false, error: 'invalid_parent_sha' };
       const treeResult = gh(['api', `${base}/git/commits/${parentSha}`, '--jq', '.tree.sha'], readToken || writeToken);
       if (treeResult.status !== 0) return { ok: false, error: 'parent_tree' };
       const treeSha = treeResult.stdout.replace(/\r?\n$/, '');
-      if (typeof reReadSwitch === 'function') {
-        const sw = await reReadSwitch();
-        const enabled = writesEnabledFn
-          ? writesEnabledFn(sw)
-          : Boolean(sw && sw.ok && sw.enabled === true);
-        if (!sw || !sw.ok) return { ok: false, error: 'switch_read' };
-        if (!enabled) return { ok: false, error: 'switch_off' };
-      }
+      const gate = await assertWritesEnabledBeforeMutation();
+      if (!gate.ok) return { ok: false, fatal: gate.fatal, error: gate.error };
       const commit = gh(
         [
           'api', '-X', 'POST', `${base}/git/commits`,
@@ -436,7 +437,7 @@ function createDispatchClients({
       getIssue: (args) => read.getIssue(args),
       updateRefs: (updates) => write.updateRefs(updates),
       createRefPair: (args) => write.createRefPair(args),
-      createLeaseCommit: (msg, parent, options) => write.createLeaseCommit(msg, parent, options),
+      createLeaseCommit: (msg, parent) => write.createLeaseCommit(msg, parent),
       renewRef: (args) => write.renewRef(args),
       renewRefPair: (args) => write.renewRefPair(args),
       read,

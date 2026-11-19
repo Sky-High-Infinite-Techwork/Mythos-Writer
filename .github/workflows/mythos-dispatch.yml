@@ -311,7 +311,7 @@ jobs:
 
   canary-verify:
     needs: [admit, canary]
-    if: always() && needs.admit.result == 'success' && needs.admit.outputs.canary == 'true' && github.ref == 'refs/heads/main'
+    if: needs.admit.result == 'success' && needs.canary.result == 'success' && needs.admit.outputs.canary == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: mythos-writer

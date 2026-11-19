@@ -233,7 +233,7 @@ test('lane cap five', async () => {
   assert.equal(activeLeasesAll(listed.refs).length, 5);
 });
 
-test('concurrent overlapping file claims yield one winner', async () => {
+test('different-lane race on overlapping files yields one winner', async () => {
   const client = createMockRefClient();
   const future = new Date(Date.now() + 3600000).toISOString();
   const files = ['frontend/shared-overlap.ts'];
@@ -808,6 +808,26 @@ test('canary verify rejects foreign runId binding and keeps scratch', async () =
   } finally {
     console.error = origErr;
   }
+  assert.equal(client.exists(CANARY_SCRATCH_REF), true);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('canary verify rejects outcomes missing scratchRef', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { runCanaryVerify } = require('./dispatch/canary-verify');
+  const main = 'a'.repeat(40);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-no-scratch-field-'));
+  for (let i = 0; i < 6; i += 1) {
+    const row = bindCanaryOutcome({ kind: i === 0 ? 'canary_win' : 'canary_lose', index: i });
+    delete row.scratchRef;
+    fs.writeFileSync(path.join(dir, `canary-outcome-${i}.json`), JSON.stringify(row));
+  }
+  const client = createMockRefClient();
+  await client.createRef({ ref: CANARY_SCRATCH_REF, sha: main });
+  const code = await runCanaryVerify(client, canaryVerifyOpts(client, { mainSha: main, artifactsDir: dir }));
+  assert.equal(code, 1);
   assert.equal(client.exists(CANARY_SCRATCH_REF), true);
   fs.rmSync(dir, { recursive: true, force: true });
 });

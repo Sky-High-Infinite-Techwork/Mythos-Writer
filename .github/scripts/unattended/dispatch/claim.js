@@ -16,6 +16,9 @@ const REF_EXISTS = 'ref_exists';
 const LANE_REF_RE = /^refs\/mythos\/dispatch\/lane-\d{2}$/;
 const CLAIM_REF_RE = /^refs\/mythos\/dispatch\/claim\/\d+-\d+$/;
 
+/** Serialize claim entry so overlap checks and ref creation cannot interleave. */
+let claimLaneTail = Promise.resolve();
+
 function isSweepableRef(ref) {
   return LANE_REF_RE.test(ref) || CLAIM_REF_RE.test(ref);
 }
@@ -155,7 +158,7 @@ function computeWouldClaimSlot(refs, cap, payload, now = new Date()) {
   return { ok: false, reason: 'lane_full' };
 }
 
-async function claimLaneAndSlice(client, { cap, leaseSha, payload, recoverSameSha = false, reReadSwitch }) {
+async function claimLaneAndSliceBody(client, { cap, leaseSha, payload, recoverSameSha = false, reReadSwitch }) {
   const parsed = parseLaneCap(cap);
   if (!parsed.ok) return { ok: false, fatal: true, reason: 'invalid_lane_cap' };
   const limit = parsed.value;
@@ -193,6 +196,13 @@ async function claimLaneAndSlice(client, { cap, leaseSha, payload, recoverSameSh
     if (attempt.reason !== REF_EXISTS) return { ok: false, reason: attempt.reason };
   }
   return { ok: false, reason: 'lane_full' };
+}
+
+async function claimLaneAndSlice(client, args) {
+  const work = () => claimLaneAndSliceBody(client, args);
+  const result = claimLaneTail.then(work, work);
+  claimLaneTail = result.then(() => {}, () => {});
+  return result;
 }
 
 async function releaseRefCas(client, ref, beforeOid, reReadSwitch) {

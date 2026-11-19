@@ -7,6 +7,18 @@ const { createDispatchClients, UPDATE_REFS_REF_EXISTS } = require('./dispatch-cl
 const { MATCHING_REF_PREFIX } = require('./constants');
 const { refUpdateCreate, refUpdateDelete, refUpdateRenew } = require('./refs-graphql');
 
+const switchesOn = async () => ({ ok: true, enabled: true });
+
+function writeClient(gh, extra = {}) {
+  return createDispatchClients({
+    readToken: 'r',
+    writeToken: 'w',
+    gh,
+    reReadSwitch: switchesOn,
+    ...extra,
+  });
+}
+
 test('createDispatchClients uses matching-refs prefix without refs/', async () => {
   const calls = [];
   const gh = (args, token) => {
@@ -67,7 +79,12 @@ test('updateRefs sends JSON body with afterOid refUpdates', async () => {
     }
     return { status: 0, stdout: '"R_x"\n' };
   };
-  const { write } = createDispatchClients({ readToken: 'read', writeToken: 'write_tok', gh });
+  const { write } = createDispatchClients({
+    readToken: 'read',
+    writeToken: 'write_tok',
+    gh,
+    reReadSwitch: switchesOn,
+  });
   const sha = 'a'.repeat(40);
   await write.updateRefs([refUpdateCreate('refs/mythos/dispatch/lane-00', sha)]);
   const gql = calls.find((c) => c.args.includes('graphql'));
@@ -87,10 +104,37 @@ test('updateRefs fails closed on empty success body', async () => {
     if (args.includes('graphql')) return { status: 0, stdout: '{}' };
     return { status: 0, stdout: '"R_x"\n' };
   };
-  const { write } = createDispatchClients({ readToken: 'r', writeToken: 'w', gh });
+  const { write } = writeClient(gh);
   const result = await write.updateRefs([refUpdateCreate('refs/mythos/dispatch/lane-02', 'b'.repeat(40))]);
   assert.equal(result.fatal, true);
   assert.equal(result.error, 'graphql_no_update_refs');
+});
+
+test('updateRefs fails closed when updateRefs field is null', async () => {
+  const gh = (args) => {
+    if (args.includes('graphql')) {
+      return { status: 0, stdout: JSON.stringify({ data: { updateRefs: null } }) };
+    }
+    return { status: 0, stdout: '"R_x"\n' };
+  };
+  const { write } = writeClient(gh);
+  const result = await write.updateRefs([refUpdateCreate('refs/mythos/dispatch/lane-03', 'c'.repeat(40))]);
+  assert.equal(result.ok, false);
+  assert.equal(result.fatal, true);
+  assert.equal(result.error, 'graphql_no_update_refs');
+});
+
+test('updateRefs and createLeaseCommit fail closed without switch reader', async () => {
+  const gh = (args) => {
+    if (args.includes('graphql')) return { status: 0, stdout: JSON.stringify({ data: { updateRefs: {} } }) };
+    if (String(args).includes('.tree.sha')) return { status: 0, stdout: 't'.repeat(40) + '\n' };
+    return { status: 0, stdout: '"R_x"\n' };
+  };
+  const { write } = createDispatchClients({ readToken: 'r', writeToken: 'w', gh });
+  const refs = await write.updateRefs([refUpdateCreate('refs/mythos/dispatch/lane-00', 'a'.repeat(40))]);
+  assert.equal(refs.error, 'switch_read');
+  const commit = await write.createLeaseCommit('m', 'a'.repeat(40));
+  assert.equal(commit.error, 'switch_read');
 });
 
 test('updateRefs aborts when switches fail after repository node lookup', async () => {
@@ -149,10 +193,13 @@ test('combined createLeaseCommit forwards switch options and skips POST when off
     }
     return { status: 0, stdout: '"R_x"\n' };
   };
-  const { combined } = createDispatchClients({ readToken: 'r', writeToken: 'w', gh });
-  const result = await combined.createLeaseCommit('lease-msg', 'a'.repeat(40), {
+  const { combined } = createDispatchClients({
+    readToken: 'r',
+    writeToken: 'w',
+    gh,
     reReadSwitch: async () => ({ ok: true, enabled: false }),
   });
+  const result = await combined.createLeaseCommit('lease-msg', 'a'.repeat(40));
   assert.equal(result.ok, false);
   assert.equal(result.error, 'switch_off');
   assert.equal(postCalls, 0);
@@ -170,10 +217,13 @@ test('createLeaseCommit aborts when switch flips after parent tree fetch', async
     }
     return { status: 0, stdout: '"R_x"\n' };
   };
-  const { write } = createDispatchClients({ readToken: 'r', writeToken: 'w', gh });
-  const created = await write.createLeaseCommit('msg', 'a'.repeat(40), {
+  const { write } = createDispatchClients({
+    readToken: 'r',
+    writeToken: 'w',
+    gh,
     reReadSwitch: async () => ({ ok: true, enabled: false }),
   });
+  const created = await write.createLeaseCommit('msg', 'a'.repeat(40));
   assert.equal(created.ok, false);
   assert.equal(created.error, 'switch_off');
 });
@@ -189,7 +239,7 @@ test('refExists is exact message only; other graphql errors are fatal', async ()
     }
     return { status: 0, stdout: '"R_x"\n' };
   };
-  const { write } = createDispatchClients({ readToken: 'r', writeToken: 'w', gh });
+  const { write } = writeClient(gh);
   const exists = await write.updateRefs([refUpdateCreate('refs/mythos/dispatch/lane-01', 'b'.repeat(40))]);
   assert.equal(exists.refExists, true);
   assert.equal(exists.fatal, undefined);
@@ -204,7 +254,7 @@ test('refExists is exact message only; other graphql errors are fatal', async ()
     }
     return { status: 0, stdout: '"R_x"\n' };
   };
-  const { write: w2 } = createDispatchClients({ readToken: 'r', writeToken: 'w', gh: gh2 });
+  const { write: w2 } = writeClient(gh2);
   const fatal = await w2.updateRefs([refUpdateCreate('refs/mythos/dispatch/lane-01', 'b'.repeat(40))]);
   assert.equal(fatal.fatal, true);
   assert.notEqual(fatal.refExists, true);
@@ -376,4 +426,53 @@ test('issueCommentContentEdits holds on redacted editor', async () => {
   const edits = await read.issueCommentContentEdits({ issue: 1, commentDatabaseId: 7 });
   assert.equal(edits.ok, false);
   assert.equal(edits.error, 'editor_redacted');
+});
+
+test('issueComments maps JSONL paginate output including Bot authors', async () => {
+  const gh = (args) => {
+    const flat = args.map((a) => String(a));
+    if (flat.some((a) => a.includes('/issues/') && a.includes('/comments'))) {
+      return {
+        status: 0,
+        stdout: [
+          JSON.stringify({
+            id: 11,
+            body: '## Files\nbot-a.ts',
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+            user: { login: 'dependabot[bot]', type: 'Bot' },
+          }),
+          JSON.stringify({
+            id: 12,
+            body: '## Files\nuser-a.ts',
+            created_at: '2026-01-02T00:00:00Z',
+            updated_at: '2026-01-02T00:00:00Z',
+            user: { login: 'SkyyPlayz', type: 'User' },
+          }),
+        ].join('\n'),
+      };
+    }
+    return { status: 0, stdout: '' };
+  };
+  const { read } = createDispatchClients({ readToken: 'r', gh });
+  const listed = await read.issueComments({ issue: 42 });
+  assert.equal(listed.ok, true);
+  assert.equal(listed.comments.length, 2);
+  assert.equal(listed.comments[0].author.__typename, 'Bot');
+  assert.equal(listed.comments[0].author.login, 'dependabot[bot]');
+  assert.equal(listed.comments[1].author.__typename, 'User');
+});
+
+test('getIssue failed gh exit does not masquerade as success', async () => {
+  const gh = (args) => {
+    const flat = args.map((a) => String(a));
+    if (flat.some((a) => a.includes('/issues/') && !a.includes('/comments'))) {
+      return { status: 1, stderr: 'HTTP 403: Forbidden', stdout: '' };
+    }
+    return { status: 0, stdout: '{}' };
+  };
+  const { read } = createDispatchClients({ readToken: 'r', gh });
+  const got = await read.getIssue({ issue: 9 });
+  assert.equal(got.ok, false);
+  assert.match(got.error, /403|Forbidden/);
 });
