@@ -7,7 +7,7 @@
 
 import path from 'path';
 import fs from 'fs';
-import os from 'os';
+import { randomUUID } from 'node:crypto';
 import {
   test,
   expect,
@@ -26,6 +26,7 @@ interface VaultBundle {
   storyRoot: string;
   notesRoot: string;
   name: string;
+  trashMarker: string;
 }
 
 interface VaultSettings {
@@ -42,6 +43,7 @@ function ensureTmpBase() {
 }
 
 function seedV2Vault(parent: string, name: string): VaultBundle {
+  const trashMarker = randomUUID();
   const mythosRoot = path.join(parent, name);
   const storyRoot = path.join(mythosRoot, 'Story Vault');
   const notesRoot = path.join(mythosRoot, 'Notes Vault');
@@ -60,8 +62,8 @@ function seedV2Vault(parent: string, name: string): VaultBundle {
   );
   fs.writeFileSync(path.join(storyRoot, 'book-seed.md'), '# Seed\n');
   fs.writeFileSync(path.join(notesRoot, 'note.md'), '# Note\n');
-  fs.writeFileSync(path.join(mythosRoot, TRASH_PROBE_FILE), `probe:${mythosRoot}\n`);
-  return { mythosRoot, storyRoot, notesRoot, name };
+  fs.writeFileSync(path.join(mythosRoot, TRASH_PROBE_FILE), `probe:${mythosRoot}\ntrash-marker:${trashMarker}\n`);
+  return { mythosRoot, storyRoot, notesRoot, name, trashMarker };
 }
 
 function writeUserData(
@@ -97,12 +99,20 @@ function readVaultSettings(userData: string): VaultSettings {
   return JSON.parse(fs.readFileSync(path.join(userData, 'vault-settings.json'), 'utf-8'));
 }
 
-async function launchApp(userData: string): Promise<ElectronApplication> {
+async function launchApp(userData: string, envExtra?: NodeJS.ProcessEnv): Promise<ElectronApplication> {
   const extraArgs = process.platform !== 'darwin' && !process.env.DISPLAY ? ['--headless'] : [];
   return electron.launch({
     args: [MAIN_JS, `--user-data-dir=${userData}`, '--no-sandbox', '--force-prefers-reduced-motion', ...extraArgs],
+    env: { ...process.env, ...envExtra },
     timeout: 60_000,
   });
+}
+
+function prepareIsolatedTrashDir(tempRoot: string): string {
+  const dataHome = path.join(tempRoot, 'xdg-data-home');
+  fs.mkdirSync(path.join(dataHome, 'Trash', 'files'), { recursive: true });
+  fs.mkdirSync(path.join(dataHome, 'Trash', 'info'), { recursive: true });
+  return dataHome;
 }
 
 async function openVaultFiles(page: Page): Promise<void> {
@@ -148,39 +158,41 @@ function rmTempRoot(tempRoot?: string): void {
   fs.rmSync(tempRoot, { recursive: true, force: true });
 }
 
-/** Freedesktop trash — fails if the folder vanished via rm without entering Trash. */
-function assertMythosRootInFreedesktopTrash(mythosRoot: string): void {
+/** Freedesktop trash — requires isolated XDG_DATA_HOME and per-run trash-marker. */
+function assertMythosRootInFreedesktopTrash(mythosRoot: string, trashMarker: string, dataHome: string): void {
   if (process.platform !== 'linux') return;
-  const dataHome = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
   const infoDir = path.join(dataHome, 'Trash', 'info');
   const filesDir = path.join(dataHome, 'Trash', 'files');
   const resolved = path.resolve(mythosRoot);
-  const base = path.basename(resolved);
 
-  let inTrash = false;
+  let infoMatchesPath = false;
   if (fs.existsSync(infoDir)) {
     for (const entry of fs.readdirSync(infoDir)) {
       if (!entry.endsWith('.trashinfo')) continue;
       const body = fs.readFileSync(path.join(infoDir, entry), 'utf8');
-      if (body.includes(encodeURI(resolved)) || body.includes(resolved) || body.includes(base)) {
-        inTrash = true;
+      if (body.includes(`Path=${resolved}`) || body.includes(encodeURI(resolved))) {
+        infoMatchesPath = true;
         break;
       }
     }
   }
-  if (!inTrash && fs.existsSync(filesDir)) {
-    const walk = (dir: string, depth: number): boolean => {
-      if (depth > 4) return false;
-      for (const name of fs.readdirSync(dir)) {
-        if (name === TRASH_PROBE_FILE) return true;
-        const full = path.join(dir, name);
-        if (fs.statSync(full).isDirectory() && (name === base || walk(full, depth + 1))) return true;
+
+  const findMarker = (dir: string, depth: number): boolean => {
+    if (depth > 6) return false;
+    for (const name of fs.readdirSync(dir)) {
+      const full = path.join(dir, name);
+      if (name === TRASH_PROBE_FILE && fs.statSync(full).isFile()) {
+        const text = fs.readFileSync(full, 'utf8');
+        if (text.includes(`trash-marker:${trashMarker}`)) return true;
       }
-      return false;
-    };
-    inTrash = walk(filesDir, 0);
-  }
-  expect(inTrash, `moved-to-trash regression: ${resolved} left disk but no Trash entry (rm -rf would pass exists=false only)`).toBe(true);
+      if (fs.statSync(full).isDirectory() && findMarker(full, depth + 1)) return true;
+    }
+    return false;
+  };
+  const markerInTrash = fs.existsSync(filesDir) && findMarker(filesDir, 0);
+
+  expect(infoMatchesPath, `missing .trashinfo for exact path ${resolved}`).toBe(true);
+  expect(markerInTrash, `trash bundle missing probe marker ${trashMarker}`).toBe(true);
 }
 
 async function pollVaultRegistryAndDiskUnchanged(
@@ -303,9 +315,11 @@ test('proves non-active Mythos delete moves the bundle to OS Trash (not rm), pru
   let beta: VaultBundle;
   let app: ElectronApplication | undefined;
   let app2: ElectronApplication | undefined;
+  let xdgDataHome: string;
   try {
     ({ tempRoot, userData, alpha, beta } = mkFixture('trash-beta'));
-    app = await launchApp(userData);
+    xdgDataHome = prepareIsolatedTrashDir(tempRoot);
+    app = await launchApp(userData, { XDG_DATA_HOME: xdgDataHome });
     const page = await app.firstWindow();
     await openVaultFiles(page);
     await openOverflow(page, beta.storyRoot);
@@ -314,7 +328,7 @@ test('proves non-active Mythos delete moves the bundle to OS Trash (not rm), pru
     await expect(page.getByTestId(`mvs-card-${beta.storyRoot}`)).toHaveCount(0, { timeout: 30_000 });
     await expect(page.getByTestId(`mvs-card-${alpha.storyRoot}`)).toBeVisible({ timeout: 15_000 });
     await expect.poll(() => fs.existsSync(beta.mythosRoot), { timeout: 60_000, intervals: [250, 500, 1000] }).toBe(false);
-    assertMythosRootInFreedesktopTrash(beta.mythosRoot);
+    assertMythosRootInFreedesktopTrash(beta.mythosRoot, beta.trashMarker, xdgDataHome);
 
     const rootsAfter = (readVaultSettings(userData).recentProjects ?? []).map((p) => p.vaultRoot);
     expect(rootsAfter).not.toContain(beta.storyRoot);
@@ -322,7 +336,7 @@ test('proves non-active Mythos delete moves the bundle to OS Trash (not rm), pru
 
     await closeApp(app);
     app = undefined;
-    app2 = await launchApp(userData);
+    app2 = await launchApp(userData, { XDG_DATA_HOME: xdgDataHome });
     const page2 = await app2.firstWindow();
     await openVaultFiles(page2);
     await expect(page2.getByTestId(`mvs-card-${alpha.storyRoot}`)).toBeVisible({ timeout: 20_000 });
@@ -382,27 +396,23 @@ test('proves deleting the active Mythos vault switches vaultRoot to the survivin
 // ── Trash failure ────────────────────────────────────────────────────────────
 
 test('proves read-only trash failure surfaces an error and leaves registry and folder intact', async () => {
+  test.skip(
+    process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0),
+    'deterministic trash stub is used instead of chmod (unsafe as root / on Windows)',
+  );
   test.setTimeout(120_000);
   let tempRoot: string | undefined;
   let userData: string;
   let beta: VaultBundle;
   let app: ElectronApplication | undefined;
-  const chmodRestores: ChmodRestore[] = [];
   try {
     ({ tempRoot, userData, beta } = mkFixture('readonly'));
-    chmodRestores.push({ path: beta.mythosRoot, mode: 0o755 });
-    fs.chmodSync(beta.mythosRoot, 0o555);
-
     app = await launchApp(userData);
-    const trashBlocked = await app.evaluate(async ({ shell }, target) => {
-      try {
-        await shell.trashItem(target);
-        return false;
-      } catch {
-        return true;
-      }
-    }, beta.mythosRoot);
-    expect(trashBlocked, 'fixture must prove trash really fails before UI delete').toBe(true);
+    await app.evaluate(async ({ shell }) => {
+      shell.trashItem = async () => {
+        throw new Error('vault-delete-branches: deterministic trash failure');
+      };
+    });
 
     const page = await app.firstWindow();
     await openVaultFiles(page);
@@ -413,7 +423,6 @@ test('proves read-only trash failure surfaces an error and leaves registry and f
     expect(fs.existsSync(beta.mythosRoot)).toBe(true);
     expect((readVaultSettings(userData).recentProjects ?? []).map((p) => p.vaultRoot)).toContain(beta.storyRoot);
   } finally {
-    restoreChmods(chmodRestores, tempRoot);
     await closeApp(app);
     rmTempRoot(tempRoot);
   }

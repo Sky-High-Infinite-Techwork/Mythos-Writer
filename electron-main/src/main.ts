@@ -876,7 +876,14 @@ import {
 } from './suggestionApply.js';
 import { aiWriteLockKey, withAiFileLock } from './vault/aiWriteGuard.js';
 import { AI_TEXT_APPLY_ENABLED } from '@mythos-writer/shared/aiSuggestOnly';
-import { getBlastRadius, trashVaultFolder, pruneRecentProjectsForTrash } from './vaultSurface.js';
+import {
+  getBlastRadius,
+  trashVaultFolder,
+  pruneRecentProjectsForTrash,
+  isActiveVaultTrashed,
+  mythosRootForTrashRegistryCleanup,
+  buildActiveVaultSettingsPatch,
+} from './vaultSurface.js';
 import {
   resolveWillPreventUnloadAction,
   shouldCommitQuitOnWindowClose,
@@ -1197,6 +1204,11 @@ function loadVaultSettings(): VaultSettings {
 function saveVaultSettings(updates: Partial<VaultSettings>): void {
   const current = loadVaultSettings();
   const merged: VaultSettings = { ...current, ...updates };
+  for (const key of ['vaultRoot', 'notesVaultRoot', 'layoutMode', 'vaultsParentPath'] as const) {
+    if (key in updates && updates[key] === undefined) {
+      delete merged[key];
+    }
+  }
   fs.writeFileSync(getVaultSettingsPath(), JSON.stringify(merged, null, 2), 'utf-8');
   // MW-delete-vault: keep uninstall-delete-paths.txt in sync with the registry
   // the NSIS uninstaller FileReads (tip keys vaultRoot / notesVaultRoot).
@@ -6391,57 +6403,31 @@ export const handlers: IpcHandlers = {
     // including clearing a 'notes'-level entry's dangling notesVaultRoot
     // pointer (the paired Story Vault entry survives, only the pointer is
     // cleared) instead of leaving it pointing at a now-trashed folder.
-    {
-      const current = loadVaultSettings();
-      const remaining = pruneRecentProjectsForTrash(current.recentProjects ?? [], vaultPath, level);
-      const settingsPatch: Parameters<typeof saveVaultSettings>[0] = { recentProjects: remaining };
-      const resolvedTrash = path.resolve(vaultPath);
-      const activeStory = current.vaultRoot ? path.resolve(current.vaultRoot) : null;
-      let activeTrashed = false;
-      if (level === 'mythos') {
-        activeTrashed =
-          activeStory !== null &&
-          (activeStory === resolvedTrash ||
-            activeStory.startsWith(resolvedTrash + path.sep) ||
-            mythosRootForStoryVault(activeStory) === resolvedTrash);
-      } else if (level === 'story') {
-        activeTrashed = activeStory === resolvedTrash;
-      } else if (level === 'notes' && current.notesVaultRoot) {
-        activeTrashed = path.resolve(current.notesVaultRoot) === resolvedTrash;
-      }
-      if (activeTrashed) {
-        const fallback = remaining[0];
-        if (fallback) {
-          settingsPatch.vaultRoot = fallback.vaultRoot;
-          settingsPatch.notesVaultRoot = fallback.notesVaultRoot;
-        } else {
-          settingsPatch.vaultRoot = undefined;
-          settingsPatch.notesVaultRoot = undefined;
-        }
-      }
-      saveVaultSettings(settingsPatch);
-    }
+    const current = loadVaultSettings();
+    const remaining = pruneRecentProjectsForTrash(current.recentProjects ?? [], vaultPath, level);
+    const preActiveStoryRoot = current.vaultRoot ?? null;
+    const activeTrashed = isActiveVaultTrashed(current, vaultPath, level);
+    const mythosRootForRegistry = mythosRootForTrashRegistryCleanup(level, vaultPath, preActiveStoryRoot);
 
     // SKY-11154: inner notes/story vaults also live in notes-vaults.json /
     // story-vaults.json (SKY-11058/11150) alongside recentProjects — remove
     // the matching entry there too so a trashed card does not stay listed
-    // pointing at a now-gone folder. Scoped to the currently active Mythos
-    // vault, matching how the Notes/Story columns list their entries.
+    // pointing at a now-gone folder. Registry cleanup uses the pre-fallback
+    // active story root (or the trashed story path), not a switched vaultRoot.
     if (level === 'notes' || level === 'story') {
-      const mythosRoot = mythosRootForStoryVault(getVaultRoot());
-      if (mythosRoot !== null) {
+      if (mythosRootForRegistry !== null) {
         if (level === 'notes') {
-          const registry = readNotesVaultRegistry(mythosRoot);
-          const entry = registry?.vaults.find((v) => path.resolve(notesVaultAbsPath(mythosRoot, v)) === vaultPath);
+          const registry = readNotesVaultRegistry(mythosRootForRegistry);
+          const entry = registry?.vaults.find((v) => path.resolve(notesVaultAbsPath(mythosRootForRegistry, v)) === vaultPath);
           if (entry) {
-            removeNotesVault(mythosRoot, entry.id);
+            removeNotesVault(mythosRootForRegistry, entry.id);
             // A story vault paired to the now-removed notes vault must not
             // keep pointing at a dangling id.
-            const storyRegistry = readStoryVaultRegistry(mythosRoot);
+            const storyRegistry = readStoryVaultRegistry(mythosRootForRegistry);
             let storyChanged = false;
             for (const sv of storyRegistry?.vaults ?? []) {
               if (sv.pairedNotesVaultId === entry.id) {
-                pairStoryVaultToNotesVault(mythosRoot, sv.id, null);
+                pairStoryVaultToNotesVault(mythosRootForRegistry, sv.id, null);
                 storyChanged = true;
               }
             }
@@ -6449,14 +6435,24 @@ export const handlers: IpcHandlers = {
             if (storyChanged) mainWindow?.webContents.send('storyVaultRegistry:changed');
           }
         } else {
-          const registry = readStoryVaultRegistry(mythosRoot);
-          const entry = registry?.vaults.find((v) => path.resolve(storyVaultAbsPath(mythosRoot, v)) === vaultPath);
+          const registry = readStoryVaultRegistry(mythosRootForRegistry);
+          const entry = registry?.vaults.find((v) => path.resolve(storyVaultAbsPath(mythosRootForRegistry, v)) === vaultPath);
           if (entry) {
-            removeStoryVault(mythosRoot, entry.id);
+            removeStoryVault(mythosRootForRegistry, entry.id);
             mainWindow?.webContents.send('storyVaultRegistry:changed');
           }
         }
       }
+    }
+
+    if (activeTrashed) {
+      const settingsPatch: Parameters<typeof saveVaultSettings>[0] = {
+        recentProjects: remaining,
+        ...buildActiveVaultSettingsPatch(remaining, vaultPath, level),
+      };
+      saveVaultSettings(settingsPatch);
+    } else {
+      saveVaultSettings({ recentProjects: remaining });
     }
 
     return result;

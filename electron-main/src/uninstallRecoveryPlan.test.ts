@@ -117,7 +117,14 @@ describe('planUninstallRecovery', () => {
 
     const originalRmSync = fs.rmSync.bind(fs);
     const rmSpy = vi.spyOn(fs, 'rmSync').mockImplementation((p, opts) => {
-      if (p === vaultsParent) return undefined; // silent no-op: bundle still on disk
+      if (p === vaultsParent) {
+        // Simulate partial deletion during the same cleanUninstall call: notes
+        // vanish while the parent rm fails (story half survives).
+        if (fs.existsSync(notesVault)) {
+          originalRmSync(notesVault, { recursive: true, force: true });
+        }
+        return undefined;
+      }
       return originalRmSync(p as fs.PathLike, opts as fs.RmOptions);
     });
 
@@ -130,10 +137,7 @@ describe('planUninstallRecovery', () => {
 
       expect(result.errors.some((e) => e.startsWith(vaultsParent))).toBe(true);
       expect(fs.existsSync(storyVault)).toBe(true);
-      expect(fs.existsSync(notesVault)).toBe(true);
-
-      // Simulate notes side gone after a successful partial clear elsewhere.
-      fs.rmSync(notesVault, { recursive: true, force: true });
+      expect(fs.existsSync(notesVault)).toBe(false);
 
       const plan = planUninstallRecovery(storyVault, notesVault);
       expect(plan.storyVaultSurvived).toBe(true);
