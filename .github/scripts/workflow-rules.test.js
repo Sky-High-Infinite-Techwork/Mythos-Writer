@@ -40,9 +40,9 @@ function deletedWorkflows() {
   ];
 }
 
-test('ci pull_request branches are main and batch/**', () => {
+test('ci pull_request branches are main, batch/**, and gate-scripts bootstrap', () => {
   const on = triggerOf(loadWorkflow('ci.yml'));
-  assert.deepEqual(on.pull_request.branches, ['main', 'batch/**']);
+  assert.deepEqual(on.pull_request.branches, ['main', 'batch/**', 'cursor/gate-scripts-bootstrap-c35d']);
 });
 
 test('ci push branches stay main', () => {

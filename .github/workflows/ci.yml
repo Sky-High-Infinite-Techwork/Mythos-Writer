@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, 'batch/**']
+    # cursor/gate-scripts-bootstrap-c35d: holds ci-*.sh on base until #1930 lands on main (#1887 trust boundary).
+    branches: [main, 'batch/**', cursor/gate-scripts-bootstrap-c35d]
   # GitHub merge queue: the required checks (ci, notes-windows) must report on the queue's
   # temporary gh-readonly-queue/* commit. The queue run behaves like a PR run (no packaging
   # jobs, no coverage); the push run on main after the merge still packages.
