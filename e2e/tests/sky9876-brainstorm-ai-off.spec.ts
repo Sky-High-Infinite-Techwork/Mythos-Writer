@@ -123,9 +123,14 @@ test('SKY-9876: AI off — Agent Chat gone, Board + Idea Collections stay manual
     ).toContainText('Idea Board');
 
     // Every AI-bearing affordance is gone, cleanly (no dead band).
-    await expect(brainstormPanel(page).locator('.brainstorm-input')).toHaveCount(0);
+    // Page-wide: chat input / preset chips must not exist anywhere on Brainstorm.
+    await expect(page.locator('.brainstorm-input')).toHaveCount(0);
+    await expect(page.locator('.preset-selector-chip')).toHaveCount(0);
+    // AI-off board still uses data-testid="bs-board-side" on the shell; the inner
+    // EmptyState carries data-testid="bs-board-side-ai-off". Enabled mode is the
+    // only aside.bs-board-side without .bs-board-side--ai-off (Idea Board Agent).
+    await expect(page.locator('aside.bs-board-side:not(.bs-board-side--ai-off)')).toHaveCount(0);
     await expect(brainstormPanel(page).getByTestId('bs-board-side-ai-off')).toBeVisible();
-    await expect(brainstormPanel(page).locator('.preset-selector-chip')).toHaveCount(0);
 
     // Idea Collections + canvas remain fully manual: seven collections with
     // live counts, and placing a starter idea onto the board still works by
