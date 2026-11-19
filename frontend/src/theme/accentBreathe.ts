@@ -230,7 +230,8 @@ function writeTick(c: Controller, t: Record<string, string>): void {
     write(c, t);
     return;
   }
-  if (c.el.getAttribute('data-ln-breathe-legacy') === '1') {
+  const legacyAttr = c.el.getAttribute('data-ln-breathe-legacy');
+  if (legacyAttr === '1' || legacyAttr === 'force') {
     writeTickCancelNew(c, t, doc);
     return;
   }

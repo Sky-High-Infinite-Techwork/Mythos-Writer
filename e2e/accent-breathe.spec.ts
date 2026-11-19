@@ -100,9 +100,6 @@ async function firstWindow(app: ElectronApplication): Promise<Page> {
       () => window.dispatchEvent(new PointerEvent('pointermove')), 1000,
     );
   });
-  if (process.env.ACCENT_BREATHE_PERF_SOAK === 'legacy') {
-    await pg.evaluate(() => document.documentElement.setAttribute('data-ln-breathe-legacy', '1'));
-  }
   return pg;
 }
 
