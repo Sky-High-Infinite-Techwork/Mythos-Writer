@@ -45,6 +45,7 @@ import {
   type Page,
 } from '@playwright/test';
 import { sampleFrameDeltas, summarizeFrames, type FrameStats } from './perf/ui-runtime/animationFps';
+import { assertAbbaBreathePerfGate, evaluateAbbaBreathePerfGate } from './perf/accentBreathePerfGate';
 
 const MAIN_JS = path.resolve(__dirname, '../out/main/main.js');
 /** Static classic slot-1 border at default intensity: hexA('#00f0ff', 1.1). */
@@ -331,15 +332,18 @@ test.describe.serial('#1774 Accent breathe', () => {
 
   test('red-on-revert: pre-#1774 drop deltas fail ABBA min-over-pairs (+2 pp bar)', () => {
     // Soak-era paired windows before #1774: every ON sample carried ~5–9pp extra
-    // drops vs its OFF; min(on1−off1, on2−off2) stays above the post-fix gate.
+    // drops vs its OFF; the live gate helper rejects them (revert helper → breaks).
     for (const window of [
       { on1: 5.8, off1: 0.2, on2: 7.1, off2: 0.3 },
       { on1: 6.5, off1: 0.0, on2: 5.2, off2: 0.4 },
     ]) {
-      const dropPair1 = window.on1 - window.off1;
-      const dropPair2 = window.on2 - window.off2;
-      const dropDeltaPp = Math.min(dropPair1, dropPair2);
-      expect(dropDeltaPp).toBeGreaterThan(2);
+      const gate = evaluateAbbaBreathePerfGate({
+        pair1Drop: { onDroppedPct: window.on1, offDroppedPct: window.off1 },
+        pair2Drop: { onDroppedPct: window.on2, offDroppedPct: window.off2 },
+        pair1Fps: { onP95Fps: 59.5, offP95Fps: 59.9 },
+        pair2Fps: { onP95Fps: 59.5, offP95Fps: 59.9 },
+      });
+      expect(gate.passesDropGate).toBe(false);
     }
   });
 
@@ -479,20 +483,18 @@ test.describe.serial('#1774 Accent breathe', () => {
     // and on2−off2; fps judged on the better pair only — one stalled window may
     // fail a pair while the other still proves breathe. Pre-#1774 per-tick
     // restarts (~5–9% ON vs ~0% OFF in every window) fail min dropΔ via both pairs.
-    const dropPair1Pp = on1.stats.droppedFramePct - off1.stats.droppedFramePct;
-    const dropPair2Pp = on2.stats.droppedFramePct - off2.stats.droppedFramePct;
-    const dropDeltaPp = Math.min(dropPair1Pp, dropPair2Pp);
-    const fpsPair1 = on1.stats.p95Fps - (off1.stats.p95Fps - 3);
-    const fpsPair2 = on2.stats.p95Fps - (off2.stats.p95Fps - 3);
-    const fpsPairBest = Math.max(fpsPair1, fpsPair2);
+    const gate = assertAbbaBreathePerfGate(expect, {
+      pair1Drop: { onDroppedPct: on1.stats.droppedFramePct, offDroppedPct: off1.stats.droppedFramePct },
+      pair2Drop: { onDroppedPct: on2.stats.droppedFramePct, offDroppedPct: off2.stats.droppedFramePct },
+      pair1Fps: { onP95Fps: on1.stats.p95Fps, offP95Fps: off1.stats.p95Fps },
+      pair2Fps: { onP95Fps: on2.stats.p95Fps, offP95Fps: off2.stats.p95Fps },
+    });
     // eslint-disable-next-line no-console
     console.log(
-      `[perf] accent-breathe ABBA dropΔ min=${dropDeltaPp.toFixed(2)}pp ` +
-        `(on1−off1=${dropPair1Pp.toFixed(2)} on2−off2=${dropPair2Pp.toFixed(2)}) ` +
-        `fpsBestΔ=${fpsPairBest.toFixed(2)} (pair1=${fpsPair1.toFixed(2)} pair2=${fpsPair2.toFixed(2)})`,
+      `[perf] accent-breathe ABBA dropΔ min=${gate.dropDeltaPp.toFixed(2)}pp ` +
+        `(on1−off1=${gate.dropPair1Pp.toFixed(2)} on2−off2=${gate.dropPair2Pp.toFixed(2)}) ` +
+        `fpsBestΔ=${gate.fpsPairBest.toFixed(2)} (pair1=${gate.fpsPair1.toFixed(2)} pair2=${gate.fpsPair2.toFixed(2)})`,
     );
-    expect(dropDeltaPp).toBeLessThanOrEqual(2);
-    expect(fpsPairBest).toBeGreaterThanOrEqual(0);
     // A tick costs about one root-token change: no extra whole-tree recalc.
     expect(perChangeRecalcMs).toBeGreaterThan(0);
     expect(perTickRecalcMs).toBeLessThanOrEqual(perChangeRecalcMs * PER_TICK_RECALC_RATIO_MAX);
