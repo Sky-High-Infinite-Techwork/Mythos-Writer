@@ -32,6 +32,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
+    # Literal false: Mythos-Ops Actions is the only unattended publisher. Do not switch this
+    # back to a repository variable; the Ops ready check requires a literal false in this file.
+    env:
+      UNATTENDED_ENABLED: false
     outputs:
       enabled: ${{ steps.gate.outputs.enabled }}
       mode: ${{ steps.gate.outputs.mode }}
@@ -44,7 +48,6 @@ jobs:
           REPO: ${{ github.repository }}
           REF: ${{ github.ref }}
           EVENT: ${{ github.event_name }}
-          SWITCH: ${{ vars.UNATTENDED_ENABLED }}
           MODE: ${{ github.event.inputs.mode }}
           PR: ${{ github.event.inputs.pr }}
         run: |
@@ -65,7 +68,7 @@ jobs:
           if [ "$EVENT" = "schedule" ]; then
             MODE=act
           fi
-          if [ "$SWITCH" != "true" ]; then
+          if [ "$UNATTENDED_ENABLED" != "true" ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             echo "mode=inert" >> "$GITHUB_OUTPUT"
             echo "pr=" >> "$GITHUB_OUTPUT"

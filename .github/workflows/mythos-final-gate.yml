@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 5
     permissions: {}
     # Literal false: Mythos-Ops Actions is the only unattended publisher. Do not switch this
-    # back to vars.UNATTENDED_ENABLED; the Ops ready check requires a literal false in this file.
+    # back to a repository variable; the Ops ready check requires a literal false in this file.
     env:
       UNATTENDED_ENABLED: false
     outputs:
