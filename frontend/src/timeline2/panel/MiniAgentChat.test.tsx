@@ -80,6 +80,40 @@ describe('MiniAgentChat error strip', () => {
   });
 });
 
+describe('MiniAgentChat pending bubble', () => {
+  it('draws the optimistic user bubble for a fresh in-flight send', () => {
+    render(
+      <MiniAgentChat
+        chat={{ ...makeChat(), pendingPrompt: 'hello there', busy: true, pendingPromptInFeed: false }}
+        accent="brainstorm"
+        placeholder="Message…"
+        testidPrefix="ahp-partner"
+      />,
+    );
+    expect(screen.getAllByText('hello there')).toHaveLength(1);
+    expect(screen.getByTestId('ahp-partner-typing')).toBeTruthy();
+  });
+
+  it('does not draw a second user bubble when a Retry prompt is already in the feed', () => {
+    const messages: AgentSessionTurn[] = [{ role: 'user', text: 'hello there', at: '1' }];
+    render(
+      <MiniAgentChat
+        chat={{
+          ...makeChat({ messages }),
+          pendingPrompt: 'hello there',
+          busy: true,
+          pendingPromptInFeed: true,
+        }}
+        accent="brainstorm"
+        placeholder="Message…"
+        testidPrefix="ahp-partner"
+      />,
+    );
+    expect(screen.getAllByText('hello there')).toHaveLength(1);
+    expect(screen.getByTestId('ahp-partner-typing')).toBeTruthy();
+  });
+});
+
 describe('MiniAgentChat voice (unified composer)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

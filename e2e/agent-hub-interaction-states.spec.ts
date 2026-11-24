@@ -229,8 +229,15 @@ test('error state: failed provider response keeps the user message; resend recov
   await expect(page.getByTestId('ahp-partner-chat-error')).toContainText(/network error/i);
   await expect(page.locator('.trp-bubble--user', { hasText: prompt })).toBeVisible();
 
-  fake.setMode({ kind: 'stream', chunks: ['Coach reply after retry.'] });
+  fake.setMode({ kind: 'stream', chunks: ['Coach reply after retry.'], chunkDelayMs: 900 });
   await page.getByTestId('ahp-partner-chat-retry').click();
+
+  // While the retry is in flight the saved user turn must not be drawn twice
+  // (once from the feed, once as the optimistic pending bubble).
+  await expect(page.getByTestId('ahp-partner-typing')).toBeVisible({ timeout: 3_000 });
+  // One-shot count (not a retrying matcher): the duplicate would otherwise
+  // "heal" once the delayed stream finishes and mask the bug.
+  expect(await page.locator('.trp-bubble--user', { hasText: prompt }).count()).toBe(1);
 
   await expect(page.locator('.trp-bubble--agent', { hasText: 'Coach reply after retry.' })).toBeVisible({ timeout: 15_000 });
   await expect(page.locator('.trp-bubble--user', { hasText: prompt })).toHaveCount(1);

@@ -465,3 +465,175 @@ describe('useMiniAgentChat N4 cancel/stall main abort', () => {
     void api;
   });
 });
+
+/** Two vault-backed sessions (s-new is active first); appendTurns writes per id. */
+function installTwoSessionApi() {
+  const files: Record<string, AgentSessionFile> = {
+    's-new': {
+      id: 's-new',
+      agent: 'brainstorm',
+      startedAt: '2026-01-02T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+      turns: [],
+    },
+    's-old': {
+      id: 's-old',
+      agent: 'brainstorm',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      turns: [],
+    },
+  };
+  const summary = (f: AgentSessionFile): AgentSessionSummary => ({
+    id: f.id,
+    agent: f.agent,
+    startedAt: f.startedAt,
+    updatedAt: f.updatedAt,
+    turnCount: f.turns.length,
+    relPath: `Sessions/${f.id}.md`,
+  });
+  let chunkCb: ((chunk: string) => void) | null = null;
+  (window as unknown as { api: Record<string, unknown> }).api = {
+    cancelAiActivity: vi.fn(),
+    cancelBrainstorm: vi.fn(),
+    onBrainstormStreamStart: () => () => {},
+    onBrainstormChunk: (cb: (chunk: string) => void) => {
+      chunkCb = cb;
+      return () => { chunkCb = null; };
+    },
+    agentSessions: {
+      list: vi.fn().mockImplementation(async () => ({ sessions: Object.values(files).map(summary) })),
+      create: vi.fn(),
+      read: vi.fn().mockImplementation(async (id: string) => ({ session: { ...files[id] } })),
+      appendTurns: vi.fn().mockImplementation(async (id: string, turns: AgentSessionTurn[]) => {
+        files[id] = { ...files[id], turns: [...files[id].turns, ...turns] };
+        return { session: { ...files[id] } };
+      }),
+      rename: vi.fn(),
+      duplicate: vi.fn(),
+      delete: vi.fn(),
+    },
+  };
+  return { files, fireChunk: (c: string) => chunkCb?.(c) };
+}
+
+describe('useMiniAgentChat — failed-exchange tracking (SKY-1923 gate)', () => {
+  it('a repeated prompt after a completed exchange still saves its own user turn', async () => {
+    installApi();
+    const invoke = vi.fn().mockResolvedValueOnce('first answer').mockResolvedValueOnce('second answer');
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    await act(async () => { await result.current.send('yes'); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { await result.current.send('yes'); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(result.current.messages.map((m) => `${m.role}:${m.text}`)).toEqual([
+      'user:yes',
+      'agent:first answer',
+      'user:yes',
+      'agent:second answer',
+    ]);
+  });
+
+  it('hard timeout arms Retry, and Retry resends once without duplicating the user turn', async () => {
+    const api = installApi();
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>(() => { /* stalls forever */ }))
+      .mockResolvedValueOnce('after timeout');
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('stall prompt'); });
+    await act(async () => { await Promise.resolve(); });
+    act(() => { api.fireStreamStart('req-stall'); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(HARD_TIMEOUT_MS + 1); });
+
+    expect(String(result.current.error)).toMatch(/timed out/i);
+    expect(result.current.busy).toBe(false);
+    expect(result.current.canRetry).toBe(true);
+
+    await act(async () => { result.current.retryLast(); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke.mock.calls[1]?.[0]).toBe('stall prompt');
+    expect(result.current.error).toBeNull();
+    expect(result.current.messages.map((m) => `${m.role}:${m.text}`)).toEqual([
+      'user:stall prompt',
+      'agent:after timeout',
+    ]);
+  });
+
+  it('a Retry of a persisted failed send does not render a second optimistic user bubble', async () => {
+    const api = installApi();
+    let finishRetry: (v: string) => void = () => {};
+    const invoke = vi.fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockImplementationOnce(() => new Promise<string>((resolve) => { finishRetry = resolve; }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    // Fresh send: user turn is NOT in the feed yet → optimistic bubble shows.
+    await act(async () => { await result.current.send('bubble probe'); await Promise.resolve(); await Promise.resolve(); });
+    expect(result.current.canRetry).toBe(true);
+    expect(result.current.messages.filter((m) => m.role === 'user')).toHaveLength(1);
+
+    act(() => { result.current.retryLast(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.busy).toBe(true);
+    // Already in the feed → UI must not draw it again while the retry runs.
+    expect(result.current.pendingPromptInFeed).toBe(true);
+
+    await act(async () => { finishRetry('ok'); await Promise.resolve(); await Promise.resolve(); });
+    expect(result.current.pendingPromptInFeed).toBe(false);
+    void api;
+  });
+
+  it('a first send shows its optimistic bubble (pendingPromptInFeed stays false)', async () => {
+    installApi();
+    const invoke = vi.fn(() => new Promise<string>(() => { /* in flight */ }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('fresh'); });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(result.current.pendingPrompt).toBe('fresh');
+    expect(result.current.pendingPromptInFeed).toBe(false);
+  });
+
+  it('a failed send in a saved session does not leave Retry armed after the user switches session', async () => {
+    const vault = installTwoSessionApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('cut off')); }))
+      .mockResolvedValueOnce('answer in the other session');
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.store.activeSessionId).toBe('s-new');
+
+    act(() => { void result.current.send('carry over?'); });
+    await act(async () => { await Promise.resolve(); });
+    act(() => { vault.fireChunk('Part one'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+    expect(result.current.canRetry).toBe(true);
+    expect(vault.files['s-new'].turns.map((t) => t.role)).toEqual(['user', 'agent']);
+
+    await act(async () => { await result.current.store.switchSession('s-old'); });
+    await act(async () => { await Promise.resolve(); });
+
+    // Retry + error strip belong to the thread the prompt was asked in.
+    expect(result.current.store.activeSessionId).toBe('s-old');
+    expect(result.current.canRetry).toBe(false);
+    expect(result.current.error).toBeNull();
+    act(() => { result.current.retryLast(); });
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    // Same text typed by hand in the other session is a NEW exchange: its user turn is saved.
+    await act(async () => { await result.current.send('carry over?'); await Promise.resolve(); await Promise.resolve(); });
+    expect(vault.files['s-old'].turns.map((t) => `${t.role}:${t.text}`)).toEqual([
+      'user:carry over?',
+      'agent:answer in the other session',
+    ]);
+  });
+});
