@@ -2,6 +2,8 @@
 //   - Left sidebar three zones unchanged
 //   - Right tabs: <partner> · Suggestions · Scenes · Notes & Analysis
 //   - Partner tab: card + hands (no AGENTS list); Getting Started card inside
+//   - Sidebar dock: drag any panel tab between the left and right sidebars;
+//     the placement is saved and survives a restart
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
@@ -287,5 +289,189 @@ test.describe('SKY-10499 — genuinely fresh profile (rightSidebarVisible unset)
     await expect(partner).toBeVisible({ timeout: 8_000 });
     // F3#10: GettingStartedPanel deleted — never mount as gs-aside or gs-panel.
     await expect(partner.locator('[data-testid="gs-panel"]')).toHaveCount(0);
+  });
+});
+
+// ─── Sidebar dock: drag any panel between either sidebar, and it persists ────
+//
+// Click-through a person can follow: open the story, drag the right sidebar's
+// "Scenes" tab into the left sidebar, drag the left sidebar's "Story navigator"
+// tab into the right sidebar, restart the app (same profile) and find both where
+// they were dropped; then drag them back — including into the emptied left
+// sidebar's drop column — and restart again to the default layout.
+//
+// Drags dispatch real DOM DragEvents (one shared DataTransfer, real element
+// coordinates) at the app's own drag handlers — mouse-driven HTML5 drag is
+// unreliable in headless Electron (see brainstorm-wave33 / folder-ops-sky7995).
+
+const LEFT_TABS = 'Left sidebar panels';
+
+/** Reads the profile's saved settings straight from disk. */
+function savedSidebarDock(userData: string): unknown {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(userData, 'app-settings.json'), 'utf8'));
+    return raw?.activeLayout?.sidebarDock ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function rightTabNames(page: Page): Promise<string[]> {
+  return page.locator('[data-testid="global-right-sidebar"] .ahp-tabs [role="tab"]').allTextContents();
+}
+
+async function leftTabNames(page: Page): Promise<string[]> {
+  const list = page.getByRole('tablist', { name: LEFT_TABS });
+  if (await list.count() === 0) return [];
+  return list.getByRole('tab').allTextContents();
+}
+
+/**
+ * Drag `source` and drop it on the drop zone `zone()` resolves to, at the
+ * point `at` picks inside the zone's box (default: its centre). The zone is
+ * resolved only after dragstart, so a drop column that appears mid-drag works.
+ */
+async function dragPanel(
+  page: Page,
+  source: ReturnType<Page['locator']>,
+  zone: () => ReturnType<Page['locator']>,
+  at: (box: { x: number; y: number; width: number; height: number }) => { x: number; y: number } =
+    (b) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 }),
+): Promise<void> {
+  await expect(source).toBeVisible();
+  const sb = (await source.boundingBox())!;
+  // A handle, not the locator: after the drop the tab lives in the other
+  // sidebar, and a locator would wait for it to come back before dragend.
+  const handle = (await source.elementHandle())!;
+  await handle.evaluate((el, p) => {
+    const w = window as unknown as { __dockDt?: DataTransfer };
+    w.__dockDt = new DataTransfer();
+    el.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: w.__dockDt, clientX: p.x, clientY: p.y }));
+  }, { x: sb.x + sb.width / 2, y: sb.y + sb.height / 2 });
+  const target = zone();
+  await expect(target).toBeVisible({ timeout: 5_000 });
+  const p = at((await target.boundingBox())!);
+  await target.evaluate((el, pt) => {
+    const dt = (window as unknown as { __dockDt: DataTransfer }).__dockDt;
+    const init = { bubbles: true, cancelable: true, dataTransfer: dt, clientX: pt.x, clientY: pt.y };
+    el.dispatchEvent(new DragEvent('dragenter', init));
+    el.dispatchEvent(new DragEvent('dragover', init));
+    el.dispatchEvent(new DragEvent('drop', init));
+  }, p);
+  await handle.evaluate((el) => {
+    const dt = (window as unknown as { __dockDt?: DataTransfer }).__dockDt;
+    // The browser fires dragend on the source; skip it if the tab re-mounted elsewhere.
+    if (el.isConnected) el.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
+  });
+  await handle.dispose();
+}
+
+test.describe('Sidebar dock — drag any panel between the left and right sidebars; it persists', () => {
+  let tempRoot: string;
+  let userData: string;
+  let app: ElectronApplication;
+  let page: Page;
+
+  async function open(): Promise<void> {
+    app = await launchApp(userData);
+    page = await firstWindow(app);
+    await expect(page.locator('[data-testid="global-right-sidebar"]')).toBeVisible({ timeout: 15_000 });
+  }
+
+  async function restart(): Promise<void> {
+    await app.close().catch(() => undefined);
+    await open();
+  }
+
+  test.beforeAll(async () => {
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-sidebar-dock-'));
+    userData = path.join(tempRoot, 'userData');
+    seedUserData(userData, path.join(tempRoot, 'story-vault'), path.join(tempRoot, 'notes-vault'), { seedStory: true });
+    await open();
+    await page.locator('.nav-story-title', { hasText: STORY_TITLE }).click();
+    await expect(page.locator('[data-testid="lr-story-card"]')).toBeVisible({ timeout: 8_000 });
+  });
+
+  test.afterAll(async () => {
+    await app.close().catch(() => undefined);
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  test('starts in the default layout: navigator left, Agent Hub tabs right', async () => {
+    expect(await leftTabNames(page)).toEqual(['Story navigator']);
+    expect(await rightTabNames(page)).toEqual(['Mythos', 'Suggestions', 'Scenes', 'Notes & Analysis']);
+    for (const tab of await page.locator('[data-dock-panel]').all()) {
+      await expect(tab).toHaveAttribute('draggable', 'true');
+    }
+  });
+
+  test('right → left: drag the Scenes tab into the left sidebar', async () => {
+    const scenes = page.locator('[data-testid="global-right-sidebar"] [data-dock-panel="hub-scenes"]');
+    const leftNav = page.getByRole('tablist', { name: LEFT_TABS }).getByRole('tab', { name: 'Story navigator' });
+    // Drop on the left edge of "Story navigator" → Scenes lands before it.
+    const nb = (await leftNav.boundingBox())!;
+    await dragPanel(page, scenes, () => page.locator('[data-testid="sidebar-dock-left"]'),
+      () => ({ x: nb.x + 4, y: nb.y + nb.height / 2 }));
+    await expect.poll(() => leftTabNames(page)).toEqual(['Scenes', 'Story navigator']);
+    await expect.poll(() => rightTabNames(page)).toEqual(['Mythos', 'Suggestions', 'Notes & Analysis']);
+    // It shows in the left sidebar right away, with its real content.
+    const left = page.locator('[data-testid="sidebar-dock-left"]');
+    await expect(left.getByRole('tab', { name: 'Scenes' })).toHaveAttribute('aria-selected', 'true');
+    await expect(left.getByRole('tabpanel')).toBeVisible();
+    await expect(left.locator('[data-testid="left-rail"]')).toHaveCount(0);
+  });
+
+  test('left → right: drag the Story navigator tab into the right sidebar', async () => {
+    const nav = page.getByRole('tablist', { name: LEFT_TABS }).getByRole('tab', { name: 'Story navigator' });
+    // Drop on the right sidebar's body (below its tab row) → appended last.
+    await dragPanel(page, nav, () => page.locator('[data-testid="global-right-sidebar"]'),
+      (b) => ({ x: b.x + b.width / 2, y: b.y + b.height - 40 }));
+    await expect.poll(() => rightTabNames(page))
+      .toEqual(['Mythos', 'Suggestions', 'Notes & Analysis', 'Story navigator']);
+    await expect.poll(() => leftTabNames(page)).toEqual(['Scenes']);
+    const grs = page.locator('[data-testid="global-right-sidebar"]');
+    await expect(grs.getByRole('tab', { name: 'Story navigator' })).toHaveAttribute('aria-selected', 'true');
+    // The navigator works from its new home: the seeded scene is listed there.
+    await expect(grs.locator('[data-testid="left-rail"] .nav-scene-title').first()).toHaveText('Scene 1 · The Gate');
+    // …and it carries no dead "Collapse left sidebar" button.
+    await expect(grs.getByRole('button', { name: 'Collapse left sidebar' })).toHaveCount(0);
+  });
+
+  test('both moves are saved and survive an app restart', async () => {
+    await expect.poll(() => savedSidebarDock(userData)).toEqual({
+      left: ['hub-scenes'],
+      right: ['hub-partner', 'hub-suggestions', 'hub-notes-analysis', 'story-navigator'],
+    });
+    await restart();
+    await expect.poll(() => leftTabNames(page), { timeout: 10_000 }).toEqual(['Scenes']);
+    expect(await rightTabNames(page)).toEqual(['Mythos', 'Suggestions', 'Notes & Analysis', 'Story navigator']);
+  });
+
+  test('drag both back — through the emptied left sidebar’s drop column — and restart to the default', async () => {
+    // Scenes back to the right, between Suggestions and Notes & Analysis.
+    const scenes = page.getByRole('tablist', { name: LEFT_TABS }).getByRole('tab', { name: 'Scenes' });
+    const na = page.locator('[data-testid="global-right-sidebar"] [data-dock-panel="hub-notes-analysis"]');
+    const nb = (await na.boundingBox())!;
+    await dragPanel(page, scenes, () => page.locator('[data-testid="global-right-sidebar"]'),
+      () => ({ x: nb.x + 2, y: nb.y + nb.height / 2 }));
+    await expect.poll(() => rightTabNames(page))
+      .toEqual(['Mythos', 'Suggestions', 'Scenes', 'Notes & Analysis', 'Story navigator']);
+    // The left dock is empty, so the left sidebar is gone…
+    await expect(page.locator('[data-testid="sidebar-dock-left"]')).toHaveCount(0);
+
+    // …until a drag starts: then its drop column appears and takes the navigator back.
+    const nav = page.locator('[data-testid="global-right-sidebar"] [data-dock-panel="story-navigator"]');
+    await dragPanel(page, nav, () => page.locator('[data-testid="sidebar-dock-left"]'));
+    await expect.poll(() => leftTabNames(page)).toEqual(['Story navigator']);
+    await expect.poll(() => rightTabNames(page)).toEqual(['Mythos', 'Suggestions', 'Scenes', 'Notes & Analysis']);
+    await expect(page.locator('[data-testid="sidebar-dock-left"] [data-testid="left-rail"]')).toBeVisible();
+
+    await expect.poll(() => savedSidebarDock(userData)).toEqual({
+      left: ['story-navigator'],
+      right: ['hub-partner', 'hub-suggestions', 'hub-scenes', 'hub-notes-analysis'],
+    });
+    await restart();
+    await expect.poll(() => leftTabNames(page), { timeout: 10_000 }).toEqual(['Story navigator']);
+    expect(await rightTabNames(page)).toEqual(['Mythos', 'Suggestions', 'Scenes', 'Notes & Analysis']);
   });
 });

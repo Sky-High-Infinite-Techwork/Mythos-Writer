@@ -3,11 +3,12 @@
 // Partner tab: one agent chat everywhere + action buttons (Update Timeline /
 // Beta Read / Writer Scan). Hands keep engines; no persona chat chips.
 
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { Fragment, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import type { Scene, Story } from './types';
 import { useAgentSessions } from './lib/useAgentSessions';
 import AgentSessionPicker from './components/AgentSessionPicker';
 import ScenesPanel from './ScenesPanel';
+import type { SidebarDockPanelId } from './frame/sidebarDock';
 import { useAiEnabled } from './hooks/useAiEnabled';
 import type { NamedAgentId } from './agents/agentIdentity';
 import {
@@ -68,6 +69,42 @@ export type AgentId = 'writing-assistant' | 'brainstorm' | 'archive' | 'beta-rea
 
 export type AgentHubTab = 'partner' | 'suggestions' | 'scenes' | 'notes-analysis';
 type HubTab = AgentHubTab;
+
+/** The built-in tabs as sidebar-dock panels, in their default order. */
+export const HUB_DOCK_PANELS: readonly SidebarDockPanelId[] = [
+  'hub-partner',
+  'hub-suggestions',
+  'hub-scenes',
+  'hub-notes-analysis',
+];
+
+const HUB_TAB_OF_DOCK: Partial<Record<SidebarDockPanelId, HubTab>> = {
+  'hub-partner': 'partner',
+  'hub-suggestions': 'suggestions',
+  'hub-scenes': 'scenes',
+  'hub-notes-analysis': 'notes-analysis',
+};
+
+/** The Agent Hub tab a dock panel id stands for, or null for a panel from elsewhere. */
+export function hubTabOfDockPanel(id: SidebarDockPanelId): AgentHubTab | null {
+  return HUB_TAB_OF_DOCK[id] ?? null;
+}
+
+/** Fixed labels of the built-in tabs (the partner tab shows the partner's name). */
+export function hubTabLabel(tab: AgentHubTab, partnerName: string): string {
+  switch (tab) {
+    case 'partner': return partnerName;
+    case 'suggestions': return 'Suggestions';
+    case 'scenes': return 'Scenes';
+    case 'notes-analysis': return 'Notes & Analysis';
+  }
+}
+
+/** A panel docked into this sidebar from the other one (e.g. the story navigator). */
+export interface ForeignDockPanel {
+  label: string;
+  render: () => import('react').ReactNode;
+}
 
 type AgentStatusDot = 'idle' | 'watching' | 'attention' | 'disabled';
 
@@ -162,6 +199,23 @@ interface Props {
   /** Applied once on mount when GRS was collapsed (toolbar continuity scan). */
   pendingHubTab?: AgentHubTab | null;
   onPendingHubTabConsumed?: () => void;
+  /**
+   * Sidebar dock: the panels this hub shows, in order. `hub-*` ids are the
+   * built-in tabs; any other id renders from `foreignPanels`. Absent → the
+   * four built-in tabs in their default order.
+   */
+  dockPanels?: readonly SidebarDockPanelId[];
+  foreignPanels?: Partial<Record<SidebarDockPanelId, ForeignDockPanel>>;
+  /** Drag / keyboard / menu props for each tab button (sidebarDockDnd). */
+  dockTabProps?: (id: SidebarDockPanelId) => Record<string, unknown>;
+  /** Tab slot where a dragged panel would land, for the insertion marker. */
+  dockDropSlot?: number | null;
+  /** Rendered after the tabs (the "Move to …" menu). */
+  dockMenu?: import('react').ReactNode;
+  /** Show only the active panel's body — a hub tab docked in the left sidebar, whose strip lives there. */
+  hideTabStrip?: boolean;
+  /** Select this panel (e.g. one just dropped here); a new `seq` re-applies the same id. */
+  requestedDockPanel?: { id: SidebarDockPanelId; seq: number } | null;
 }
 
 export default function AgentHubPanel({
@@ -197,11 +251,19 @@ export default function AgentHubPanel({
   onOpenPartnerHistory,
   pendingHubTab = null,
   onPendingHubTabConsumed,
+  dockPanels = HUB_DOCK_PANELS,
+  foreignPanels,
+  dockTabProps,
+  dockDropSlot = null,
+  dockMenu,
+  hideTabStrip = false,
+  requestedDockPanel = null,
 }: Props) {
   const aiEnabled = useAiEnabled();
   const partnerName = resolvePartnerDisplayName(agentNames);
-  const [activeTab, setActiveTabState] = useState<HubTab>('partner');
-  const setActiveTab = useCallback((tab: HubTab) => {
+  // Hub tabs keep their short ids ('partner'…); a foreign panel uses its dock id.
+  const [activeTab, setActiveTabState] = useState<HubTab | SidebarDockPanelId>('partner');
+  const setActiveTab = useCallback((tab: HubTab | SidebarDockPanelId) => {
     setActiveTabState(tab === 'partner' && !aiEnabled ? 'scenes' : tab);
   }, [aiEnabled]);
   useEffect(() => {
@@ -220,6 +282,13 @@ export default function AgentHubPanel({
     onPendingHubTabConsumed?.();
   }, [pendingHubTab, setActiveTab, onPendingHubTabConsumed]);
 
+  const requestedSeq = requestedDockPanel?.seq;
+  const requestedId = requestedDockPanel?.id;
+  useEffect(() => {
+    if (!requestedId) return;
+    setActiveTab(hubTabOfDockPanel(requestedId) ?? requestedId);
+  }, [requestedId, requestedSeq, setActiveTab]);
+
   const [call, setCall] = useState<PartnerCallState>({
     onCall: false,
     muted: false,
@@ -232,36 +301,57 @@ export default function AgentHubPanel({
 
   const partnerSessionStore = useAgentSessions(PARTNER_SESSION_AGENT);
 
-  const TABS: { id: HubTab; label: string }[] = [
-    ...(aiEnabled ? [
-      { id: 'partner' as const, label: partnerName },
-      { id: 'suggestions' as const, label: 'Suggestions' },
-    ] : []),
-    { id: 'scenes', label: 'Scenes' },
-    { id: 'notes-analysis', label: 'Notes & Analysis' },
-  ];
+  // Partner + Suggestions need AI; with AI off they drop out wherever they dock.
+  type DockTabEntry = { id: HubTab | SidebarDockPanelId; dockId: SidebarDockPanelId; label: string; foreign?: ForeignDockPanel };
+  const TABS: DockTabEntry[] =
+    dockPanels.flatMap((dockId): DockTabEntry[] => {
+      const hub = hubTabOfDockPanel(dockId);
+      if (hub) {
+        if (!aiEnabled && (hub === 'partner' || hub === 'suggestions')) return [];
+        return [{ id: hub, dockId, label: hubTabLabel(hub, partnerName) }];
+      }
+      const foreign = foreignPanels?.[dockId];
+      return foreign ? [{ id: dockId, dockId, label: foreign.label, foreign }] : [];
+    });
+  const shown = TABS.find((t) => t.id === activeTab) ?? TABS[0] ?? null;
+  const shownTab = shown?.id ?? null;
 
   return (
     <div className="ahp-root" data-testid="agent-hub-panel" data-partner-shell="true">
+      {!hideTabStrip && (
       <nav className="ahp-tabs" aria-label="Right panel tabs">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            className={`ahp-tab${activeTab === t.id ? ' ahp-tab--active' : ''}`}
-            onClick={() => { setActiveTab(t.id); }}
-            aria-selected={activeTab === t.id}
-            role="tab"
-            data-testid={`ahp-tab-${t.id}`}
-            title={t.label}
-          >
-            <span className="ahp-tab-label">{t.label}</span>
-          </button>
+        {TABS.map((t, i) => (
+          <Fragment key={t.id}>
+            {dockDropSlot === i && <span className="sidebar-dock__marker" aria-hidden="true" />}
+            <button
+              type="button"
+              className={`ahp-tab${shownTab === t.id ? ' ahp-tab--active' : ''}`}
+              onClick={() => { setActiveTab(t.id); }}
+              aria-selected={shownTab === t.id}
+              role="tab"
+              data-testid={`ahp-tab-${t.id}`}
+              title={t.label}
+              {...dockTabProps?.(t.dockId)}
+            >
+              <span className="ahp-tab-label">{t.label}</span>
+            </button>
+          </Fragment>
         ))}
+        {dockDropSlot !== null && dockDropSlot >= TABS.length && (
+          <span className="sidebar-dock__marker" aria-hidden="true" />
+        )}
       </nav>
+      )}
+      {dockMenu}
 
       <div className="ahp-body">
-        {activeTab === 'partner' && aiEnabled && (
+        {shown?.foreign && shown.foreign.render()}
+        {!shown && (
+          <div className="sidebar-dock__empty" data-testid="ahp-dock-empty">
+            Drag a panel here to dock it in this sidebar.
+          </div>
+        )}
+        {shownTab === 'partner' && aiEnabled && (
           <PartnerChatView
             partnerName={partnerName}
             partnerSessionStore={partnerSessionStore}
@@ -288,15 +378,15 @@ export default function AgentHubPanel({
             continuityItems={continuityItems}
           />
         )}
-        {activeTab === 'suggestions' && aiEnabled && (
+        {shownTab === 'suggestions' && aiEnabled && (
           <div className="ahp-suggestions-tab" data-testid="ahp-suggestions-tab">
             <SuggestionReview onOpenVaultPath={onOpenVaultPath} />
           </div>
         )}
-        {activeTab === 'scenes' && (
+        {shownTab === 'scenes' && (
           <ScenesPanel story={story} onOpenFull={onOpenScenesFull ?? (() => {})} onOpenNote={onOpenSceneNote} />
         )}
-        {activeTab === 'notes-analysis' && (
+        {shownTab === 'notes-analysis' && (
           <NotesAndAnalysisTab
             scene={scene}
             onOpenCoachPage={onOpenCoachPage}

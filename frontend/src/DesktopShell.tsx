@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo, useReducer, type ReactNode } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, useReducer, type ComponentProps, type ReactNode } from 'react';
 import type { Editor } from '@tiptap/core';
 import { useToast } from './hooks/useToast';
 import { useAiEnabled } from './hooks/useAiEnabled';
@@ -145,7 +145,16 @@ import TemplatePicker from './TemplatePicker';
 import GlobalRightSidebar, { DEFAULT_PANELS, type PanelConfig } from './GlobalRightSidebar';
 import { RightSidebarSlotProvider } from './RightSidebarSlot';
 import { PanelDragProvider } from './PanelDragContext';
-import type { DragSidebar } from './PanelDragContext';
+import SidebarDock, { SidebarDockDndScope, SidebarDockMoveMenu } from './SidebarDock';
+import {
+  isSidebarDockPanelId,
+  moveSidebarPanel,
+  normalizeSidebarDock,
+  sidebarOfPanel,
+  type SidebarDockPanelId,
+  type SidebarDockState,
+} from './frame/sidebarDock';
+import type { DragSidebar, DraggablePanelId } from './PanelDragContext';
 import SplitEditorPane from './SplitEditorPane';
 import StorySubViewBar from './StorySubViewBar';
 import NotesTabPanel from './NotesTabPanel';
@@ -177,7 +186,7 @@ import EntityBrowser from './EntityBrowser';
 import SuggestionReview from './SuggestionReview';
 import VaultBrowser from './components/VaultBrowser';
 import ProgressDashboard from './ProgressDashboard';
-import AgentHubPanel, { type AgentHubTab } from './AgentHubPanel';
+import AgentHubPanel, { hubTabLabel, hubTabOfDockPanel, type AgentHubTab } from './AgentHubPanel';
 import CoachPage from './coach/CoachPage';
 import ContinuityPanel from './ContinuityPanel';
 import type { InconsistencyItem } from './ContinuityPanel';
@@ -2162,14 +2171,58 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
   // Suppress unused-locals warning: retained for restore paths, not wired to UI post-M6.
   void handleGrsPanelsChange;
 
+  // Sidebar dock: which sidebar (left/right) each live panel docks in, and in
+  // what order (frame/sidebarDock.ts). Saved in activeLayout.sidebarDock.
+  const savedSidebarDock = appSettings?.activeLayout?.sidebarDock;
+  const sidebarDock = useMemo(() => normalizeSidebarDock(savedSidebarDock), [savedSidebarDock]);
+  const sidebarDockRef = useRef<SidebarDockState>(sidebarDock);
+  sidebarDockRef.current = sidebarDock;
+  /** Left sidebar's selected panel tab (null → its first panel). */
+  const [leftDockActive, setLeftDockActive] = useState<SidebarDockPanelId | null>(null);
+  /** Asks the right sidebar's Agent Hub to select a panel just dropped there. */
+  const [rightDockRequest, setRightDockRequest] = useState<{ id: SidebarDockPanelId; seq: number } | null>(null);
+
+  const persistSidebarDock = useCallback((next: SidebarDockState) => {
+    sidebarDockRef.current = next;
+    setAppSettings((prev) => {
+      if (!prev) return prev;
+      const updated: AppSettings = {
+        ...prev,
+        activeLayout: { ...prev.activeLayout, leftSidebar: leftSidebarLayoutRef.current, sidebarDock: next },
+      };
+      settingsSet(updated).catch(() => {});
+      return updated;
+    });
+  }, []);
+
+  /** Move a live sidebar panel, then show it where it landed (opening a hidden sidebar). */
+  const moveDockPanel = useCallback((id: SidebarDockPanelId, toSidebar: DragSidebar, toIndex: number) => {
+    const next = moveSidebarPanel(sidebarDockRef.current, id, toSidebar, toIndex);
+    if (next !== sidebarDockRef.current) persistSidebarDock(next);
+    if (toSidebar === 'left') {
+      setLeftDockActive(id);
+      const cur = leftSidebarLayoutRef.current;
+      if (cur.sidebarCollapsed) persistLeftSidebarLayout({ ...cur, sidebarCollapsed: false });
+    } else {
+      setRightDockRequest((prev) => ({ id, seq: (prev?.seq ?? 0) + 1 }));
+      if (grsVisible === false) handleGrsVisibilityChange(true);
+    }
+  }, [persistSidebarDock, persistLeftSidebarLayout, grsVisible, handleGrsVisibilityChange]);
+
   // SKY-1695: Unified drop handler for panel drag-and-drop across both sidebars.
   const handlePanelDrop = useCallback((
-    panelId: SidebarPanelId,
+    rawPanelId: DraggablePanelId,
     fromSidebar: DragSidebar,
     fromIndex: number,
     toSidebar: DragSidebar,
     toIndex: number,
   ) => {
+    if (isSidebarDockPanelId(rawPanelId)) {
+      moveDockPanel(rawPanelId, toSidebar, toIndex);
+      return;
+    }
+    // Legacy registry panels (docked-tab / float paths).
+    const panelId: SidebarPanelId = rawPanelId;
     if (fromSidebar === toSidebar) {
       if (fromSidebar === 'left') {
         const cur = leftSidebarLayoutRef.current;
@@ -2202,7 +2255,7 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
       leftPanels.splice(toIndex, 0, { id: panelId, collapsed: false });
       persistLeftSidebarLayout({ ...cur, panels: leftPanels });
     }
-  }, [grsPanels, persistLeftSidebarLayout, persistGrsSettings]);
+  }, [grsPanels, persistLeftSidebarLayout, persistGrsSettings, moveDockPanel]);
 
   // SKY-1697: Remove a panel from its sidebar and float it in a new window.
   const persistFloatingPanels = useCallback((panels: FloatingPanelEntry[]) => {
@@ -2410,6 +2463,8 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
         rightSidebarPanels: layout.rightSidebar.panels,
         activeLayout: {
           leftSidebar: ll,
+          // Saved layouts don't record where sidebar panels dock; keep it.
+          sidebarDock: prev.activeLayout?.sidebarDock,
           floatingPanels: [],
           dockedTabs: layout.dockedTabs,
           splitWindow: { splitRatio: layout.splitWindow.splitRatio },
@@ -6279,10 +6334,17 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
   }, [persistLeftSidebarLayout]);
 
   const handleToolbarContinuityScan = useCallback(() => {
+    // Notes & Analysis may be docked in the left sidebar: show it there.
+    if (sidebarOfPanel(sidebarDockRef.current, 'hub-notes-analysis') === 'left') {
+      setLeftDockActive('hub-notes-analysis');
+      const cur = leftSidebarLayoutRef.current;
+      if (cur.sidebarCollapsed) persistLeftSidebarLayout({ ...cur, sidebarCollapsed: false });
+      return;
+    }
     setPendingAgentHubTab('notes-analysis');
     handleGrsVisibilityChange(true);
     window.dispatchEvent(new CustomEvent('mythos:open-continuity-scan'));
-  }, [handleGrsVisibilityChange]);
+  }, [handleGrsVisibilityChange, persistLeftSidebarLayout]);
 
   // R11 / M11a: the Coach button is AI-bearing chrome — MSV drops it entirely
   // when the master AI toggle is off (undefined handler = no mount).
@@ -6631,8 +6693,21 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
     ...layout.focusPrefs,
   };
   const inFocusOrDF = writingMode === 'focus' || distractionFree;
+  // Sidebar dock: panels shown in each sidebar. Partner + Suggestions need AI,
+  // so with AI off they drop out of whichever sidebar holds them.
+  const dockVisible = (ids: SidebarDockPanelId[]) =>
+    ids.filter((id) => aiEnabled || (id !== 'hub-partner' && id !== 'hub-suggestions'));
+  const leftDockIds = dockVisible(sidebarDock.left);
+  const rightDockIds = dockVisible(sidebarDock.right);
+  const dockPartnerName = resolvePartnerDisplayName(appSettings?.agentNames);
+  const dockLabelOf = (id: SidebarDockPanelId): string => {
+    const hub = hubTabOfDockPanel(id);
+    return hub ? hubTabLabel(hub, dockPartnerName) : 'Story navigator';
+  };
   // Beta 4 M2: View → Toggle left panel is a real user toggle (§4).
-  const showLeftSidebar = !distractionFree && !leftPanelHidden && (writingMode !== 'focus' || focusPrefs.showLeftSidebar);
+  const showLeftSidebarBase = !distractionFree && !leftPanelHidden && (writingMode !== 'focus' || focusPrefs.showLeftSidebar);
+  // An empty left dock takes no room; it reappears as a drop column mid-drag.
+  const showLeftSidebar = showLeftSidebarBase && leftDockIds.length > 0;
   const showBottomBar = !distractionFree && (writingMode !== 'focus' || focusPrefs.showBottomBar);
 
   // SKY-3618: Compute clamped display widths so center column always gets >= CENTER_MIN_WIDTH pixels.
@@ -6697,6 +6772,127 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
   const activeVaultBadgeMissing = tabShell.activeTab === 'notes' ? !vaultBinding.notesValid : !vaultBinding.storyValid;
   const activeVaultBadgeLabel = `${tabShell.activeTab === 'notes' ? 'Notes' : tabShell.activeTab === 'brainstorm' ? 'Partner' : 'Story'} vault: ${activeVaultBadge}`;
   const navRailConfig = appSettings?.navConfig;
+
+  /** The right sidebar's Agent Hub with the shell's props; `dock` picks which of its panels show. */
+  const renderAgentHub = (dock: Partial<ComponentProps<typeof AgentHubPanel>>) => (
+    <AgentHubPanel
+      scene={activeSceneForSidebar}
+      story={selectedStory}
+      pendingHubTab={pendingAgentHubTab}
+      onPendingHubTabConsumed={() => setPendingAgentHubTab(null)}
+      onOpenScenesFull={(board) => {
+        if (board) { handleOpenBoard(board); return; }
+        handleNavSectionChange('story');
+        handleSetView('kanban');
+      }}
+      onOpenSceneNote={handleOpenSceneByPath}
+      enabled={appSettings?.waEnabled ?? appSettings?.agents?.writingAssistant?.enabled ?? true}
+      scanIntervalSeconds={appSettings?.agents?.writingAssistant?.scanIntervalSeconds ?? 30}
+      waScanInterval={appSettings?.waScanInterval}
+      cadenceTrigger={appSettings?.waCadenceTrigger ?? appSettings?.agents?.writingAssistant?.cadenceTrigger}
+      idleHeartbeatConstantInterval={appSettings?.agents?.writingAssistant?.idleHeartbeatConstantInterval}
+      idleDebounceSeconds={appSettings?.agents?.writingAssistant?.idleDebounceSeconds}
+      isActive={view === 'editor'}
+      isPageFocused={view === 'editor'}
+      autoApply={appSettings?.agents?.writingAssistant?.autoApply ?? false}
+      autoApplyCategories={appSettings?.agents?.writingAssistant?.autoApplyCategories}
+      onAutoApplyCategoriesChange={handleWaAutoApplyCategoriesChange}
+      ttsSettings={appSettings?.tts}
+      voiceEnabled={appSettings?.voice?.enabled ?? false}
+      voicePrefs={appSettings?.voice}
+      agentNames={appSettings?.agentNames}
+      onOpenVaultPath={handleOpenSceneByPath}
+      // M13 §5.4: "View Full Analysis" must land on the Coach page — the
+      // Story tab alone leaves the writer on whatever sub-view was open.
+      onOpenCoachPage={() => { handleTabChange('story'); handleOpenCoachPage(); }}
+      // M9b (SKY-9823): without these the sidebar's Notes tab never sees
+      // the refresh bump after a drag-promote, so the promoted card stays
+      // pinned until a manual reload (SKY-10053).
+      sceneNotesRefresh={sceneNotesRefresh}
+      onPromoteSceneNote={handlePromoteSceneNote}
+      onSceneNotesChanged={handleSceneNotesChanged}
+      // SKY-9022/M6 GAP-1/GAP-6: live AGENTS-card statuses — per-agent
+      // Settings enablement + the open continuity-flag count.
+      agentEnablement={{
+        'writing-assistant': appSettings?.agents?.writingAssistant?.enabled ?? true,
+        brainstorm: appSettings?.agents?.brainstorm?.enabled ?? true,
+        archive: appSettings?.agents?.archive?.enabled ?? true,
+        'beta-reader': appSettings?.agents?.betaReader?.enabled ?? true,
+      }}
+      continuityCount={continuityCount}
+      onOpenPartnerHistory={() => {
+        // Critic H6: navigate in place via initialCategory (no Settings remount).
+        setSettingsInitialCategory('writingPartner');
+        setSettingsOpen(true);
+        // Latch + event — SessionHistoryViewer may mount after this tick.
+        window.setTimeout(() => {
+          requestOpenSessionHistory('brainstorm');
+        }, 50);
+      }}
+      continuityPanel={
+        <ContinuityPanel
+          scene={activeSceneForSidebar}
+          story={selectedStory}
+          enabled={(appSettings?.agents?.archive?.enabled ?? true) && (appSettings?.archiveContinuityEnabled ?? true)}
+          // GAP-6: name the flag that's actually off — agent-disabled wins
+          // (it's the state the AGENTS card's 'Disabled' status matches).
+          disabledReason={(appSettings?.agents?.archive?.enabled ?? true) ? 'feature' : 'agent'}
+          archiveScanScope={appSettings?.archiveScanScope ?? 'active_scene'}
+          archiveStoryEditConsentGiven={appSettings?.archiveStoryEditConsentGiven ?? false}
+          onConsentGranted={handleContinuityConsentGranted}
+          onCountChange={setContinuityCount}
+          onItemsChange={setContinuityItems}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
+      }
+      continuityItems={continuityItems}
+      referencesPanel={
+        <ReferencesPanel
+          story={selectedStory}
+          activeScene={activeSceneForSidebar}
+          stories={stories}
+          entities={allEntities}
+          notePaths={allNotePaths}
+          onPickReference={handleNotesWikiLinkClick}
+        />
+      }
+      {...dock}
+    />
+  );
+
+  /** The story navigator (LeftRail). Only the left sidebar can collapse it. */
+  const renderStoryNavigator = (inLeftSidebar: boolean) => (
+    <LeftRail
+      stories={stories}
+      selectedStory={selectedStory}
+      selectedScene={selectedScene}
+      selectedSceneId={selectedScene?.id ?? null}
+      onSelectScene={(sc, ch, st) => { handleSelectScene(sc, ch, st); setViewDepth('scene'); }}
+      onSelectStory={handleSelectStoryFromNavigator}
+      onCreateStory={createStory}
+      onCreateChapter={createChapter}
+      onCreateScene={createScene}
+      onReorderScenes={handleReorderScenes}
+      showTemplateCta={
+        (appSettings?.onboardingStartMode === 'start-fresh' || appSettings?.onboardingStartMode === 'blank') &&
+        !(gettingStartedProgress?.completedItems.includes('write-scene'))
+      }
+      onTemplateCtaClick={() => setTemplatePickerOpen(true)}
+      onPromoteSceneNote={handlePromoteSceneNote}
+      onCycleSceneStatus={handleManuscriptCycleStatus}
+      onRenameChapter={handleContextRenameChapter}
+      onRenameScene={handleContextRenameScene}
+      onDeleteChapter={deleteChapter}
+      onDeleteScene={deleteScene}
+      onRenamePart={(partId) => { void handleRenamePart(partId); }}
+      onCreateChapterInPart={createChapterInPart}
+      sidebarCollapsed={inLeftSidebar ? leftSidebarLayout.sidebarCollapsed : false}
+      onToggleCollapsed={inLeftSidebar
+        ? () => persistLeftSidebarLayout({ ...leftSidebarLayout, sidebarCollapsed: !leftSidebarLayout.sidebarCollapsed })
+        : undefined}
+      sceneNoteSummaries={sceneNotesBySceneId}
+    />
+  );
 
   return (
     <PanelDragProvider onDrop={handlePanelDrop} onFloatDrop={handleFloatPanel} onTabBarDrop={handleTabBarDrop} onTabGroupDrop={handleTabGroupDrop}>
@@ -7051,49 +7247,39 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
       )}
       {activeDockedTabId === null && view === 'editor' && <div className="shell-panels">
       <div className="shell-panels__row">
-      {/* Left rail */}
-      {showLeftSidebar && (
+      {/* Left sidebar: the panels docked left (the story navigator by default).
+          While a sidebar panel is dragged and the left dock is empty, a drop
+          column takes its place so the panel can be docked back. */}
+      <SidebarDockDndScope side="left" dock={sidebarDock} visible={leftDockIds} otherVisible={rightDockIds} labelOf={dockLabelOf}>
+      {(leftDnd) => (showLeftSidebar || (showLeftSidebarBase && leftDnd.dragging)) && (
         <div
           className={`shell-left${leftSidebarEdgeCollapsed ? ' shell-left--edge' : ''}`}
           style={{
-            width: renderedLeftWidth,
+            width: showLeftSidebar ? renderedLeftWidth : PANEL_MIN_WIDTH,
             ...(leftSidebarEdgeCollapsed ? { ['--shell-left-peek-width' as string]: `${clampedLeftWidth}px` } : {}),
           }}
         >
           <div className="shell-left__peek">
           {/* Beta 3 M3: slot-A breathing border (prototype brL, delay 0) */}
           <BorderOverlay settings={appSettings?.liquidNeonV2} slot={1} delay={0} />
-          <LeftRail
-            stories={stories}
-            selectedStory={selectedStory}
-            selectedScene={selectedScene}
-            selectedSceneId={selectedScene?.id ?? null}
-            onSelectScene={(sc, ch, st) => { handleSelectScene(sc, ch, st); setViewDepth('scene'); }}
-            onSelectStory={handleSelectStoryFromNavigator}
-            onCreateStory={createStory}
-            onCreateChapter={createChapter}
-            onCreateScene={createScene}
-            onReorderScenes={handleReorderScenes}
-            showTemplateCta={
-              (appSettings?.onboardingStartMode === 'start-fresh' || appSettings?.onboardingStartMode === 'blank') &&
-              !(gettingStartedProgress?.completedItems.includes('write-scene'))
-            }
-            onTemplateCtaClick={() => setTemplatePickerOpen(true)}
-            onPromoteSceneNote={handlePromoteSceneNote}
-            onCycleSceneStatus={handleManuscriptCycleStatus}
-            onRenameChapter={handleContextRenameChapter}
-            onRenameScene={handleContextRenameScene}
-            onDeleteChapter={deleteChapter}
-            onDeleteScene={deleteScene}
-            onRenamePart={(partId) => { void handleRenamePart(partId); }}
-            onCreateChapterInPart={createChapterInPart}
-            sidebarCollapsed={leftSidebarLayout.sidebarCollapsed}
-            onToggleCollapsed={() => persistLeftSidebarLayout({ ...leftSidebarLayout, sidebarCollapsed: !leftSidebarLayout.sidebarCollapsed })}
-            sceneNoteSummaries={sceneNotesBySceneId}
+          <SidebarDock
+            side="left"
+            regionLabel="Left sidebar"
+            label="Left sidebar panels"
+            ids={leftDockIds}
+            activeId={leftDockActive}
+            onActiveChange={setLeftDockActive}
+            labelOf={dockLabelOf}
+            renderPanel={(id) => (id === 'story-navigator'
+              ? renderStoryNavigator(true)
+              // A right-sidebar tab docked here: just its body; the strip above is its tab.
+              : renderAgentHub({ dockPanels: [id], hideTabStrip: true, pendingHubTab: null }))}
+            dnd={leftDnd}
           />
           </div>
         </div>
       )}
+      </SidebarDockDndScope>
 
       {/* Left resize handle */}
       {showLeftSidebar && !leftSidebarEdgeCollapsed && (
@@ -7779,96 +7965,31 @@ export default function DesktopShell({ initialSettings }: { initialSettings?: Ap
            Forced into its collapsed-edge state (not unmounted) while NotesTabPanel's own embedded
            Brainstorm sidebar is expanded, so the two right-hand panels never both show full-width at
            once — avoids the double-sidebar duplication that a naive always-visible mount would cause. */}
-      {grsVisible !== undefined && <GlobalRightSidebar
+      {grsVisible !== undefined && (
+      <SidebarDockDndScope side="right" dock={sidebarDock} visible={rightDockIds} otherVisible={leftDockIds} labelOf={dockLabelOf}>
+      {(rightDnd) => (
+      <GlobalRightSidebar
+        dropZoneProps={rightDnd.zoneProps}
         visible={(grsVisible as boolean) && !distractionFree && (writingMode !== 'focus' || focusPrefs.showRightSidebar) && !(tabShell.activeTab === 'notes' && !notesBrainstormCollapsed)}
         width={grsWidth}
         onVisibilityChange={handleGrsVisibilityChange}
         onWidthChange={handleGrsWidthChange}
         neonOverlay={<BorderOverlay settings={appSettings?.liquidNeonV2} slot={3} delay={1.6} />}
       >
-        <AgentHubPanel
-          scene={activeSceneForSidebar}
-          story={selectedStory}
-          pendingHubTab={pendingAgentHubTab}
-          onPendingHubTabConsumed={() => setPendingAgentHubTab(null)}
-          onOpenScenesFull={(board) => {
-            if (board) { handleOpenBoard(board); return; }
-            handleNavSectionChange('story');
-            handleSetView('kanban');
-          }}
-          onOpenSceneNote={handleOpenSceneByPath}
-          enabled={appSettings?.waEnabled ?? appSettings?.agents?.writingAssistant?.enabled ?? true}
-          scanIntervalSeconds={appSettings?.agents?.writingAssistant?.scanIntervalSeconds ?? 30}
-          waScanInterval={appSettings?.waScanInterval}
-          cadenceTrigger={appSettings?.waCadenceTrigger ?? appSettings?.agents?.writingAssistant?.cadenceTrigger}
-          idleHeartbeatConstantInterval={appSettings?.agents?.writingAssistant?.idleHeartbeatConstantInterval}
-          idleDebounceSeconds={appSettings?.agents?.writingAssistant?.idleDebounceSeconds}
-          isActive={view === 'editor'}
-          isPageFocused={view === 'editor'}
-          autoApply={appSettings?.agents?.writingAssistant?.autoApply ?? false}
-          autoApplyCategories={appSettings?.agents?.writingAssistant?.autoApplyCategories}
-          onAutoApplyCategoriesChange={handleWaAutoApplyCategoriesChange}
-          ttsSettings={appSettings?.tts}
-          voiceEnabled={appSettings?.voice?.enabled ?? false}
-          voicePrefs={appSettings?.voice}
-          agentNames={appSettings?.agentNames}
-          onOpenVaultPath={handleOpenSceneByPath}
-          // M13 §5.4: "View Full Analysis" must land on the Coach page — the
-          // Story tab alone leaves the writer on whatever sub-view was open.
-          onOpenCoachPage={() => { handleTabChange('story'); handleOpenCoachPage(); }}
-          // M9b (SKY-9823): without these the sidebar's Notes tab never sees
-          // the refresh bump after a drag-promote, so the promoted card stays
-          // pinned until a manual reload (SKY-10053).
-          sceneNotesRefresh={sceneNotesRefresh}
-          onPromoteSceneNote={handlePromoteSceneNote}
-          onSceneNotesChanged={handleSceneNotesChanged}
-          // SKY-9022/M6 GAP-1/GAP-6: live AGENTS-card statuses — per-agent
-          // Settings enablement + the open continuity-flag count.
-          agentEnablement={{
-            'writing-assistant': appSettings?.agents?.writingAssistant?.enabled ?? true,
-            brainstorm: appSettings?.agents?.brainstorm?.enabled ?? true,
-            archive: appSettings?.agents?.archive?.enabled ?? true,
-            'beta-reader': appSettings?.agents?.betaReader?.enabled ?? true,
-          }}
-          continuityCount={continuityCount}
-          onOpenPartnerHistory={() => {
-            // Critic H6: navigate in place via initialCategory (no Settings remount).
-            setSettingsInitialCategory('writingPartner');
-            setSettingsOpen(true);
-            // Latch + event — SessionHistoryViewer may mount after this tick.
-            window.setTimeout(() => {
-              requestOpenSessionHistory('brainstorm');
-            }, 50);
-          }}
-          continuityPanel={
-            <ContinuityPanel
-              scene={activeSceneForSidebar}
-              story={selectedStory}
-              enabled={(appSettings?.agents?.archive?.enabled ?? true) && (appSettings?.archiveContinuityEnabled ?? true)}
-              // GAP-6: name the flag that's actually off — agent-disabled wins
-              // (it's the state the AGENTS card's 'Disabled' status matches).
-              disabledReason={(appSettings?.agents?.archive?.enabled ?? true) ? 'feature' : 'agent'}
-              archiveScanScope={appSettings?.archiveScanScope ?? 'active_scene'}
-              archiveStoryEditConsentGiven={appSettings?.archiveStoryEditConsentGiven ?? false}
-              onConsentGranted={handleContinuityConsentGranted}
-              onCountChange={setContinuityCount}
-              onItemsChange={setContinuityItems}
-              onOpenSettings={() => setSettingsOpen(true)}
-            />
-          }
-          continuityItems={continuityItems}
-          referencesPanel={
-            <ReferencesPanel
-              story={selectedStory}
-              activeScene={activeSceneForSidebar}
-              stories={stories}
-              entities={allEntities}
-              notePaths={allNotePaths}
-              onPickReference={handleNotesWikiLinkClick}
-            />
-          }
-        />
-      </GlobalRightSidebar>}
+        {renderAgentHub({
+          dockPanels: rightDockIds,
+          foreignPanels: {
+            'story-navigator': { label: dockLabelOf('story-navigator'), render: () => renderStoryNavigator(false) },
+          },
+          dockTabProps: rightDnd.tabProps,
+          dockDropSlot: rightDnd.dropSlot,
+          dockMenu: <SidebarDockMoveMenu side="right" ids={rightDockIds} labelOf={dockLabelOf} dnd={rightDnd} />,
+          requestedDockPanel: rightDockRequest,
+        })}
+      </GlobalRightSidebar>
+      )}
+      </SidebarDockDndScope>
+      )}
 
       {continuityPeekOverlayOpen && (
         <div

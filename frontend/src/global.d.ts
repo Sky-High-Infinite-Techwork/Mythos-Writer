@@ -818,6 +818,12 @@ interface AppSettings {
     tabShell?: AppTabShellState;
     /** SKY-3098 (v0.3): nav rail collapsed state. */
     navRailCollapsed?: boolean;
+    /**
+     * Which shell sidebar each live sidebar panel docks in, in order (drag a
+     * panel tab between the left and right sidebars). Normalized on read by
+     * frame/sidebarDock.ts; absent → the default layout.
+     */
+    sidebarDock?: import('./frame/sidebarDock').SidebarDockState;
     /** SKY-3098 (v0.3): workspace tab bar tabs (≤Beta 3 module mirrors — ignored since Beta 4 M4). */
     workspaceTabs?: WorkspaceTab[];
     /** SKY-3098 (v0.3): active workspace tab id (≤Beta 3 — ignored since Beta 4 M4). */

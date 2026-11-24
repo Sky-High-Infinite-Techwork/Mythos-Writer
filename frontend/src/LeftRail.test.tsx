@@ -47,6 +47,26 @@ const baseProps = {
 // Mock window.api for StoryNavigator
 vi.stubGlobal('api', {});
 
+describe('LeftRail — docked outside the left sidebar', () => {
+  afterEach(cleanup);
+
+  it('shows the collapse button only when it can collapse the left sidebar', () => {
+    const onToggleCollapsed = vi.fn();
+    render(<LeftRail {...baseProps} onToggleCollapsed={onToggleCollapsed} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse left sidebar' }));
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+    cleanup();
+
+    // Docked in the right sidebar: no dead « button, with or without a story.
+    render(<LeftRail {...baseProps} onToggleCollapsed={undefined} />);
+    expect(screen.queryByRole('button', { name: 'Collapse left sidebar' })).toBeNull();
+    expect(screen.getByTestId('lr-nav-zone')).toBeInTheDocument();
+    cleanup();
+    render(<LeftRail {...baseProps} selectedStory={null} onToggleCollapsed={undefined} />);
+    expect(screen.queryByRole('button', { name: 'Collapse left sidebar' })).toBeNull();
+  });
+});
+
 describe('LeftRail M6 — three-zone layout', () => {
   it('renders the story card zone when a story is selected', () => {
     render(<LeftRail {...baseProps} />);

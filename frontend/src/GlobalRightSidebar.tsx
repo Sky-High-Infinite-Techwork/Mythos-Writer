@@ -32,6 +32,11 @@ interface Props {
   onDockAsTab?: unknown;
   /** Legacy — rendered above content if passed (backward compat during M6 transition). */
   headerContent?: ReactNode;
+  /**
+   * Sidebar dock drop-zone props (sidebarDockDnd): spread on the sidebar and
+   * on its collapsed edge, so a panel can be dropped here even while hidden.
+   */
+  dropZoneProps?: Record<string, unknown>;
 }
 
 export default function GlobalRightSidebar({
@@ -42,6 +47,7 @@ export default function GlobalRightSidebar({
   neonOverlay,
   children,
   headerContent,
+  dropZoneProps,
 }: Props) {
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
@@ -77,6 +83,7 @@ export default function GlobalRightSidebar({
         data-testid="grs-edge"
         role="complementary"
         aria-label="Right sidebar (hidden)"
+        {...dropZoneProps}
       >
         <button
           className="grs-show-btn"
@@ -96,6 +103,7 @@ export default function GlobalRightSidebar({
       data-testid="global-right-sidebar"
       aria-label="Right sidebar"
       style={{ width }}
+      {...dropZoneProps}
     >
       {neonOverlay}
       <div
