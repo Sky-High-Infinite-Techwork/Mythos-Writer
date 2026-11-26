@@ -8,23 +8,17 @@
  * all reused from `./ui-runtime/*` (see those files' doc comments) rather
  * than rebuilt here; this file only sequences them and records results.
  *
- * Run (after `npm run build:electron`):
- *   npx playwright test e2e/perf/ui-runtime.spec.ts --reporter=list
- * Or, to build + run + emit the report in one step:
- *   npm run perf:ui-runtime
- * On headless Linux (no real display), wrap with xvfb-run per PERFORMANCE.md §1:
- *   xvfb-run -a npm run perf:ui-runtime
+ * CI (shard 3, after `npm run build:electron`): this spec is wired into
+ * `npm run test:e2e:scene-save-perf` — the only existing CI hook for ui-runtime
+ * without editing `.github/**`.
  *
- * IMPORTANT — this is a MEASUREMENT harness, not a regression gate. Per
- * SKY-8217's scope, a metric missing its PERFORMANCE.md target gets a
- * separate scoped follow-up issue, not a red build here (real UI-runtime
- * numbers depend on host GPU/CPU and are far noisier under headless
- * Xvfb/CI than the repo's existing byte-count-based perf guards, e.g.
- * scene-save-perf.spec.ts). Every `expect()` below is a SANITY check that
- * the measurement pipeline produced a real signal (non-empty samples, a
- * finite number, etc.) — never a check against the target itself. Pass/fail
- * against target is recorded in `plans/PERF_UI_RUNTIME_BASELINE.json` and the
- * printed table for a human (or a follow-up issue) to act on.
+ * Local-only ad-hoc: `npm run perf:ui-runtime` or
+ * `npx playwright test e2e/perf/ui-runtime.spec.ts --reporter=list`
+ * (use `xvfb-run` on headless Linux per PERFORMANCE.md §1).
+ *
+ * #1912 regression gates: keystroke p95 and ambient fps floor budgets from CI
+ * run 44326511710 (20× `--repeat-each`, `--retries=0`, shard 3). Streaming-dropped-
+ * frame delta and idle CPU stay report-first; PERF_UI_RUNTIME_BASELINE.json records all.
  */
 import fs from 'fs';
 import path from 'path';
@@ -43,7 +37,9 @@ import { measureKeystrokeToPaint } from './ui-runtime/keystrokePaint';
 import { measureIdleCpu } from './ui-runtime/idleCpu';
 import { sampleFrameDeltas, summarizeFrames } from './ui-runtime/animationFps';
 import {
+  DEFAULT_MOCK_CHAT_RESPONSE,
   installMockChatStream,
+  UI_RUNTIME_STREAMING_MOCK_TOKEN_COUNT,
   openWritingCoachChat,
   sendPromptAndWaitForStreamStart,
 } from './ui-runtime/streamingFrames';
@@ -54,6 +50,8 @@ import { writeMetricResult, printReportTable } from './ui-runtime/report';
 
 /** "Keystroke → paint under 16 ms with all panels open." — checked at p95 across N reps. */
 const KEYSTROKE_P95_TARGET_MS = 16;
+/** CI #44326511710: max(2×p95, 1.25×max) over 20 keystroke samples → 135 ms. */
+const KEYSTROKE_P95_BUDGET_MS = 135;
 
 /**
  * "Idle CPU ~0%, GPU steady, no repaints while nothing moves." "~0%" isn't a
@@ -71,6 +69,8 @@ const IDLE_CPU_TARGET_PCT = 1;
  * i.e. at least 95% of sampled frames ran at 57fps or better.
  */
 const AMBIENT_FPS_FLOOR_TARGET = 57;
+/** CI #44326511710: inverse of min floor (20.0 fps) → min/1.25 → 16 fps. */
+const AMBIENT_FPS_FLOOR_BUDGET = 16;
 
 /**
  * "Typing with Writing Assistant + watcher live: no dropped frames." Read
@@ -107,7 +107,7 @@ test.describe('SKY-8217 metric 1 — keystroke-to-paint main-thread time', () =>
     rmScratch(scratch);
   });
 
-  test('p95 main-thread time per keystroke', async () => {
+  test('[ui-runtime] p95 main-thread time per keystroke', async () => {
     const result = await measureKeystrokeToPaint(page, 20);
     const pass = result.p95 < KEYSTROKE_P95_TARGET_MS;
     // eslint-disable-next-line no-console
@@ -115,6 +115,8 @@ test.describe('SKY-8217 metric 1 — keystroke-to-paint main-thread time', () =>
       `[SKY-8217 perf] keystroke-to-paint: p50=${result.p50.toFixed(2)}ms p95=${result.p95.toFixed(2)}ms ` +
         `(target p95 < ${KEYSTROKE_P95_TARGET_MS}ms) — ${pass ? 'PASS' : 'FAIL'}`,
     );
+    // eslint-disable-next-line no-console
+    console.log(`[perf] keystroke-p95-ms=${result.p95.toFixed(2)}`);
     writeMetricResult('keystroke_to_paint_p95_ms', {
       value: result.p95,
       unit: 'ms',
@@ -126,6 +128,7 @@ test.describe('SKY-8217 metric 1 — keystroke-to-paint main-thread time', () =>
 
     expect(result.samples.length).toBeGreaterThan(0);
     expect(Number.isFinite(result.p95)).toBe(true);
+    expect(result.p95).toBeLessThan(KEYSTROKE_P95_BUDGET_MS);
   });
 });
 
@@ -164,7 +167,7 @@ test.describe('SKY-8217 metric 2 — idle CPU', () => {
     rmScratch(scratch);
   });
 
-  test('main + renderer CPU over a 5s idle window', async () => {
+  test('[ui-runtime] main + renderer CPU over a 5s idle window', async () => {
     if (process.platform !== 'linux') {
       test.skip(true, 'idleCpu.ts only supports Linux /proc sampling');
       return;
@@ -211,7 +214,7 @@ test.describe('SKY-8217 metric 3 — ambient animation fps', () => {
     rmScratch(scratch);
   });
 
-  test('ambient wallpaper animation frame rate', async () => {
+  test('[ui-runtime] ambient wallpaper animation frame rate', async () => {
     const deltas = await sampleFrameDeltas(page, 3000);
     const stats = summarizeFrames(deltas);
     const pass = stats.p95Fps >= AMBIENT_FPS_FLOOR_TARGET;
@@ -221,6 +224,8 @@ test.describe('SKY-8217 metric 3 — ambient animation fps', () => {
         `floor(p5)=${stats.p95Fps.toFixed(1)} dropped=${stats.droppedFramePct.toFixed(1)}% ` +
         `(target floor >= ${AMBIENT_FPS_FLOOR_TARGET}fps) — ${pass ? 'PASS' : 'FAIL'}`,
     );
+    // eslint-disable-next-line no-console
+    console.log(`[perf] ambient-fps-floor=${stats.p95Fps.toFixed(2)}`);
     writeMetricResult('ambient_animation_fps_floor', {
       value: stats.p95Fps,
       unit: 'fps',
@@ -232,6 +237,7 @@ test.describe('SKY-8217 metric 3 — ambient animation fps', () => {
 
     expect(stats.sampleCount).toBeGreaterThan(0);
     expect(Number.isFinite(stats.avgFps)).toBe(true);
+    expect(stats.p95Fps).toBeGreaterThanOrEqual(AMBIENT_FPS_FLOOR_BUDGET);
   });
 });
 
@@ -257,15 +263,26 @@ test.describe('SKY-8217 metric 4 — dropped frames with agents live', () => {
     rmScratch(scratch);
   });
 
-  test('frame rate during a live streaming chat response vs. idle baseline', async () => {
+  test('[ui-runtime] frame rate during a live streaming chat response vs. idle baseline', async () => {
     const idleDeltas = await sampleFrameDeltas(page, 2000);
     const idleStats = summarizeFrames(idleDeltas);
 
-    await installMockChatStream(app!, { tokenCount: 30, chatDelayMs: 100 });
+    const STREAM_SAMPLE_MS = 2500;
+    await installMockChatStream(app!, {
+      tokenCount: UI_RUNTIME_STREAMING_MOCK_TOKEN_COUNT,
+      chatDelayMs: 100,
+    });
     await sendPromptAndWaitForStreamStart(page, 'Give me feedback on this scene.');
 
-    const streamingDeltas = await sampleFrameDeltas(page, 2500);
+    await expect(page.getByTestId('ahp-partner-chat-error')).toHaveCount(0);
+
+    const streamingDeltas = await sampleFrameDeltas(page, STREAM_SAMPLE_MS);
     const streamingStats = summarizeFrames(streamingDeltas);
+
+    await expect(page.locator('.trp-bubble--agent').last()).toContainText(
+      DEFAULT_MOCK_CHAT_RESPONSE.trim().slice(0, 24),
+      { timeout: 15_000 },
+    );
 
     const dropDelta = streamingStats.droppedFramePct - idleStats.droppedFramePct;
     const pass = dropDelta <= STREAMING_DROP_TOLERANCE_PCT;
@@ -294,7 +311,7 @@ test.describe('SKY-8217 metric 4 — dropped frames with agents live', () => {
   });
 });
 
-test('report file was written', () => {
+test('[ui-runtime] report file was written', () => {
   const reportPath = path.resolve(__dirname, '../../plans/PERF_UI_RUNTIME_BASELINE.json');
   expect(fs.existsSync(reportPath)).toBe(true);
 });

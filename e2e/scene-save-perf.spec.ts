@@ -196,13 +196,15 @@ function median(values: number[]): number {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
-// Generous, CI-jitter-tolerant absolute bounds — see manifestPerf.test.ts and
-// the SKY-797 perf gate for the same calibration philosophy: loose enough to
-// survive shared-runner noise, tight enough to fail fast on an actual
-// re-introduction of O(vault-prose) cost (which would blow these by many Xs,
-// not by a jitter-sized margin).
-const COLD_SAVE_MS_BUDGET = process.env.CI ? 6000 : 3000;
-const REPEAT_SAVE_MS_BUDGET = process.env.CI ? 1500 : 600;
+// CI-calibrated wall-clock bounds (test-gap #1903 / #1912): Nov 16–18 shard-3
+// logs, 23 runs, parsed from this spec's `[SKY-6198 perf]` line. Budget =
+// max(≥2× CI p95, ≥1.5× CI max) per vault size — tight enough that a ~50×
+// slowdown fails, loose enough for shared-runner jitter (repeat saves are
+// single-digit ms in CI).
+const SAVE_MS_BUDGET: Record<number, { cold: number; repeat: number }> = {
+  50: { cold: 600, repeat: 40 },
+  600: { cold: 1000, repeat: 60 },
+};
 const REPS = 5;
 
 for (const sceneCount of [50, 600]) {
@@ -249,13 +251,15 @@ for (const sceneCount of [50, 600]) {
 
       const coldMs = times[0];
       const repeatMedianMs = median(times.slice(1));
+      const budget = SAVE_MS_BUDGET[sceneCount];
       // eslint-disable-next-line no-console
       console.log(
         `[SKY-6198 perf] ${sceneCount} scenes × 8KB prose — manifest.json: ${(manifestBytes / 1024).toFixed(1)} KB; ` +
-          `cold save: ${coldMs.toFixed(1)}ms; repeat-save median (n=${REPS - 1}): ${repeatMedianMs.toFixed(1)}ms`,
+          `cold save: ${coldMs.toFixed(1)}ms; repeat-save median (n=${REPS - 1}): ${repeatMedianMs.toFixed(1)}ms ` +
+          `(budget cold<${budget.cold} repeat<${budget.repeat})`,
       );
-      expect(coldMs).toBeLessThan(COLD_SAVE_MS_BUDGET);
-      expect(repeatMedianMs).toBeLessThan(REPEAT_SAVE_MS_BUDGET);
+      expect(coldMs).toBeLessThan(budget.cold);
+      expect(repeatMedianMs).toBeLessThan(budget.repeat);
     });
   });
 }

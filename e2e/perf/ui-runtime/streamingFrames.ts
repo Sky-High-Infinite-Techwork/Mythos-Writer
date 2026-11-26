@@ -2,12 +2,12 @@
  * streamingFrames.ts — SKY-8217 metric 4 support: "No dropped frames with
  * agents live."
  *
- * Drives a REAL Writing Coach chat streaming session — the only thing mocked
- * is the `agent:writing-assistant` IPC handler in the Electron main process
- * (the Anthropic network boundary), exactly like e2e/writing-assistant.spec.ts
- * already does via its `installIpcMocks`. This module reuses that same
- * `agent:writing-assistant` / `agent:writing-assistant:chunk` channel
- * contract verbatim — it does not invent a new mock shape or IPC channel.
+ * Drives a REAL hub partner chat streaming session — the only thing mocked
+ * is the `agent:brainstorm` IPC handler in the Electron main process
+ * (the Anthropic network boundary). Partner send (`ahp-partner-chat-send`) goes
+ * through `invokeBrainstorm` → `agent:brainstorm`, matching
+ * `electron-main/src/main.ts` stream-start + chunk events on
+ * `agent:brainstorm:stream-start` / `agent:brainstorm:chunk`.
  *
  * This file only installs the mock, opens the chat panel, and sends a
  * prompt — it does NOT sample frames. The integration spec is expected to
@@ -42,28 +42,30 @@ function generateLoremTokens(count: number): string[] {
   return tokens;
 }
 
+/** Default mock stream length for ui-runtime perf (chunks × chatDelayMs ≈ stream duration). */
+export const UI_RUNTIME_STREAMING_MOCK_TOKEN_COUNT = 40;
+
 export interface StreamingMockOptions {
-  /** Number of streamed chunks to emit. Default 30. */
+  /** Number of streamed chunks to emit. Default UI_RUNTIME_STREAMING_MOCK_TOKEN_COUNT. */
   tokenCount?: number;
   /** Delay in ms between chunks. Default 100. */
   chatDelayMs?: number;
 }
 
 /**
- * Installs ONLY the `agent:writing-assistant` chat-stream IPC mock in the
- * Electron main process — not the full Writing Assistant mock surface
- * (tips/beta-read/voice) that e2e/writing-assistant.spec.ts's
- * `installIpcMocks` sets up, since this harness only needs the chat stream.
+ * Installs the hub partner `agent:brainstorm` chat-stream IPC mock in the
+ * Electron main process — not the full writing-assistant / tips surface from
+ * `e2e/writing-assistant.spec.ts`'s `installIpcMocks`, since partner chat
+ * never calls `agent:writing-assistant`.
  *
- * Defaults (tokenCount=30, chatDelayMs=100) keep a streaming window open for
- * ~3 seconds, giving `sampleFrameDeltas` (animationFps.ts) room to capture a
- * meaningful number of frames concurrently while the stream is in flight.
+ * Defaults keep a streaming window open for several seconds so
+ * `sampleFrameDeltas` (animationFps.ts) can sample frames during the stream.
  */
 export async function installMockChatStream(
   app: ElectronApplication,
   opts: StreamingMockOptions = {},
 ): Promise<void> {
-  const { tokenCount = 30, chatDelayMs = 100 } = opts;
+  const { tokenCount = UI_RUNTIME_STREAMING_MOCK_TOKEN_COUNT, chatDelayMs = 100 } = opts;
   const chatTokens = generateLoremTokens(tokenCount);
   const chatResponse = chatTokens.join('');
 
@@ -72,16 +74,23 @@ export async function installMockChatStream(
       { ipcMain },
       args: { chatTokens: string[]; chatResponse: string; chatDelayMs: number },
     ) => {
-      try {
-        ipcMain.removeHandler('agent:writing-assistant');
-      } catch {
-        /* not yet registered */
-      }
-      ipcMain.handle('agent:writing-assistant', async (event) => {
+      const safeRemove = (channel: string) => {
+        try {
+          ipcMain.removeHandler(channel);
+        } catch {
+          /* not yet registered */
+        }
+      };
+      safeRemove('agent:brainstorm');
+      ipcMain.handle('agent:brainstorm', async (event) => {
+        const requestId = `mock-brainstorm-${Date.now()}`;
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('agent:brainstorm:stream-start', { requestId });
+        }
         for (const token of args.chatTokens) {
           await new Promise<void>((r) => setTimeout(r, args.chatDelayMs));
           if (!event.sender.isDestroyed()) {
-            event.sender.send('agent:writing-assistant:chunk', { chunk: token });
+            event.sender.send('agent:brainstorm:chunk', { chunk: token });
           }
         }
         return { text: args.chatResponse };
@@ -91,19 +100,31 @@ export async function installMockChatStream(
   );
 }
 
+/** Full mocked response text for assertions (default installMockChatStream tokens). */
+export const DEFAULT_MOCK_CHAT_RESPONSE = generateLoremTokens(UI_RUNTIME_STREAMING_MOCK_TOKEN_COUNT).join('');
+
 /**
  * Opens the Writing Coach chat view in the agent hub panel.
  *
  * Assumes the caller already navigated to the editor and opened a scene
  * (e.g. via `openSeededScene` in e2e/helpers/launchApp.ts) so the panel has scene context —
  * this only expands the panel and drills into the chat row, mirroring
- * `openAssistantTab` in e2e/writing-assistant.spec.ts.
+ * `openWritingAssistantWithScene` in e2e/writing-assistant.spec.ts.
  */
 export async function openWritingCoachChat(page: Page): Promise<void> {
   const hubPanel = page.locator('[data-testid="agent-hub-panel"]');
   await expect(hubPanel).toBeVisible({ timeout: 4_000 });
-  await openPartnerWriterTips(page);
+  const partnerTab = page.locator('[data-testid="ahp-tab-partner"]');
+  if (await partnerTab.isVisible({ timeout: 1_000 }).catch(() => false)) {
+    await partnerTab.click();
+  }
+  await expect(page.getByTestId('ahp-partner-view')).toBeVisible({ timeout: 8_000 });
+  const panel = page.locator('.writing-assistant-panel');
+  if ((await panel.count()) === 0) {
+    await openPartnerWriterTips(page);
+  }
   await expect(page.locator('.writing-assistant-panel')).toBeAttached({ timeout: 8_000 });
+  await expect(page.getByTestId('ahp-partner-chat-input')).toBeVisible({ timeout: 8_000 });
 }
 
 /**
@@ -112,20 +133,18 @@ export async function openWritingCoachChat(page: Page): Promise<void> {
  * finished. Callers want to sample frames WHILE the stream is still going,
  * so this deliberately does not wait for stream completion.
  *
- * "Stream has started" reuses the same signal e2e/writing-assistant.spec.ts's
- * TC-WA-10 uses to detect an in-progress assistant message: the `.wa-cursor`
- * streaming-cursor glyph becoming visible (rendered only while a response is
- * actively streaming in).
+ * Stream start is visible via the agent-hub partner typing indicator
+ * (`ahp-partner-typing`), not the retired `.wa-cursor` glyph from TC-WA-10.
  */
 export async function sendPromptAndWaitForStreamStart(page: Page, prompt: string): Promise<void> {
-  const input = page.getByRole('textbox', { name: 'Writing coach prompt' });
+  const input = page.getByTestId('ahp-partner-chat-input');
   await expect(input).toBeVisible({ timeout: 5_000 });
   await expect(input).toBeEnabled({ timeout: 5_000 });
   await input.fill(prompt);
 
-  const askBtn = page.getByRole('button', { name: 'Ask' });
+  const askBtn = page.getByTestId('ahp-partner-chat-send');
   await expect(askBtn).toBeEnabled({ timeout: 5_000 });
   await askBtn.click();
 
-  await expect(page.locator('.wa-cursor')).toBeVisible({ timeout: 6_000 });
+  await expect(page.getByTestId('ahp-partner-typing')).toBeVisible({ timeout: 6_000 });
 }
