@@ -17,7 +17,19 @@ export type WriteRefusalCode =
   | 'HANDLE_MISMATCH'
   | 'SWAP'
   | 'VOLUME_UNSUPPORTED'
-  | 'HARD_LINK';
+  | 'HARD_LINK'
+  | 'STALE'
+  | 'CAS_MISSING';
+
+export type ExpectTarget =
+  | 'absent'
+  | {
+      dev: bigint;
+      ino: bigint;
+      size: bigint;
+      mtimeNs: bigint;
+      nlink: bigint;
+    };
 
 const FAT_MAGIC = new Set<number>([0x4d44, 0x2011bab0]);
 const NETWORK_MAGIC = new Set<number>([0x6969, 0x517b, 0xff534d42, 0xfe534d42]);
@@ -219,6 +231,8 @@ export interface WriteNoFollowOptions {
   mkdir?: boolean;
   rel?: string;
   deps?: NoFollowDeps;
+  /** CAS write: refuse unless the on-disk target still matches this identity. */
+  expectTarget?: ExpectTarget;
 }
 
 function depsOf(options: { deps?: NoFollowDeps } | undefined): NoFollowDeps {
@@ -277,12 +291,37 @@ function writeAll(
   else if (sync === 'fsync') fsImpl.fsyncSync(fd);
 }
 
-function zeroIndexPolicy(dir: string, deps: NoFollowDeps, exempt: boolean): ZeroPolicy {
+export function zeroIndexPolicy(dir: string, deps: NoFollowDeps, exempt: boolean): ZeroPolicy {
   if (exempt) return 'skip';
   const kind = deps.probeVolume(dir);
   if (kind === 'fat') return 'skip';
   if (kind === 'network') return 'network';
   return 'unsupported';
+}
+
+/**
+ * CAS pre-rename identity check. When dev/ino are unusable (0n), `zeroIndexPolicy`
+ * runs first. **Residual (C1):** after FAT/network acceptance, match uses only
+ * `size` + `mtimeNs` — never dev/ino.
+ */
+export function expectTargetMatches(
+  post: fs.BigIntStats,
+  expect: Exclude<ExpectTarget, 'absent'>,
+  dir: string,
+  deps: NoFollowDeps,
+): boolean {
+  if (expect.ino !== 0n && post.ino !== 0n) {
+    return (
+      post.dev === expect.dev &&
+      post.ino === expect.ino &&
+      post.size === expect.size &&
+      post.mtimeNs === expect.mtimeNs
+    );
+  }
+  const policy = zeroIndexPolicy(dir, deps, false);
+  if (policy === 'unsupported') return false;
+  if (policy === 'network' && post.size !== expect.size) return false;
+  return post.size === expect.size && post.mtimeNs === expect.mtimeNs;
 }
 
 /**
@@ -317,6 +356,10 @@ export function writeNoFollowAtomic(
       logRefusal(code ?? 'LSTAT', rel);
       throw err;
     }
+  }
+
+  if (options.expectTarget && options.expectTarget !== 'absent' && !pre) {
+    throw new VaultWriteRefusedError('STALE', rel);
   }
 
   const buf = typeof data === 'string' ? Buffer.from(data, 'utf-8') : data;
@@ -379,14 +422,27 @@ export function writeNoFollowAtomic(
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err;
     }
-    if (post && isLinkStats(post, absPath, fsImpl)) {
-      throw new VaultWriteRefusedError('SWAP', rel);
-    }
-    if (!skipId && pre && post && (pre.dev !== post.dev || pre.ino !== post.ino)) {
-      throw new VaultWriteRefusedError('SWAP', rel);
-    }
-    if (!skipId && !pre && post) {
-      throw new VaultWriteRefusedError('SWAP', rel);
+    if (options.expectTarget) {
+      if (options.expectTarget === 'absent') {
+        if (post) throw new VaultWriteRefusedError('STALE', rel);
+      } else if (!post) {
+        throw new VaultWriteRefusedError('STALE', rel);
+      } else {
+        if (post.nlink > 1n) throw new VaultWriteRefusedError('HARD_LINK', rel);
+        if (!expectTargetMatches(post, options.expectTarget, path.dirname(absPath), deps)) {
+          throw new VaultWriteRefusedError('STALE', rel);
+        }
+      }
+    } else {
+      if (post && isLinkStats(post, absPath, fsImpl)) {
+        throw new VaultWriteRefusedError('SWAP', rel);
+      }
+      if (!skipId && pre && post && (pre.dev !== post.dev || pre.ino !== post.ino)) {
+        throw new VaultWriteRefusedError('SWAP', rel);
+      }
+      if (!skipId && !pre && post) {
+        throw new VaultWriteRefusedError('SWAP', rel);
+      }
     }
 
     fsImpl.closeSync(fd);
