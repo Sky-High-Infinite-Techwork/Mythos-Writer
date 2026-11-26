@@ -188,10 +188,28 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
       store.sessions.find((s) => s.id === store.activeSessionId)?.relPath === '';
   });
 
-  const recordFailedExchange = useCallback((exchange: FailedExchange) => {
+  // The chat on screen right now (read inside timers / awaited catches, where
+  // the render-time value would be stale).
+  const activeSessionIdRef = useRef<string | undefined>(store.activeSessionId ?? undefined);
+  activeSessionIdRef.current = store.activeSessionId ?? undefined;
+
+  /** True when a failed exchange was sent from the chat that is open now. */
+  const belongsToActiveSession = useCallback((exchange: FailedExchange | null): boolean => {
+    if (exchange === null) return false;
+    if (exchange.originSessionId === undefined) return true;
+    return canonicalSessionId(exchange.originSessionId) === canonicalSessionId(activeSessionIdRef.current);
+  }, [canonicalSessionId]);
+
+  // Arms Retry only for a failure from the chat that is open now. A failure,
+  // timeout or cancel recorded after a mid-flight session switch belongs to
+  // the old chat: Retry stays off so its prompt is never resent into the new
+  // one. Returns whether Retry was armed.
+  const recordFailedExchange = useCallback((exchange: FailedExchange): boolean => {
+    if (!belongsToActiveSession(exchange)) return false;
     lastFailedExchangeRef.current = exchange;
     setCanRetry(true);
-  }, []);
+    return true;
+  }, [belongsToActiveSession]);
 
   const clearTimers = useCallback(() => {
     if (stallTimerRef.current) {
@@ -242,8 +260,9 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
       resetInFlight();
       // The error tells the user to retry — arm Retry (same as Cancel) so the
       // prompt is not lost once the generation bump disarms send()'s catch.
-      if (timedOut) recordFailedExchange(timedOut);
-      setError('Generation timed out. The network or provider may be slow — please retry.');
+      if (!timedOut || recordFailedExchange(timedOut)) {
+        setError('Generation timed out. The network or provider may be slow — please retry.');
+      }
     }, getEffectiveTimerMs(HARD_TIMEOUT_MS, 'hardTimeoutMs'));
   }, [clearTimers, resetInFlight, recordFailedExchange]);
 
@@ -254,12 +273,12 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
     abortInMain(mainRequestIdRef.current);
     generationGenRef.current += 1;
     resetInFlight();
-    recordFailedExchange(cancelled ?? {
+    const armed = recordFailedExchange(cancelled ?? {
       prompt: pendingPrompt,
       originSessionId: undefined,
       userPersisted: false,
     });
-    setError('Generation cancelled. You can retry now.');
+    if (armed) setError('Generation cancelled. You can retry now.');
   }, [pendingPrompt, resetInFlight, recordFailedExchange]);
 
   const send = useCallback(async (prompt: string) => {
@@ -401,9 +420,13 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
         }
       }
       streamAccumRef.current = '';
-      recordFailedExchange({ prompt: trimmed, originSessionId, userPersisted });
-      const base = msg || 'Agent unavailable — check your provider settings.';
-      setError(partialSafe ? `${base} (partial reply kept above)` : base);
+      // Cancel / timeout while the failed turn was being saved already armed
+      // Retry and set their own message; do not overwrite them.
+      if (generationGenRef.current !== gen) return;
+      if (recordFailedExchange({ prompt: trimmed, originSessionId, userPersisted })) {
+        const base = msg || 'Agent unavailable — check your provider settings.';
+        setError(partialSafe ? `${base} (partial reply kept above)` : base);
+      }
     } finally {
       if (generationGenRef.current === gen) {
         resetInFlight();
@@ -415,12 +438,17 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
     }
   }, [pendingPrompt, store, invoke, agent, scheduleStallTimers, resetInFlight, clearStreamStartSub, clearChunkSub, clearTimers, canonicalSessionId, recordFailedExchange]);
 
-  // retryLast closes over send — declare after send is defined (eslint hoisting safe via function body order fix)
+  // Declared after send, which it calls.
   const retryLastBound = useCallback(() => {
-    const replay = lastFailedExchangeRef.current?.prompt;
-    if (!replay || pendingPrompt !== null) return;
-    void send(replay);
-  }, [pendingPrompt, send]);
+    const failed = lastFailedExchangeRef.current;
+    if (!failed?.prompt || pendingPrompt !== null) return;
+    if (!belongsToActiveSession(failed)) {  // never resend another chat's prompt here
+      lastFailedExchangeRef.current = null;
+      setCanRetry(false);
+      return;
+    }
+    void send(failed.prompt);
+  }, [pendingPrompt, send, belongsToActiveSession]);
 
   const postActionResult = useCallback(async (
     userLabel: string,

@@ -636,4 +636,28 @@ describe('useMiniAgentChat — failed-exchange tracking (SKY-1923 gate)', () => 
       'agent:answer in the other session',
     ]);
   });
+  it('a failure recorded after a mid-flight session switch never arms Retry in the new session', async () => {
+    const vault = installTwoSessionApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('cut off')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.store.activeSessionId).toBe('s-new');
+
+    act(() => { void result.current.send('asked in s-new'); });
+    await act(async () => { await Promise.resolve(); });
+    // Switch while the request is still running, THEN it fails.
+    await act(async () => { await result.current.store.switchSession('s-old'); });
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(result.current.store.activeSessionId).toBe('s-old');
+    expect(result.current.canRetry).toBe(false);
+    expect(result.current.error).toBeNull();
+    act(() => { result.current.retryLast(); });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(vault.files['s-old'].turns).toEqual([]);
+  });
 });
