@@ -102,6 +102,8 @@ test.describe('SKY-11151 creation primitive — Obsidian-parity blank vault (§3
     }
   });
 
+  // Gated pending SKY-11151 (blank vaults still scaffold Story/Notes/Agent
+  // Vault dirs). Slice owner removes this fixme as part of SKY-11151 done-criteria.
   test.fixme('AC-CP-02: blank vault has ZERO visible folders/files — Obsidian-parity empty (§3a hard requirement) (pending SKY-11151)', async () => {
     const userData = freshUserData('mythos-cp02-');
     const destParent = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-cp02-dest-'));
@@ -112,6 +114,10 @@ test.describe('SKY-11151 creation primitive — Obsidian-parity blank vault (§3
       const page = await app.firstWindow();
       await createBlankVaultAtChosenLocation(page, destParent, vaultName);
 
+      // Spec (SKY-11141 §3a / SKY-11151 "Obsidian-parity empty" AC): "Blank"
+      // must create ONLY genuine machinery — nothing the user sees in the
+      // tree. No Story Vault/Notes Vault/Agent Vault, no Templates.md, no
+      // My First Story. A fresh empty vault should *read* as empty.
       const mythosRoot = path.join(destParent, vaultName);
       const visible = listVisibleEntries(mythosRoot);
       expect(
@@ -123,6 +129,8 @@ test.describe('SKY-11151 creation primitive — Obsidian-parity blank vault (§3
     }
   });
 
+  // Gated pending SKY-11151 (blank vaults still scaffold Story/Notes/Agent
+  // Vault dirs). Slice owner removes this fixme as part of SKY-11151 done-criteria.
   test.fixme('AC-CP-03: the empty choice is PERSISTED — folders stay absent after a relaunch, not re-seeded on next boot (pending SKY-11151)', async () => {
     const userData = freshUserData('mythos-cp03-');
     const destParent = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-cp03-dest-'));
@@ -136,6 +144,9 @@ test.describe('SKY-11151 creation primitive — Obsidian-parity blank vault (§3
       await app.close();
     }
 
+    // Relaunch pointed at the SAME userData (same active vault) — this is
+    // the actual failure mode the spec calls out: a later start / index
+    // rebuild / health repair re-seeding an already-blank vault.
     const app2 = await launchApp(userData);
     try {
       const page2 = await app2.firstWindow();
@@ -154,16 +165,21 @@ test.describe('SKY-11151 creation primitive — Obsidian-parity blank vault (§3
 });
 
 test.describe('SKY-11151 — sample-story path removal (§3)', () => {
-  test.fixme('AC-CP-04: the first-run card set has exactly 3 options (template/blank/import) — no 4th "sample" card (pending SKY-11151)', async () => {
+  // Gated pending SKY-11151 (sample-story path removal). Slice owner removes this
+  // fixme as part of SKY-11151 done-criteria. Retargeted from the removed wizard
+  // (screen-step1 / card-*) to the first-run WelcomeOverlay cards (F3#9).
+  test.fixme('AC-CP-04: the first-run card set offers template/blank/import — no "sample" card (pending SKY-11151)', async () => {
     const userData = freshUserData('mythos-cp04-');
     const app = await launchApp(userData);
     try {
       const page = await app.firstWindow();
-      await expect(page.getByTestId('screen-step1')).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByTestId('welcome-overlay')).toBeVisible({ timeout: 15_000 });
 
-      await expect(page.getByTestId('card-sample'), 'card-sample must be removed per SKY-11141 §3').toHaveCount(0);
-      await expect(page.getByTestId('card-start-blank')).toBeVisible();
-      await expect(page.getByTestId('card-import-obsidian')).toBeVisible();
+      // Spec (SKY-11141 §3): the sample-story path is removed from first run.
+      await expect(page.getByTestId('welcome-path-sample'), 'sample card must be removed per SKY-11141 §3').toHaveCount(0);
+      await expect(page.getByTestId('welcome-path-template')).toBeVisible();
+      await expect(page.getByTestId('welcome-path-blank')).toBeVisible();
+      await expect(page.getByTestId('welcome-path-import')).toBeVisible();
     } finally {
       await app.close();
     }

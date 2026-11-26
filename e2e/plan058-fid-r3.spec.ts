@@ -109,7 +109,15 @@ test('past chats picker is a dropdown inside the hub header card', async () => {
       path: test.info().outputPath('plan058-fid-r3-past-open.png'),
     });
 
-    // FD-9 #3: Escape with focus on session pill inside past-chats (matches AgentHubPanel unit test).
+    // Escape on the toggle closes the disclosure.
+    await toggle.focus();
+    await page.keyboard.press('Escape');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.getByTestId('ahp-partner-history-link')).toHaveCount(0);
+
+    // FD-9 #3: Escape with focus on the session pill inside Past chats (matches the AgentHubPanel unit test).
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
     await pill.focus();
     await expect(pill).toBeFocused();
     await page.keyboard.press('Escape');
