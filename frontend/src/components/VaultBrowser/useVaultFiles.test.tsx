@@ -13,9 +13,9 @@ const mockListNotesVault = vi.fn();
 const mockStartVaultWatch = vi.fn();
 
 // Captured callbacks so tests can fire each channel independently.
-let fileChangedCb: (() => void) | undefined;
+let fileChangedCb: ((data: { path: string }) => void) | undefined;
 let notesUpdatedCb: (() => void) | undefined;
-const mockOnVaultFileChanged = vi.fn((cb: () => void) => {
+const mockOnVaultFileChanged = vi.fn((cb: (data: { path: string }) => void) => {
   fileChangedCb = cb;
   return vi.fn();
 });
@@ -146,7 +146,7 @@ describe("useVaultFiles('story')", () => {
     expect(notesUpdatedCb).toBeUndefined();
 
     act(() => {
-      fileChangedCb?.();
+      fileChangedCb?.({ path: 'Manuscript/Chapter 1/Scene.md' });
       vi.advanceTimersByTime(150);
     });
     await flushMicrotasks();

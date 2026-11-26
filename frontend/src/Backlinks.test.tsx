@@ -44,7 +44,7 @@ const noteBacklinks = vi.fn(async () => ({
   notePath: 'Locations/The Sunken Gate.md',
   backlinks: [{ path: 'Characters/Mira.md', name: 'Mira', snippet: 'found a map near the [[The Sunken Gate]]' }],
 }));
-const onVaultFileChanged = vi.fn((_cb: () => void) => () => {});
+const onVaultFileChanged = vi.fn((_cb: (data: { path: string }) => void) => () => {});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -134,12 +134,16 @@ describe('Backlinks panel (M16)', () => {
     await waitFor(() => expect(onVaultFileChanged).toHaveBeenCalled());
     // Initial mount load has already run exactly once.
     await waitFor(() => expect(noteBacklinks).toHaveBeenCalledTimes(1));
-    const trigger = onVaultFileChanged.mock.calls[0][0];
+    const trigger = onVaultFileChanged.mock.calls[0]![0] as (data: { path: string }) => void;
 
     vi.useFakeTimers();
     try {
       // A burst of change events must not rescan immediately…
-      act(() => { trigger(); trigger(); trigger(); });
+      act(() => {
+        trigger({ path: 'Characters/Mira.md' });
+        trigger({ path: 'Characters/Mira.md' });
+        trigger({ path: 'Characters/Mira.md' });
+      });
       expect(noteBacklinks).toHaveBeenCalledTimes(1);
       act(() => { vi.advanceTimersByTime(499); });
       expect(noteBacklinks).toHaveBeenCalledTimes(1);
