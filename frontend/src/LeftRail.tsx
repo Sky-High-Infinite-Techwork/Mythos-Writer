@@ -36,7 +36,11 @@ interface Props {
   onRenamePart?: (partId: string) => void;
   onCreateChapterInPart?: (storyId: string, partId: string) => void;
   sidebarCollapsed: boolean;
-  onToggleCollapsed: () => void;
+  /**
+   * Collapses the left sidebar. Absent when the rail is docked somewhere a
+   * left-sidebar collapse means nothing (the right sidebar), so no dead « button.
+   */
+  onToggleCollapsed?: () => void;
   /** PLAN-058 L5 (39:23): scene note summaries keyed by scene id. */
   sceneNoteSummaries?: Record<string, string[]>;
 }
@@ -133,6 +137,7 @@ export default function LeftRail({
                 {selectedStory.genre ?? 'Fiction'} · {storyWordCount.toLocaleString()} words
               </p>
             </div>
+            {onToggleCollapsed && (
             <button
               className="lr-story-collapse"
               onClick={onToggleCollapsed}
@@ -141,6 +146,7 @@ export default function LeftRail({
             >
               «
             </button>
+            )}
           </div>
           <div className="lr-progress-bar" role="progressbar" aria-valuenow={progressPct} aria-valuemin={0} aria-valuemax={100}>
             <div className="lr-progress-fill" style={{ width: `${progressPct}%` }} />
@@ -149,7 +155,7 @@ export default function LeftRail({
       )}
 
       {/* Collapse button when no story selected */}
-      {!selectedStory && (
+      {!selectedStory && onToggleCollapsed && (
         <div className="lr-story-card lr-story-card--empty">
           <button
             className="lr-story-collapse lr-story-collapse--standalone"

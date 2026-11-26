@@ -1,0 +1,107 @@
+/* Left-sidebar panel tabs (SidebarDock) + the shared drag/drop affordances for
+   panel tabs in either sidebar. The strip mirrors the right sidebar's Agent Hub
+   tabs (.ahp-tabs) so both sidebars read as one system. */
+
+.sidebar-dock {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sidebar-dock__tabs {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  padding: 0 8px;
+  border-bottom: 1px solid rgba(255, 77, 255, 0.18);
+}
+
+.sidebar-dock__tab {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #8e9db8;
+  font-size: var(--text-xs);
+  font-family: Inter, sans-serif;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  padding: 8px 10px 6px;
+  cursor: grab;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.sidebar-dock__tab:hover {
+  color: #c8d3e7;
+}
+
+.sidebar-dock__tab--active {
+  color: #f0f3fc;
+  border-bottom-color: #ff4dff;
+}
+
+.sidebar-dock__tab-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-dock__body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-dock__body > * {
+  flex: 1;
+  min-height: 0;
+}
+
+.sidebar-dock__empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  text-align: center;
+  font-size: var(--text-sm);
+  color: #a9b6cc;
+}
+
+/* Insertion marker shown between tabs while a panel is dragged over a strip. */
+.sidebar-dock__marker {
+  flex: 0 0 2px;
+  align-self: stretch;
+  margin: 6px 1px;
+  border-radius: 1px;
+  background: var(--n1, #00f0ff);
+  box-shadow: 0 0 8px var(--g1, rgba(0, 240, 255, 0.6));
+}
+
+/* Either sidebar while a panel is dragged over it. */
+[data-sidebar-dock-zone][data-drop-active='true'] {
+  outline: 2px dashed var(--b1, rgba(0, 240, 255, 0.6));
+  outline-offset: -4px;
+}
+
+/* The tab being dragged, in whichever sidebar it lives. */
+[data-dock-panel][data-dragging='true'] {
+  opacity: 0.45;
+}
+
+[data-dock-panel]:focus-visible {
+  outline: 2px solid var(--b1, rgba(0, 240, 255, 0.7));
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-dock__tab {
+    transition: none;
+  }
+}

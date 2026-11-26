@@ -8,14 +8,21 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { isSidebarDockPanelId, type SidebarDockPanelId } from './frame/sidebarDock';
 import './PanelDragContext.css';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export type DragSidebar = 'left' | 'right';
 
+/**
+ * A legacy registry panel (docked-tab / float paths) or a live sidebar dock
+ * panel (frame/sidebarDock.ts) — the ones the two shell sidebars render now.
+ */
+export type DraggablePanelId = SidebarPanelId | SidebarDockPanelId;
+
 export interface PanelDragState {
-  panelId: SidebarPanelId;
+  panelId: DraggablePanelId;
   label: string;
   sourceSidebar: DragSidebar;
   sourceIndex: number;
@@ -75,6 +82,12 @@ export interface PanelDragContextValue {
   startKeyboardDrag: (state: PanelDragState, leftCount: number, rightCount: number) => void;
   moveKbTarget: (dir: 'up' | 'down' | 'left' | 'right') => void;
   commitKbDrop: () => void;
+  /**
+   * One-step move with no drag in flight (keyboard shortcut or menu item):
+   * commits `state` to `target` through the same onDrop handler and announces
+   * the result in the live region.
+   */
+  movePanel: (state: PanelDragState, target: DropTarget) => void;
 }
 
 const Ctx = createContext<PanelDragContextValue | null>(null);
@@ -85,13 +98,18 @@ export function usePanelDrag(): PanelDragContextValue {
   return ctx;
 }
 
+/** Same as usePanelDrag, but null outside a provider (components that also render standalone). */
+export function useOptionalPanelDrag(): PanelDragContextValue | null {
+  return useContext(Ctx);
+}
+
 // ── Provider ───────────────────────────────────────────────────────────────────
 
 interface ProviderProps {
   children: ReactNode;
   /** Called when a drop is committed (pointer or keyboard). DesktopShell handles the move. */
   onDrop: (
-    panelId: SidebarPanelId,
+    panelId: DraggablePanelId,
     fromSidebar: DragSidebar,
     fromIndex: number,
     toSidebar: DragSidebar,
@@ -196,7 +214,10 @@ export function PanelDragProvider({ children, onDrop, onFloatDrop, onTabBarDrop,
   const commitTabBarDrop = useCallback(
     (insertAfterTabIndex: number) => {
       if (!dragState) return;
-      if (onTabBarDrop) onTabBarDrop(dragState.panelId, dragState.sourceSidebar, insertAfterTabIndex);
+      // Sidebar dock panels only dock in the two sidebars, never as tab-bar tabs.
+      if (onTabBarDrop && !isSidebarDockPanelId(dragState.panelId)) {
+        onTabBarDrop(dragState.panelId, dragState.sourceSidebar, insertAfterTabIndex);
+      }
       setDragState(null);
       setActiveDropTarget(null);
     },
@@ -206,7 +227,9 @@ export function PanelDragProvider({ children, onDrop, onFloatDrop, onTabBarDrop,
   const commitTabGroupDrop = useCallback(
     (targetTabId: string) => {
       if (!dragState) return;
-      if (onTabGroupDrop) onTabGroupDrop(dragState.panelId, dragState.sourceSidebar, targetTabId);
+      if (onTabGroupDrop && !isSidebarDockPanelId(dragState.panelId)) {
+        onTabGroupDrop(dragState.panelId, dragState.sourceSidebar, targetTabId);
+      }
       setDragState(null);
       setActiveDropTarget(null);
     },
@@ -253,6 +276,18 @@ export function PanelDragProvider({ children, onDrop, onFloatDrop, onTabBarDrop,
     announce(`${label} moved to ${sidebar} sidebar at position ${idx + 1}.`);
   }, [kbDrag, onDrop]);
 
+  const movePanel = useCallback(
+    (state: PanelDragState, target: DropTarget) => {
+      onDrop(state.panelId, state.sourceSidebar, state.sourceIndex, target.sidebar, target.index);
+      // target.index is a before-move slot: moving later in the same sidebar lands one earlier.
+      const landed = state.sourceSidebar === target.sidebar && target.index > state.sourceIndex
+        ? target.index - 1
+        : target.index;
+      announce(`${state.label} moved to ${target.sidebar} sidebar at position ${landed + 1}.`);
+    },
+    [onDrop],
+  );
+
   const isDragging = dragState !== null;
 
   return (
@@ -273,6 +308,7 @@ export function PanelDragProvider({ children, onDrop, onFloatDrop, onTabBarDrop,
         startKeyboardDrag,
         moveKbTarget,
         commitKbDrop,
+        movePanel,
       }}
     >
       {children}

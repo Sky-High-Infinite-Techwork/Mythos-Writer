@@ -11,6 +11,24 @@ const defaultProps = {
   onWidthChange: noop,
 };
 
+describe('GlobalRightSidebar — sidebar dock drop zone', () => {
+  it('spreads the drop-zone props on the open sidebar and on its collapsed edge', () => {
+    const onDrop = vi.fn();
+    const zone = { 'data-sidebar-dock-zone': 'right', onDrop };
+    const { rerender } = render(<GlobalRightSidebar {...defaultProps} dropZoneProps={zone} />);
+    const open = screen.getByTestId('global-right-sidebar');
+    expect(open).toHaveAttribute('data-sidebar-dock-zone', 'right');
+    fireEvent.drop(open);
+    expect(onDrop).toHaveBeenCalledTimes(1);
+
+    rerender(<GlobalRightSidebar {...defaultProps} visible={false} dropZoneProps={zone} />);
+    const edge = screen.getByTestId('grs-edge');
+    expect(edge).toHaveAttribute('data-sidebar-dock-zone', 'right');
+    fireEvent.drop(edge);
+    expect(onDrop).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('GlobalRightSidebar M6 — thin wrapper', () => {
   it('renders the sidebar when visible=true', () => {
     render(<GlobalRightSidebar {...defaultProps} />);

@@ -245,6 +245,92 @@ describe('AgentHubPanel — Slice B partner shell', () => {
   });
 });
 
+describe('AgentHubPanel — sidebar dock panels', () => {
+  beforeEach(() => {
+    __resetAgentSessionStores();
+    resetAiActivityForTests();
+    resetBrainstormActivityForTests();
+    __resetAiEnabledForTests();
+    setAiEnabled(true);
+    (window as any).api = {
+      suggestionsUnifiedList: vi.fn().mockResolvedValue({ items: [], totalCount: 0 }),
+      suggestionsSearch: vi.fn().mockResolvedValue({ suggestions: [] }),
+    };
+  });
+  afterEach(() => {
+    delete (window as any).api;
+    __resetAiEnabledForTests();
+  });
+
+  const tabIds = () => Array.from(document.querySelectorAll('.ahp-tabs [role="tab"]')).map((el) => el.getAttribute('data-testid'));
+
+  it('without dockPanels keeps the four built-in tabs in their default order', () => {
+    render(<AgentHubPanel scene={null} />);
+    expect(tabIds()).toEqual(['ahp-tab-partner', 'ahp-tab-suggestions', 'ahp-tab-scenes', 'ahp-tab-notes-analysis']);
+  });
+
+  it('shows only the docked panels, in dock order, and falls back to the first when the active one left', () => {
+    render(<AgentHubPanel scene={null} dockPanels={['hub-notes-analysis', 'hub-scenes']} />);
+    expect(tabIds()).toEqual(['ahp-tab-notes-analysis', 'ahp-tab-scenes']);
+    // Partner (the default active tab) is docked elsewhere → first docked panel shows.
+    expect(screen.getByTestId('ahp-tab-notes-analysis')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('ahp-notes-analysis')).toBeInTheDocument();
+    expect(screen.queryByTestId('partner-card')).not.toBeInTheDocument();
+  });
+
+  it('renders a panel docked here from the other sidebar as a tab with its own body', () => {
+    render(
+      <AgentHubPanel
+        scene={null}
+        dockPanels={['hub-scenes', 'story-navigator']}
+        foreignPanels={{ 'story-navigator': { label: 'Story navigator', render: () => <div data-testid="nav-body">nav</div> } }}
+      />,
+    );
+    expect(tabIds()).toEqual(['ahp-tab-scenes', 'ahp-tab-story-navigator']);
+    expect(screen.queryByTestId('nav-body')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('ahp-tab-story-navigator'));
+    expect(screen.getByTestId('ahp-tab-story-navigator')).toHaveTextContent('Story navigator');
+    expect(screen.getByTestId('nav-body')).toBeInTheDocument();
+  });
+
+  it('hideTabStrip renders just the one panel body (a hub tab docked in the left sidebar)', () => {
+    render(<AgentHubPanel scene={null} dockPanels={['hub-scenes']} hideTabStrip />);
+    expect(document.querySelector('.ahp-tabs')).toBeNull();
+    expect(screen.queryByTestId('partner-card')).not.toBeInTheDocument();
+    expect(document.querySelector('.ahp-body')?.textContent ?? '').not.toBe('');
+  });
+
+  it('an empty dock shows the drop hint instead of a blank sidebar', () => {
+    render(<AgentHubPanel scene={null} dockPanels={[]} />);
+    expect(tabIds()).toEqual([]);
+    expect(screen.getByTestId('ahp-dock-empty')).toHaveTextContent('Drag a panel here');
+  });
+
+  it('AI off drops Partner + Suggestions wherever they are docked', () => {
+    setAiEnabled(false);
+    render(<AgentHubPanel scene={null} dockPanels={['hub-partner', 'hub-scenes', 'hub-suggestions']} />);
+    expect(tabIds()).toEqual(['ahp-tab-scenes']);
+  });
+
+  it('spreads dock drag props onto each tab and selects a requested panel', () => {
+    const dockTabProps = vi.fn((id: string) => ({ 'data-dock-panel': id, draggable: true }));
+    const { rerender } = render(<AgentHubPanel scene={null} dockTabProps={dockTabProps} />);
+    expect(screen.getByTestId('ahp-tab-scenes')).toHaveAttribute('data-dock-panel', 'hub-scenes');
+    expect(screen.getByTestId('ahp-tab-scenes')).toHaveAttribute('draggable', 'true');
+    expect(dockTabProps).toHaveBeenCalledWith('hub-partner');
+    rerender(<AgentHubPanel scene={null} dockTabProps={dockTabProps} requestedDockPanel={{ id: 'hub-scenes', seq: 1 }} />);
+    expect(screen.getByTestId('ahp-tab-scenes')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('shows the insertion marker at the pending drop slot', () => {
+    render(<AgentHubPanel scene={null} dockDropSlot={1} />);
+    const strip = document.querySelector('.ahp-tabs')!;
+    const children = Array.from(strip.children);
+    expect(children[1]?.classList.contains('sidebar-dock__marker')).toBe(true);
+    expect(children[1]?.getAttribute('aria-hidden')).toBe('true');
+  });
+});
+
 describe('resolveAgentStatus (hand engines)', () => {
   const idleBrainstorm = {
     active: false,
