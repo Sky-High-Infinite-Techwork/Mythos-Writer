@@ -113,12 +113,43 @@ describe('AgentHubPanel — Slice B partner shell', () => {
     expect(history).not.toHaveAttribute('role');
     expect(pill).toBeInTheDocument();
 
+    // Escape on the toggle closes the disclosure.
     fireEvent.keyDown(toggle, { key: 'Escape' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveFocus();
+    expect(within(card).queryByTestId('ahp-partner-history-link')).not.toBeInTheDocument();
+
+    // FD-9 #3: Escape with focus on the session pill inside Past chats closes it too.
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    pill.focus();
+    expect(pill).toHaveFocus();
+    fireEvent.keyDown(pill, { key: 'Escape' });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(toggle).toHaveFocus();
     expect(within(card).queryByTestId('ahp-partner-history-link')).not.toBeInTheDocument();
     expect(within(card).getByTestId('ahp-past-chats-menu')).toBeInTheDocument();
     expect(within(card).getByRole('button', { name: /Session:/ }).closest('[aria-hidden="true"]')).toBeNull();
+  });
+
+  it('Escape on rename input inside Past chats does not close the disclosure (FD-9 #3)', async () => {
+    render(<AgentHubPanel scene={null} onOpenPartnerHistory={() => {}} />);
+    const card = await screen.findByTestId('partner-card');
+    const toggle = within(card).getByTestId('ahp-past-chats-toggle');
+    const pastRoot = within(card).getByTestId('ahp-past-chats');
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+    const renameInput = document.createElement('input');
+    renameInput.className = 'asp-rename-input';
+    renameInput.setAttribute('aria-label', 'Rename session');
+    pastRoot.appendChild(renameInput);
+    renameInput.focus();
+    expect(renameInput).toHaveFocus();
+
+    fireEvent.keyDown(renameInput, { key: 'Escape' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('tab order is header controls, then past chats, in both call layouts', async () => {

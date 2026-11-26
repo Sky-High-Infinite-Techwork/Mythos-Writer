@@ -250,6 +250,7 @@ test.describe('SKY-11154 — dot-linking pairing (§2 / §4)', () => {
   // seeds a real v2 Mythos vault (mythos.json + notes-vaults.json/
   // story-vaults.json) to exercise it end-to-end; that fixture change is
   // QA's to make, not a product-code gap.
+  // AC-VS-07 (pending SKY-11154): dot-linking e2e needs a v2 Mythos vault fixture — see comment above.
   test.fixme('AC-VS-07: dot-linking control exists between the Notes and Story columns to pair a story vault to a notes vault (pending SKY-11154)', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-vs07-'));
     const userData = path.join(tempRoot, 'userData');

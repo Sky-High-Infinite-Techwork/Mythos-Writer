@@ -23,6 +23,10 @@
  * handlers run"). The import IPC handlers, obsidianImporter.ts, and disk
  * writes all execute for real.
  *
+ * Runnable IPC + disk fidelity: electron-main/src/obsidianImporter.test.ts (and
+ * mythosFormat import suites). This e2e stays skipped until Settings exposes a
+ * dry-run Obsidian import preview again (see skip body).
+ *
  * Run (after `npm run build:electron`):
  *   npx playwright test e2e/obsidian-import-fidelity.spec.ts --reporter=list
  */

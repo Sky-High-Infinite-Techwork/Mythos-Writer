@@ -64,7 +64,7 @@ describe('EntityDetail refused relation accept', () => {
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain("1 note suggestion couldn't be saved");
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Accept relation: ally Maren' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Accept relation: ally Maren' })).toBeEnabled();
     });
   });
 });

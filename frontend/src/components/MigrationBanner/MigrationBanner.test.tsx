@@ -49,9 +49,15 @@ describe('MigrationBanner', () => {
       mkPlan('Manuscript/Story A', ['Manuscript/Story A/01.md', 'Manuscript/Story A/02.md']),
     ]);
     render(<MigrationBanner />);
-    await waitFor(() => expect(screen.getByText(/2 legacy chapter files/i)).toBeTruthy());
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          '2 legacy chapter files can be migrated to the per-scene layout.',
+        ),
+      ).toBeVisible(),
+    );
     fireEvent.click(screen.getByRole('button', { name: /review migration/i }));
-    expect(screen.getByRole('dialog', { name: /migration preview/i })).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Migration preview' })).toBeVisible();
   });
 
   it('applies all plans on Migrate, then hides the banner', async () => {
@@ -71,7 +77,11 @@ describe('MigrationBanner', () => {
     render(
       <MigrationBanner initialPlans={[mkPlan('Manuscript/Story', ['Manuscript/Story/X.md'])]} />,
     );
-    expect(screen.getByText(/1 legacy chapter file/i)).toBeTruthy();
+    expect(
+      screen.getByText(
+        '1 legacy chapter file can be migrated to the per-scene layout.',
+      ),
+    ).toBeVisible();
     expect(migrationDryRun).not.toHaveBeenCalled();
   });
 });
