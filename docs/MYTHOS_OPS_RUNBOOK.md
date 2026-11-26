@@ -3,7 +3,7 @@
 Creed: **cut waste, don't weaken quality.**
 
 In-repo SoT for dependency map, badges, and rollback one-liners. Ivy may mirror
-to mythos-engine/specs after merge.
+to the Engine repo's `specs/` after merge.
 
 ## Workflow badges
 
