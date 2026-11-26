@@ -342,8 +342,33 @@ function resolveUntypedStem(rawTarget: string, context: CrossTabLinkContext): Cr
 
 // ─── Wiki-link title index (SKY-5702: resolved/unresolved inline styling) ───
 
+/** Fields the wiki title indexes and candidate list actually read. */
+export interface StoryLinkIndexStory {
+  id: string;
+  title: string;
+  chapters: Array<{
+    title: string;
+    scenes: Array<{ id: string; title: string; path: string }>;
+  }>;
+}
+
+export function projectStoryLinkFields(stories: readonly StoryLinkIndexStory[]): StoryLinkIndexStory[] {
+  return stories.map((story) => ({
+    id: story.id,
+    title: story.title,
+    chapters: story.chapters.map((chapter) => ({
+      title: chapter.title,
+      scenes: chapter.scenes.map((scene) => ({
+        id: scene.id,
+        title: scene.title,
+        path: scene.path,
+      })),
+    })),
+  }));
+}
+
 export interface WikiLinkTitleIndexContext {
-  stories: Story[];
+  stories: readonly StoryLinkIndexStory[];
   entities: EntityEntry[];
   notePaths?: string[];
   /** Slice E — board card titles + freeform titles for [[ autocomplete. */
@@ -444,6 +469,34 @@ export function isWikiLinkTargetResolved(rawTarget: string, titleIndex: Readonly
   return titleIndex.has(needle);
 }
 
+/**
+ * Ids, titles, and paths the wiki indexes read. Body-only edits keep this
+ * string identical, so those indexes can stay memoized and the open editor
+ * does not redecorate every paragraph on autosave.
+ */
+export function storyLinkTitleSignature(stories: readonly StoryLinkIndexStory[]): string {
+  let out = '';
+  for (const story of stories) {
+    out += story.id ?? '';
+    out += '\0';
+    out += story.title ?? '';
+    out += '\n';
+    for (const chapter of story.chapters) {
+      out += chapter.title ?? '';
+      out += '\n';
+      for (const scene of chapter.scenes) {
+        out += scene.id ?? '';
+        out += '\0';
+        out += scene.title ?? '';
+        out += '\0';
+        out += scene.path ?? '';
+        out += '\n';
+      }
+    }
+  }
+  return out;
+}
+
 // ─── M16 (Beta 3): wiki-link kind styling + unresolved-click note creation ───
 
 /**
@@ -451,7 +504,7 @@ export function isWikiLinkTargetResolved(rawTarget: string, titleIndex: Readonly
  * the resolved-title index so [[scene links]] render gold (prototype #ffd319)
  * while note links keep the slot-B purple — Liquid Neon `mkLink` parity.
  */
-export function buildSceneWikiLinkTitleIndex(stories: Story[]): Set<string> {
+export function buildSceneWikiLinkTitleIndex(stories: readonly StoryLinkIndexStory[]): Set<string> {
   const titles = new Set<string>();
   for (const story of stories) {
     for (const chapter of story.chapters) {
