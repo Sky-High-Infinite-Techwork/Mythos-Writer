@@ -27,6 +27,11 @@ import {
   getBlastRadius,
   VAULT_SURFACE_COPY,
   pruneRecentProjectsForTrash,
+  isActiveVaultTrashed,
+  mythosRootForTrashRegistryCleanup,
+  pickValidatedSurvivorProject,
+  buildActiveVaultSettingsPatch,
+  isUsableOpenStoryRoot,
 } from './vaultSurface.js';
 import { createMythosFile, writeMythosFile } from './mythosFormat/mythosJson.js';
 import { ensureNotesVaultRegistry, createBlankNotesVault } from './mythosFormat/notesVaultRegistry.js';
@@ -221,6 +226,116 @@ describe('pruneRecentProjectsForTrash', () => {
     const entries = [storyEntry()];
     const result = pruneRecentProjectsForTrash(entries, '/vaults/MyStory/./Notes Vault/', 'notes');
     expect(result[0].notesVaultRoot).toBeUndefined();
+  });
+});
+
+// ─── Active vault fallout after trash (Probe / Shield 11153) ───────────────────
+
+describe('active vault settings after trash', () => {
+  let tmpRoot: string;
+
+  beforeEach(() => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-active-trash-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  function seedMythos(name: string): { mythos: string; story: string; notes: string } {
+    const mythos = path.join(tmpRoot, name);
+    const story = path.join(mythos, 'Story Vault');
+    const notes = path.join(mythos, 'Notes Vault');
+    fs.mkdirSync(story, { recursive: true });
+    fs.mkdirSync(notes, { recursive: true });
+    writeMythosFile(mythos, createMythosFile(name));
+    ensureStoryVaultRegistry(mythos);
+    ensureNotesVaultRegistry(mythos);
+    return { mythos, story, notes };
+  }
+
+  it('notes-level trash on the active notes vault does not change vaultRoot', () => {
+    const a = seedMythos('Alpha');
+    const b = seedMythos('Beta');
+    const current = { vaultRoot: a.story, notesVaultRoot: a.notes };
+    expect(isActiveVaultTrashed(current, a.notes, 'notes')).toBe(true);
+    const remaining = pruneRecentProjectsForTrash(
+      [
+        { name: 'Alpha', vaultRoot: a.story, notesVaultRoot: a.notes, openedAt: '2026-01-01T00:00:00.000Z' },
+        { name: 'Beta', vaultRoot: b.story, notesVaultRoot: b.notes, openedAt: '2026-01-02T00:00:00.000Z' },
+      ],
+      a.notes,
+      'notes',
+    );
+    const patch = buildActiveVaultSettingsPatch(remaining, a.notes, 'notes');
+    expect(patch).toEqual({ notesVaultRoot: undefined });
+    expect(patch?.vaultRoot).toBeUndefined();
+  });
+
+  it('story-level trash picks a validated survivor, skipping stale recentProjects', () => {
+    const a = seedMythos('Alpha');
+    const b = seedMythos('Beta');
+    const stale: ProjectEntry = {
+      name: 'Ghost',
+      vaultRoot: path.join(tmpRoot, 'missing', 'Story Vault'),
+      notesVaultRoot: path.join(tmpRoot, 'missing', 'Notes Vault'),
+      openedAt: '2026-01-03T00:00:00.000Z',
+    };
+    const remaining = pruneRecentProjectsForTrash(
+      [stale, { name: 'Beta', vaultRoot: b.story, notesVaultRoot: b.notes, openedAt: '2026-01-02T00:00:00.000Z' }],
+      a.story,
+      'story',
+    );
+    const survivor = pickValidatedSurvivorProject(remaining, a.story, 'story');
+    expect(survivor?.vaultRoot).toBe(b.story);
+    const patch = buildActiveVaultSettingsPatch(remaining, a.story, 'story');
+    expect(patch).toEqual({ vaultRoot: b.story, notesVaultRoot: b.notes });
+  });
+
+  it('mythosRootForTrashRegistryCleanup uses the trashed story path before any vaultRoot switch', () => {
+    const a = seedMythos('Alpha');
+    const mythos = mythosRootForTrashRegistryCleanup('story', a.story, path.join(tmpRoot, 'other', 'Story Vault'));
+    expect(mythos).toBe(a.mythos);
+  });
+
+  it('rejects symlink survivor paths and stale replaced recentProjects entries', () => {
+    const a = seedMythos('Alpha');
+    const b = seedMythos('Beta');
+  const linkTarget = path.join(tmpRoot, 'real-beta', 'Story Vault');
+  const linkPath = path.join(tmpRoot, 'symlink-beta', 'Story Vault');
+  fs.mkdirSync(linkTarget, { recursive: true });
+  fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+  fs.symlinkSync(linkTarget, linkPath, 'dir');
+    const stale: ProjectEntry = {
+      name: 'Moved',
+      vaultRoot: path.join(tmpRoot, 'no-longer-here', 'Story Vault'),
+      openedAt: '2026-01-03T00:00:00.000Z',
+    };
+    const remaining = [stale, { name: 'Alpha', vaultRoot: a.story, notesVaultRoot: a.notes, openedAt: '2026-01-01T00:00:00.000Z' }];
+    const survivor = pickValidatedSurvivorProject(remaining, b.story, 'story');
+    expect(survivor?.vaultRoot).toBe(a.story);
+    expect(isUsableOpenStoryRoot(linkPath)).toBe(false);
+    expect(isUsableOpenStoryRoot(b.story)).toBe(true);
+  });
+
+  it('mythos-level active trash covers an independently configured notes root inside the bundle', () => {
+    const a = seedMythos('Alpha');
+    const current = { vaultRoot: a.story, notesVaultRoot: a.notes };
+    expect(isActiveVaultTrashed(current, a.mythos, 'mythos')).toBe(true);
+    expect(isActiveVaultTrashed(current, a.notes, 'mythos')).toBe(true);
+    expect(isActiveVaultTrashed({ vaultRoot: a.story, notesVaultRoot: undefined }, a.notes, 'mythos')).toBe(true);
+  });
+
+  it('sole-project story trash clears roots without using post-switch getVaultRoot', () => {
+    const a = seedMythos('Only');
+    const remaining = pruneRecentProjectsForTrash(
+      [{ name: 'Only', vaultRoot: a.story, notesVaultRoot: a.notes, openedAt: '2026-01-01T00:00:00.000Z' }],
+      a.story,
+      'story',
+    );
+    const patch = buildActiveVaultSettingsPatch(remaining, a.story, 'story');
+    expect(patch).toEqual({ vaultRoot: undefined, notesVaultRoot: undefined });
+    expect(mythosRootForTrashRegistryCleanup('story', a.story, a.story)).toBe(a.mythos);
   });
 });
 

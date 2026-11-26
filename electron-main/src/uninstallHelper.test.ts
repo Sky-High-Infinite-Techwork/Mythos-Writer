@@ -50,7 +50,7 @@ describe('resolveDeletePaths', () => {
     expect(toDelete).toContain(path.join(userData, 'app-settings.json'));
   });
 
-  it('uses individual vault roots when both are in custom locations', () => {
+  it('warns on custom vault roots without auto-deleting them', () => {
     const customStory = '/Users/test/Documents/Novel/Story';
     const customNotes = '/Users/test/Documents/Novel/Notes';
 
@@ -60,23 +60,23 @@ describe('resolveDeletePaths', () => {
       userDataPath: userData,
     });
 
-    expect(toDelete).toContain(customStory);
-    expect(toDelete).toContain(customNotes);
+    expect(toDelete).not.toContain(customStory);
+    expect(toDelete).not.toContain(customNotes);
     expect(toDelete).not.toContain(vaultsParent);
     expect(customPathsWarning).toContain(customStory);
     expect(customPathsWarning).toContain(customNotes);
   });
 
-  it('deduplicates when story and notes vault are the same path', () => {
+  it('deduplicates custom-path warnings when story and notes vault are the same path', () => {
     const singleVault = '/Users/test/Documents/Vault';
-    const { toDelete } = resolveDeletePaths({
+    const { toDelete, customPathsWarning } = resolveDeletePaths({
       storyVaultRoot: singleVault,
       notesVaultRoot: singleVault,
       userDataPath: userData,
     });
 
-    const count = toDelete.filter(p => p === singleVault).length;
-    expect(count).toBe(1);
+    expect(toDelete).not.toContain(singleVault);
+    expect(customPathsWarning.filter((p) => p === singleVault)).toHaveLength(1);
   });
 
   it('handles story under default + notes in custom location', () => {
@@ -87,7 +87,7 @@ describe('resolveDeletePaths', () => {
     });
 
     expect(toDelete).toContain(vaultsParent);
-    expect(toDelete).toContain('/Users/test/CustomNotes');
+    expect(toDelete).not.toContain('/Users/test/CustomNotes');
     expect(customPathsWarning).toContain('/Users/test/CustomNotes');
   });
 });
@@ -146,12 +146,14 @@ describe('cleanUninstall', () => {
     expect(result.errors).toHaveLength(0);
   });
 
-  it('removes custom vault roots individually', () => {
+  it('leaves custom vault roots on disk while removing settings', () => {
     const customStory = path.join(tmp, 'custom-story');
     const customNotes = path.join(tmp, 'custom-notes');
     fs.mkdirSync(customStory, { recursive: true });
     fs.writeFileSync(path.join(customStory, 'scene.md'), '# Scene');
     fs.mkdirSync(customNotes, { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'vault-settings.json'), '{}');
+    fs.writeFileSync(path.join(tmp, 'app-settings.json'), '{}');
 
     const result = cleanUninstall({
       storyVaultRoot: customStory,
@@ -160,8 +162,11 @@ describe('cleanUninstall', () => {
     });
 
     expect(result.errors).toHaveLength(0);
-    expect(fs.existsSync(customStory)).toBe(false);
-    expect(fs.existsSync(customNotes)).toBe(false);
+    expect(fs.existsSync(customStory)).toBe(true);
+    expect(fs.existsSync(customNotes)).toBe(true);
+    expect(fs.existsSync(path.join(tmp, 'vault-settings.json'))).toBe(false);
+    expect(fs.existsSync(path.join(tmp, 'app-settings.json'))).toBe(false);
+    expect(result.customPathsWarning).toContain(customStory);
   });
 
   // SKY-8882: on Windows a locked file lets the vault survive the recursive

@@ -2304,7 +2304,7 @@ export interface VoicePickBinaryResponse {
 }
 
 export interface VaultGetRootResponse {
-  vaultRoot: string;
+  vaultRoot: string | null;
 }
 
 /** Response from VAULT_REVEAL_FOLDER (SKY-5790). `opened` is false when the
@@ -5167,6 +5167,8 @@ export interface VaultGetPathsResponse {
    *  "Add a Notes/Story Vault…" compute a destination without re-deriving
    *  the v2 naming convention in the renderer. */
   mythosRoot: string | null;
+  /** True when vault-settings.json exists (user-configured roots vs in-memory defaults). */
+  persistedVaultSettings: boolean;
   /** SKY-11154: the parent folder holding every Mythos vault — lets the
    *  Vault & Files "Vaults folder" row show the current value without a
    *  separate round trip. Falls back to the default (userData-relative)

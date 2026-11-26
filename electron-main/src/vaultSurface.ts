@@ -13,10 +13,15 @@
 import { shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
-import { isMythosV2Root } from './mythosFormat/mythosJson.js';
+import { isMythosV2Root, mythosRootForStoryVault } from './mythosFormat/mythosJson.js';
+import { isExistingUsableVaultRoot } from './validatePathUtil.js';
 import { ensureNotesVaultRegistry } from './mythosFormat/notesVaultRegistry.js';
 import { ensureStoryVaultRegistry } from './mythosFormat/storyVaultRegistry.js';
 import type { ProjectEntry } from './ipc.js';
+export interface VaultSettingsRoots {
+  vaultRoot?: string;
+  notesVaultRoot?: string;
+}
 
 // ─── User-visible copy strings ────────────────────────────────────────────────
 // Centralised so the Settings UI can import without touching this logic.
@@ -178,6 +183,122 @@ export interface TrashResult {
  * Callers MUST stop any file watchers and close any DB handles for the
  * vault before calling this — see main.ts handlers for the stop sequence.
  */
+/** Whether the trash op targeted the user's currently active vault at this level. */
+export function isActiveVaultTrashed(
+  current: VaultSettingsRoots,
+  vaultPath: string,
+  level: 'mythos' | 'notes' | 'story',
+): boolean {
+  const resolvedTrash = path.resolve(vaultPath);
+  const activeStory = current.vaultRoot ? path.resolve(current.vaultRoot) : null;
+  const activeNotes = current.notesVaultRoot ? path.resolve(current.notesVaultRoot) : null;
+  if (level === 'mythos') {
+    const activeMythos = activeStory ? mythosRootForStoryVault(activeStory) : null;
+    const trashIsWholeBundle =
+      activeMythos !== null &&
+      (resolvedTrash === activeMythos || resolvedTrash.startsWith(activeMythos + path.sep));
+    const storyHit =
+      activeStory !== null &&
+      (activeStory === resolvedTrash ||
+        activeStory.startsWith(resolvedTrash + path.sep) ||
+        activeMythos === resolvedTrash ||
+        (trashIsWholeBundle && activeStory.startsWith(activeMythos! + path.sep)));
+    const notesHit =
+      activeNotes !== null &&
+      (activeNotes === resolvedTrash ||
+        activeNotes.startsWith(resolvedTrash + path.sep) ||
+        (trashIsWholeBundle && activeNotes.startsWith(activeMythos! + path.sep)));
+    const notesOnlyBundleHit =
+      activeNotes === null &&
+      trashIsWholeBundle &&
+      activeStory !== null &&
+      activeStory.startsWith(activeMythos! + path.sep);
+    return storyHit || notesHit || notesOnlyBundleHit;
+  }
+  if (level === 'story') {
+    return activeStory === resolvedTrash;
+  }
+  if (level === 'notes' && current.notesVaultRoot) {
+    return path.resolve(current.notesVaultRoot) === resolvedTrash;
+  }
+  return false;
+}
+
+/** Mythos root for inner notes/story registry cleanup — never the post-fallback active root. */
+export function mythosRootForTrashRegistryCleanup(
+  level: 'mythos' | 'notes' | 'story',
+  vaultPath: string,
+  preActiveStoryRoot: string | null | undefined,
+): string | null {
+  const resolved = path.resolve(vaultPath);
+  if (level === 'story') {
+    return mythosRootForStoryVault(resolved) ?? (preActiveStoryRoot ? mythosRootForStoryVault(preActiveStoryRoot) : null);
+  }
+  if (level === 'notes') {
+    return preActiveStoryRoot ? mythosRootForStoryVault(preActiveStoryRoot) : null;
+  }
+  return null;
+}
+
+export function isUsableOpenStoryRoot(storyRoot: string): boolean {
+  if (!isExistingUsableVaultRoot(storyRoot)) return false;
+  return mythosRootForStoryVault(storyRoot) !== null;
+}
+
+function isViableSurvivorProject(
+  entry: ProjectEntry,
+  resolvedTrash: string,
+  level: 'mythos' | 'story',
+): boolean {
+  const story = path.resolve(entry.vaultRoot);
+  if (!isUsableOpenStoryRoot(story)) return false;
+  if (level === 'story' && story === resolvedTrash) return false;
+  if (level === 'mythos') {
+    if (story === resolvedTrash || story.startsWith(resolvedTrash + path.sep)) return false;
+    const mythos = mythosRootForStoryVault(story);
+    if (mythos === resolvedTrash) return false;
+  }
+  if (entry.notesVaultRoot != null) {
+    const notes = path.resolve(entry.notesVaultRoot);
+    if (!isExistingUsableVaultRoot(notes)) return false;
+  }
+  return true;
+}
+
+/** First recentProjects entry whose on-disk roots survive the trash target. */
+export function pickValidatedSurvivorProject(
+  remaining: ProjectEntry[],
+  vaultPath: string,
+  level: 'mythos' | 'story',
+): ProjectEntry | null {
+  const resolvedTrash = path.resolve(vaultPath);
+  for (const entry of remaining) {
+    if (isViableSurvivorProject(entry, resolvedTrash, level)) {
+      return entry;
+    }
+  }
+  return null;
+}
+
+/**
+ * Settings fields to apply when the trash op removed the active vault.
+ * Notes-level trash only clears `notesVaultRoot` (story vault stays active).
+ */
+export function buildActiveVaultSettingsPatch(
+  remaining: ProjectEntry[],
+  vaultPath: string,
+  level: 'mythos' | 'notes' | 'story',
+): Partial<VaultSettingsRoots> | null {
+  if (level === 'notes') {
+    return { notesVaultRoot: undefined };
+  }
+  const survivor = pickValidatedSurvivorProject(remaining, vaultPath, level);
+  if (survivor) {
+    return { vaultRoot: survivor.vaultRoot, notesVaultRoot: survivor.notesVaultRoot };
+  }
+  return { vaultRoot: undefined, notesVaultRoot: undefined };
+}
+
 export async function trashVaultFolder(vaultPath: string): Promise<TrashResult> {
   try {
     await shell.trashItem(vaultPath);

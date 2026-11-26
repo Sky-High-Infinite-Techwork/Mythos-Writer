@@ -384,7 +384,8 @@ function registeredStoryVaultDirNames(mythosRoot: string): Set<string> {
  * sits beside mythos.json still never gates (preserves the SKY-11132 guard
  * that "Open Vault Folder" can't silently adopt an unrecognized folder).
  */
-export function mythosRootForStoryVault(storyVaultRoot: string): string | null {
+export function mythosRootForStoryVault(storyVaultRoot: string | undefined | null): string | null {
+  if (!storyVaultRoot || typeof storyVaultRoot !== 'string') return null;
   const parent = path.dirname(storyVaultRoot);
   if (parent === storyVaultRoot) return null;
   const basename = path.basename(storyVaultRoot);
