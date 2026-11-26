@@ -11,6 +11,10 @@ enqueue.
 
 ## Who lands a pull request
 
+The no-Grok engine (GitHub Actions: `mythos-flow-step` / `mythos-engine`) is the
+sole owner of unattended build, test, and merge routing. Ivy is escalation and
+admin only (carve-out and owner-merged paths). Sentinel was retired 2026-11-23.
+
 | Path | What happens |
 | --- | --- |
 | Ordinary product and docs pull requests | `mythos-flow-step` enqueues into the `main` merge queue when the checks below are green on the exact head. The queue re-tests the merged result, so a pull request that is behind `main` can still be enqueued. A merge conflict (`DIRTY`) stays held. |
