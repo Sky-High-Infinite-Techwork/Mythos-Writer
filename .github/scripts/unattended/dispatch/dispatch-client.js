@@ -1,0 +1,547 @@
+'use strict';
+
+const { gh: defaultGh } = require('../spawn');
+const { actWritesEnabled: defaultActWritesEnabled } = require('./switch');
+const { httpStatusFromGh } = require('./gh-http');
+const { REPO, MATCHING_REF_PREFIX } = require('./constants');
+
+const LANE_REF_MSG_RE = /^refs\/mythos\/dispatch\/lane-\d{2}$/;
+const CLAIM_REF_MSG_RE = /^refs\/mythos\/dispatch\/claim\/\d+-\d+$/;
+
+function refNeedsLeaseMessage(ref) {
+  return LANE_REF_MSG_RE.test(ref) || CLAIM_REF_MSG_RE.test(ref);
+}
+const {
+  UPDATE_REFS_MUTATION,
+  refUpdateCreate,
+  refUpdateDelete,
+  refUpdateRenew,
+  parseGraphqlErrors,
+  isRefExistsError,
+  assertDispatchRef,
+  OID_HEX,
+  UPDATE_REFS_REF_EXISTS,
+} = require('./refs-graphql');
+
+function splitRepo(repo) {
+  const parts = String(repo || REPO).split('/');
+  if (parts.length !== 2) return null;
+  return { owner: parts[0], name: parts[1] };
+}
+
+function parseGhJson(stdout) {
+  try {
+    return JSON.parse(stdout || '');
+  } catch {
+    return null;
+  }
+}
+
+// gh --jq (and JSON.parse) coerce numbers through IEEE-754, so comment IDs
+// above 2^53 lose low bits before tostring can run. Quote integer values of
+// selected keys in the raw text, then parse each concatenated JSON document
+// (--paginate without --jq may emit one array per page).
+function quoteJsonIntegerKeys(text, keys = ['id', 'database_id']) {
+  const keySet = new Set(keys);
+  const s = String(text || '');
+  let out = '';
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch !== '"') {
+      if (ch === '\\') {
+        out += ch;
+        if (i + 1 < s.length) {
+          out += s[i + 1];
+          i += 2;
+          continue;
+        }
+        i += 1;
+        continue;
+      }
+      out += ch;
+      i += 1;
+      continue;
+    }
+    let j = i + 1;
+    let esc = false;
+    let key = '';
+    while (j < s.length) {
+      const c = s[j];
+      if (esc) {
+        key += c;
+        esc = false;
+        j += 1;
+        continue;
+      }
+      if (c === '\\') {
+        esc = true;
+        j += 1;
+        continue;
+      }
+      if (c === '"') break;
+      key += c;
+      j += 1;
+    }
+    if (j >= s.length) {
+      out += s.slice(i);
+      break;
+    }
+    const afterKey = j + 1;
+    if (keySet.has(key)) {
+      let k = afterKey;
+      while (k < s.length && /[ \t\r\n]/.test(s[k])) k += 1;
+      if (s[k] === ':') {
+        k += 1;
+        while (k < s.length && /[ \t\r\n]/.test(s[k])) k += 1;
+        let d = k;
+        if (s[d] === '-') d += 1;
+        if (d < s.length && s[d] >= '0' && s[d] <= '9') {
+          while (d < s.length && s[d] >= '0' && s[d] <= '9') d += 1;
+          if (s[d] !== '.' && s[d] !== 'e' && s[d] !== 'E' && s[d] !== 'x' && s[d] !== 'X') {
+            out += s.slice(i, k) + '"' + s.slice(k, d) + '"';
+            i = d;
+            continue;
+          }
+        }
+      }
+    }
+    out += s.slice(i, afterKey);
+    i = afterKey;
+  }
+  return out;
+}
+
+function sliceJsonValue(text, start) {
+  const s = String(text || '');
+  let i = start;
+  while (i < s.length && /[ \t\r\n]/.test(s[i])) i += 1;
+  if (i >= s.length) return { end: i };
+  const open = s[i];
+  if (open !== '{' && open !== '[') return { error: true, end: i };
+  const close = open === '{' ? '}' : ']';
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let j = i; j < s.length; j += 1) {
+    const c = s[j];
+    if (inString) {
+      if (escape) escape = false;
+      else if (c === '\\') escape = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') inString = true;
+    else if (c === open || ((open === '[' && c === '{') || (open === '{' && c === '['))) {
+      // depth should count all braces/brackets
+    }
+    if (c === '{' || c === '[') depth += 1;
+    else if (c === '}' || c === ']') {
+      depth -= 1;
+      if (depth === 0) {
+        if (c !== close) return { error: true, end: j };
+        return { raw: s.slice(i, j + 1), end: j + 1 };
+      }
+    }
+  }
+  return { error: true, end: s.length };
+}
+
+function parseGhJsonDocuments(text) {
+  if (text === '' || text === undefined || text === null) return [];
+  const quoted = quoteJsonIntegerKeys(text);
+  const docs = [];
+  let i = 0;
+  while (i < quoted.length) {
+    while (i < quoted.length && /[ \t\r\n]/.test(quoted[i])) i += 1;
+    if (i >= quoted.length) break;
+    const next = sliceJsonValue(quoted, i);
+    if (next.error || !next.raw) return null;
+    try {
+      docs.push(JSON.parse(next.raw));
+    } catch {
+      return null;
+    }
+    i = next.end;
+  }
+  return docs;
+}
+
+function createDispatchClients({
+  repo = REPO,
+  readToken,
+  writeToken,
+  gh = defaultGh,
+  reReadSwitch,
+  actWritesEnabledFn = defaultActWritesEnabled,
+} = {}) {
+  const target = splitRepo(repo);
+  const noop = async () => ({ ok: false, error: 'no_token' });
+  if (!target) {
+    return {
+      read: { listRefs: noop, getRef: noop, issueComments: noop, getIssue: noop, issueCommentContentEdits: noop },
+      write: { updateRefs: noop, createLeaseCommit: noop },
+      combined: null,
+    };
+  }
+  const base = `repos/${target.owner}/${target.name}`;
+  let repoNodeIdCache = null;
+
+  async function repositoryNodeId() {
+    if (repoNodeIdCache) return repoNodeIdCache;
+    if (!readToken) return null;
+    const result = gh(['api', base, '--jq', '.node_id'], readToken);
+    if (result.status !== 0) return null;
+    repoNodeIdCache = result.stdout.replace(/\r?\n$/, '');
+    return repoNodeIdCache;
+  }
+
+  async function assertWritesEnabledBeforeMutation() {
+    if (typeof reReadSwitch !== 'function') {
+      return { ok: false, fatal: true, error: 'switch_read' };
+    }
+    const sw = await reReadSwitch();
+    if (!sw || !sw.ok) return { ok: false, fatal: true, error: 'switch_read' };
+    if (!actWritesEnabledFn(sw)) return { ok: false, fatal: true, error: 'switch_off' };
+    return { ok: true };
+  }
+
+  const read = {
+    async listRefs({ prefix }) {
+      if (!readToken) return { ok: false, refs: [], error: 'no_read_token' };
+      let pathPrefix = String(prefix || MATCHING_REF_PREFIX).replace(/^refs\//, '');
+      if (!pathPrefix.startsWith('mythos/dispatch')) pathPrefix = MATCHING_REF_PREFIX;
+      const result = gh(['api', `${base}/git/matching-refs/${encodeURIComponent(pathPrefix)}`], readToken);
+      if (result.status !== 0) return { ok: false, refs: [], error: result.stderr || 'list_failed' };
+      const parsed = parseGhJson(result.stdout);
+      if (!Array.isArray(parsed)) return { ok: false, refs: [], error: 'parse_failed' };
+      const refs = [];
+      for (const row of parsed) {
+        if (!row || !row.ref) continue;
+        const sha = row.object && row.object.sha;
+        let message = null;
+        if (sha && refNeedsLeaseMessage(row.ref)) {
+          const commit = gh(['api', `${base}/git/commits/${sha}`, '--jq', '.message'], readToken);
+          if (commit.status !== 0) {
+            return { ok: false, refs: [], error: commit.stderr || 'commit_message_failed' };
+          }
+          message = commit.stdout.replace(/\r?\n$/, '');
+        }
+        refs.push({ ref: row.ref, sha, message });
+      }
+      return { ok: true, refs };
+    },
+    async getRef({ ref }) {
+      if (!readToken) return { ok: false, error: 'no_read_token' };
+      assertDispatchRef(ref);
+      const suffix = ref.startsWith('refs/') ? ref.slice('refs/'.length) : ref;
+      const result = gh(['api', `${base}/git/ref/${encodeURIComponent(suffix)}`], readToken);
+      if (result.status !== 0) {
+        const parsedHttp = httpStatusFromGh(result.stderr, result.status);
+        return {
+          ok: false,
+          status: parsedHttp ?? result.status,
+          ghStatus: result.status,
+          error: result.stderr || 'get_ref_failed',
+        };
+      }
+      const parsed = parseGhJson(result.stdout);
+      const sha = parsed && parsed.object && parsed.object.sha;
+      if (!sha || !OID_HEX.test(sha)) {
+        const parsedHttp = httpStatusFromGh(result.stderr, result.status);
+        return {
+          ok: false,
+          status: parsedHttp ?? result.status,
+          ghStatus: result.status,
+          error: 'invalid_sha',
+        };
+      }
+      const commit = gh(['api', `${base}/git/commits/${sha}`, '--jq', '.message'], readToken);
+      if (commit.status !== 0) {
+        const parsedHttp = httpStatusFromGh(commit.stderr, commit.status);
+        return {
+          ok: false,
+          status: parsedHttp ?? commit.status,
+          ghStatus: commit.status,
+          error: commit.stderr || 'commit_message_failed',
+        };
+      }
+      const message = commit.stdout.replace(/\r?\n$/, '');
+      return { ok: true, ref, sha, message };
+    },
+    async issueCommentContentEdits({ issue, commentNodeId }) {
+      if (!readToken) return { ok: false, editors: [], error: 'no_read_token' };
+      const issueNumber = parseInt(String(issue), 10);
+      if (!Number.isInteger(issueNumber) || issueNumber < 1) {
+        return { ok: false, editors: [], error: 'bad_issue' };
+      }
+      // GraphQL databaseId is a 32-bit Int; REST comment IDs can exceed it.
+      // Look up the comment by its node ID so large IDs still match.
+      const nodeId = typeof commentNodeId === 'string' ? commentNodeId.trim() : '';
+      if (!nodeId || nodeId.length > 256 || !/^[A-Za-z0-9+/=_-]+$/.test(nodeId)) {
+        return { ok: false, editors: [], error: 'bad_comment' };
+      }
+
+      const editors = [];
+      let editAfter = null;
+      const editsQuery = [
+        'query($id:ID!,$after:String) {',
+        'node(id:$id) {',
+        '... on IssueComment {',
+        'id',
+        'userContentEdits(first:100, after:$after) {',
+        'pageInfo { hasNextPage endCursor }',
+        'nodes { editor { login __typename } } } } } }',
+      ].join(' ');
+      for (let guard = 0; guard < 50; guard += 1) {
+        const body = JSON.stringify({
+          query: editsQuery,
+          variables: {
+            id: nodeId,
+            after: editAfter,
+          },
+        });
+        const result = gh(['api', 'graphql', '--input', '-'], readToken, body);
+        if (result.status !== 0) {
+          return { ok: false, editors: [], error: 'graphql_http' };
+        }
+        const parsed = parseGhJson(result.stdout);
+        const row = parsed && parsed.data ? parsed.data.node : undefined;
+        if (row === null || row === undefined) {
+          return { ok: false, editors: [], error: 'comment_not_found' };
+        }
+        if (!row.id || row.id !== nodeId || !row.userContentEdits) {
+          return { ok: false, editors: [], error: 'graphql_parse' };
+        }
+        const editPage = row.userContentEdits.pageInfo;
+        if (!editPage || typeof editPage.hasNextPage !== 'boolean') {
+          return { ok: false, editors: [], error: 'editor_history_incomplete' };
+        }
+        for (const edit of row.userContentEdits.nodes || []) {
+          if (!edit || !edit.editor || !edit.editor.login) {
+            return { ok: false, editors: [], error: 'editor_redacted' };
+          }
+          editors.push({
+            login: edit.editor.login,
+            __typename: edit.editor.__typename,
+          });
+        }
+        if (editPage.hasNextPage) {
+          if (!editPage.endCursor) {
+            return { ok: false, editors: [], error: 'editor_history_incomplete' };
+          }
+          editAfter = editPage.endCursor;
+          continue;
+        }
+        return { ok: true, editors, complete: true };
+      }
+      return { ok: false, editors: [], error: 'editor_history_incomplete' };
+    },
+    async issueComments({ issue }) {
+      if (!readToken) return { ok: false, comments: [], error: 'no_read_token' };
+      // Raw pages, not --jq: gh applies jq after decoding numbers as float64,
+      // which quietly changes comment IDs above 2^53.
+      const result = gh(
+        [
+          'api',
+          `${base}/issues/${issue}/comments`,
+          '--paginate',
+        ],
+        readToken,
+      );
+      if (result.status !== 0) return { ok: false, comments: [], error: result.stderr };
+      const docs = parseGhJsonDocuments(result.stdout);
+      if (!docs) return { ok: false, comments: [], error: 'comment_parse' };
+      const comments = [];
+      for (const doc of docs) {
+        const rows = Array.isArray(doc) ? doc : [doc];
+        for (const row of rows) {
+          if (!row || typeof row !== 'object') return { ok: false, comments: [], error: 'comment_parse' };
+          const bot = row.user && row.user.type === 'Bot';
+          comments.push({
+            id: row.id == null ? '' : String(row.id),
+            databaseId: row.id == null ? null : String(row.id),
+            nodeId: row.node_id || null,
+            body: row.body,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+            author: {
+              login: row.user && row.user.login,
+              __typename: bot ? 'Bot' : 'User',
+            },
+          });
+        }
+      }
+      return { ok: true, comments };
+    },
+
+    async getIssue({ issue }) {
+      if (!readToken) return { ok: false, error: 'no_read_token' };
+      const result = gh(
+        ['api', `${base}/issues/${issue}`, '--jq', '{state, pull_request, updated_at, user: {login: .user.login, type: .user.type}}'],
+        readToken,
+      );
+      if (result.status !== 0) return { ok: false, error: result.stderr };
+      const parsed = parseGhJson(result.stdout);
+      if (!parsed) return { ok: false, error: 'parse_failed' };
+      return { ok: true, issue: parsed };
+    },
+  };
+
+  const write = {
+    async updateRefs(refUpdates) {
+      if (!writeToken) return { ok: false, fatal: true, error: 'no_write_token' };
+      for (const row of refUpdates) assertDispatchRef(row.name);
+      const nodeId = await repositoryNodeId();
+      if (!nodeId) return { ok: false, fatal: true, error: 'repo_node_id' };
+      const gate = await assertWritesEnabledBeforeMutation();
+      if (!gate.ok) return { ok: false, fatal: gate.fatal, error: gate.error };
+      const body = JSON.stringify({
+        query: UPDATE_REFS_MUTATION,
+        variables: { repositoryId: nodeId, refUpdates },
+      });
+      const result = gh(['api', 'graphql', '--input', '-'], writeToken, body);
+      const parsed = parseGhJson(result.stdout);
+      const errors = parseGraphqlErrors(result.stdout);
+      const httpStatus = httpStatusFromGh(result.stderr, result.status);
+      const statusCode = httpStatus ?? (result.status === 0 ? 201 : result.status);
+      if (errors && errors.length > 0) {
+        if (errors.length === 1 && isRefExistsError(errors)) {
+          return {
+            ok: false,
+            status: 422,
+            ghStatus: result.status,
+            error: UPDATE_REFS_REF_EXISTS,
+            refExists: true,
+            errors,
+          };
+        }
+        return {
+          ok: false,
+          fatal: true,
+          status: statusCode,
+          ghStatus: result.status,
+          error: result.stderr || result.stdout,
+          errors,
+        };
+      }
+      if (result.status !== 0) {
+        return {
+          ok: false,
+          fatal: true,
+          status: statusCode,
+          ghStatus: result.status,
+          error: result.stderr || result.stdout,
+          errors,
+        };
+      }
+      if (
+        !parsed
+        || parsed.data === undefined
+        || parsed.data === null
+        || parsed.data.updateRefs === undefined
+        || parsed.data.updateRefs === null
+      ) {
+        return {
+          ok: false,
+          fatal: true,
+          status: statusCode,
+          ghStatus: result.status,
+          error: 'graphql_no_update_refs',
+          errors,
+        };
+      }
+      return { ok: true, status: statusCode, ghStatus: result.status, data: parsed.data.updateRefs };
+    },
+    async deleteRef({ ref, beforeOid }) {
+      assertDispatchRef(ref);
+      if (!beforeOid || !OID_HEX.test(beforeOid)) {
+        return { ok: false, fatal: true, error: 'missing_before_oid' };
+      }
+      return write.updateRefs([refUpdateDelete(ref, beforeOid)]);
+    },
+    async createRef({ ref, sha, afterOid }) {
+      const target = afterOid || sha;
+      return write.updateRefs([refUpdateCreate(ref, target)]);
+    },
+    async createLeaseCommit(message, parentSha) {
+      if (!writeToken) return { ok: false, error: 'no_write_token' };
+      if (!OID_HEX.test(parentSha || '')) return { ok: false, error: 'invalid_parent_sha' };
+      const treeResult = gh(['api', `${base}/git/commits/${parentSha}`, '--jq', '.tree.sha'], readToken || writeToken);
+      if (treeResult.status !== 0) return { ok: false, error: 'parent_tree' };
+      const treeSha = treeResult.stdout.replace(/\r?\n$/, '');
+      const gate = await assertWritesEnabledBeforeMutation();
+      if (!gate.ok) return { ok: false, fatal: gate.fatal, error: gate.error };
+      const commit = gh(
+        [
+          'api', '-X', 'POST', `${base}/git/commits`,
+          '-f', `message=${message}`,
+          '-f', `tree=${treeSha}`,
+          '-f', `parents[]=${parentSha}`,
+        ],
+        writeToken,
+      );
+      if (commit.status !== 0) return { ok: false, error: commit.stderr };
+      const parsed = parseGhJson(commit.stdout);
+      if (!parsed || !parsed.sha) return { ok: false, error: 'commit_parse' };
+      return { ok: true, sha: parsed.sha, message };
+    },
+    async renewRef({ ref, newAfterOid, newOid, beforeOid }) {
+      const afterOid = newAfterOid || newOid;
+      if (!afterOid || !beforeOid) {
+        return { ok: false, fatal: true, error: 'missing_oid' };
+      }
+      return write.updateRefs([refUpdateRenew(ref, afterOid, beforeOid)]);
+    },
+    async renewRefPair({ laneRef, claimRef, afterOid, beforeOid }) {
+      return write.updateRefs([
+        refUpdateRenew(laneRef, afterOid, beforeOid),
+        refUpdateRenew(claimRef, afterOid, beforeOid),
+      ]);
+    },
+    async createRefPair({ laneRef, claimRef, afterOid, oid }) {
+      const target = afterOid || oid;
+      return write.updateRefs([
+        refUpdateCreate(laneRef, target),
+        refUpdateCreate(claimRef, target),
+      ]);
+    },
+    refUpdateCreate,
+    refUpdateDelete,
+    refUpdateRenew,
+  };
+
+  /** @deprecated single token — use createDispatchClients */
+  function legacyCombined() {
+    return {
+      async createRef({ ref, sha, afterOid }) {
+        return write.createRef({ ref, sha, afterOid });
+      },
+      async deleteRef({ ref, beforeOid }) {
+        return write.deleteRef({ ref, beforeOid });
+      },
+      listRefs: (args) => read.listRefs(args),
+      getRef: (args) => read.getRef(args),
+      issueComments: (args) => read.issueComments(args),
+      issueCommentContentEdits: (args) => read.issueCommentContentEdits(args),
+      getIssue: (args) => read.getIssue(args),
+      updateRefs: (updates) => write.updateRefs(updates),
+      createRefPair: (args) => write.createRefPair(args),
+      createLeaseCommit: (msg, parent) => write.createLeaseCommit(msg, parent),
+      renewRef: (args) => write.renewRef(args),
+      renewRefPair: (args) => write.renewRefPair(args),
+      read,
+      write,
+    };
+  }
+
+  return { read, write, combined: legacyCombined() };
+}
+
+module.exports = {
+  createDispatchClients,
+  parseGhJson,
+  quoteJsonIntegerKeys,
+  parseGhJsonDocuments,
+  UPDATE_REFS_REF_EXISTS,
+};
