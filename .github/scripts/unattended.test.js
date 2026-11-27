@@ -905,6 +905,12 @@ test('mythos-dispatch schedule never claims; discover uses mythos-control', () =
   assert.match(text, /CANARY_OUTCOME_PATH: canary-outcome-\$\{\{ matrix\.index \}\}\.json/);
   assert.match(text, /actions\/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4\.6\.0/);
   assert.match(text, /actions\/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4\.3\.0/);
+  assert.match(text, /name: canary-outcome-\$\{\{ github\.run_attempt \}\}-\$\{\{ matrix\.index \}\}/);
+  assert.match(text, /pattern: canary-outcome-\$\{\{ github\.run_attempt \}\}-\*/);
+  assert.match(text, /retry_requires_all_six_legs/);
+  const { canaryOutcomeArtifactName, canaryOutcomeArtifactPattern } = require('./unattended/dispatch/canary-artifacts');
+  assert.equal(canaryOutcomeArtifactName('${{ github.run_attempt }}', '${{ matrix.index }}'), 'canary-outcome-${{ github.run_attempt }}-${{ matrix.index }}');
+  assert.equal(canaryOutcomeArtifactPattern('${{ github.run_attempt }}'), 'canary-outcome-${{ github.run_attempt }}-*');
   assert.equal(doc.jobs.canary.concurrency, undefined);
   assert.equal(doc.jobs['canary-verify'].concurrency, undefined);
   assert.match(text, /mythos-dispatch-canary/);

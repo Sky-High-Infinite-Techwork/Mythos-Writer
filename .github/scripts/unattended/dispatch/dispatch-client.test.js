@@ -313,57 +313,36 @@ test('write paths reject refs outside dispatch namespace', () => {
 });
 
 test('issueCommentContentEdits paginates edit history', async () => {
+  const nodeId = 'IC_kwDOTestComment42';
   const pages = [
     {
       data: {
-        repository: {
-          issue: {
-            comments: {
-              pageInfo: { hasNextPage: false, endCursor: null },
-              nodes: [{ databaseId: 42 }],
-            },
+        node: {
+          id: nodeId,
+          userContentEdits: {
+            pageInfo: { hasNextPage: true, endCursor: 'edit-cursor' },
+            nodes: [{ editor: { login: 'SkyyPlayz', __typename: 'User' } }],
           },
         },
       },
     },
     {
       data: {
-        repository: {
-          issue: {
-            comments: {
-              nodes: [{
-                databaseId: 42,
-                userContentEdits: {
-                  pageInfo: { hasNextPage: true, endCursor: 'edit-cursor' },
-                  nodes: [{ editor: { login: 'SkyyPlayz', __typename: 'User' } }],
-                },
-              }],
-            },
-          },
-        },
-      },
-    },
-    {
-      data: {
-        repository: {
-          issue: {
-            comments: {
-              nodes: [{
-                databaseId: 42,
-                userContentEdits: {
-                  pageInfo: { hasNextPage: false, endCursor: null },
-                  nodes: [{ editor: { login: 'SkyyPlayz', __typename: 'User' } }],
-                },
-              }],
-            },
+        node: {
+          id: nodeId,
+          userContentEdits: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [{ editor: { login: 'SkyyPlayz', __typename: 'User' } }],
           },
         },
       },
     },
   ];
   let n = 0;
+  const queries = [];
   const gh = (args, _tok, input) => {
     if (args.includes('graphql')) {
+      queries.push(JSON.parse(input));
       const out = pages[Math.min(n, pages.length - 1)];
       n += 1;
       return { status: 0, stdout: JSON.stringify(out) };
@@ -371,59 +350,37 @@ test('issueCommentContentEdits paginates edit history', async () => {
     return { status: 0, stdout: '' };
   };
   const { read } = createDispatchClients({ readToken: 'r', gh });
-  const edits = await read.issueCommentContentEdits({ issue: 1, commentDatabaseId: 42 });
+  const edits = await read.issueCommentContentEdits({ issue: 1, commentNodeId: nodeId });
   assert.equal(edits.ok, true);
   assert.equal(edits.editors.length, 2);
   assert.equal(edits.complete, true);
+  assert.equal(queries.length, 2);
+  assert.match(queries[0].query, /node\(id:\$id\)/);
+  assert.equal(queries[0].variables.id, nodeId);
+  assert.equal(queries[1].variables.after, 'edit-cursor');
 });
 
 test('issueCommentContentEdits holds on redacted editor', async () => {
-  const gh = (_args, _tok) => ({
-    status: 0,
-    stdout: JSON.stringify({
-      data: {
-        repository: {
-          issue: {
-            comments: {
-              pageInfo: { hasNextPage: false },
-              nodes: [{ databaseId: 7 }],
-            },
-          },
-        },
-      },
-    }),
-  });
-  const ghEdits = (args, _tok) => {
+  const nodeId = 'IC_kwDOTestComment7';
+  const gh = (args, _tok) => {
     if (!args.includes('graphql')) return { status: 0, stdout: '' };
     return {
       status: 0,
       stdout: JSON.stringify({
         data: {
-          repository: {
-            issue: {
-              comments: {
-                nodes: [{
-                  databaseId: 7,
-                  userContentEdits: {
-                    pageInfo: { hasNextPage: false, endCursor: null },
-                    nodes: [{ editor: null }],
-                  },
-                }],
-              },
+          node: {
+            id: nodeId,
+            userContentEdits: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [{ editor: null }],
             },
           },
         },
       }),
     };
   };
-  let pass = 0;
-  const ghWrap = (args, tok, input) => {
-    pass += 1;
-    if (pass === 1) return gh(args, tok);
-    return ghEdits(args, tok, input);
-  };
-  const { read } = createDispatchClients({ readToken: 'r', gh: ghWrap });
-  const edits = await read.issueCommentContentEdits({ issue: 1, commentDatabaseId: 7 });
+  const { read } = createDispatchClients({ readToken: 'r', gh });
+  const edits = await read.issueCommentContentEdits({ issue: 1, commentNodeId: nodeId });
   assert.equal(edits.ok, false);
   assert.equal(edits.error, 'editor_redacted');
 });
@@ -437,6 +394,7 @@ test('issueComments maps JSONL paginate output including Bot authors', async () 
         stdout: [
           JSON.stringify({
             id: 11,
+            node_id: 'IC_kwDOBot11',
             body: '## Files\nbot-a.ts',
             created_at: '2026-01-01T00:00:00Z',
             updated_at: '2026-01-01T00:00:00Z',
@@ -444,6 +402,7 @@ test('issueComments maps JSONL paginate output including Bot authors', async () 
           }),
           JSON.stringify({
             id: 12,
+            node_id: 'IC_kwDOUser12',
             body: '## Files\nuser-a.ts',
             created_at: '2026-01-02T00:00:00Z',
             updated_at: '2026-01-02T00:00:00Z',
@@ -460,7 +419,9 @@ test('issueComments maps JSONL paginate output including Bot authors', async () 
   assert.equal(listed.comments.length, 2);
   assert.equal(listed.comments[0].author.__typename, 'Bot');
   assert.equal(listed.comments[0].author.login, 'dependabot[bot]');
+  assert.equal(listed.comments[0].nodeId, 'IC_kwDOBot11');
   assert.equal(listed.comments[1].author.__typename, 'User');
+  assert.equal(listed.comments[1].nodeId, 'IC_kwDOUser12');
 });
 
 test('getIssue failed gh exit does not masquerade as success', async () => {
@@ -475,4 +436,72 @@ test('getIssue failed gh exit does not masquerade as success', async () => {
   const got = await read.getIssue({ issue: 9 });
   assert.equal(got.ok, false);
   assert.match(got.error, /403|Forbidden/);
+});
+
+test('issueCommentContentEdits matches a REST comment ID above 32-bit GraphQL databaseId via node ID', async () => {
+  const LARGE_ID = 2147483648;
+  const NODE_ID = 'IC_kwDOOverInt32Comment';
+  const queries = [];
+  const gh = (args, _tok, input) => {
+    const flat = args.map((a) => String(a));
+    if (flat.some((a) => a.includes('/issues/') && a.includes('/comments'))) {
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          id: LARGE_ID,
+          node_id: NODE_ID,
+          body: '## Files\nfrontend/a.ts',
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-02T00:00:00Z',
+          user: { login: 'SkyyPlayz', type: 'User' },
+        }),
+      };
+    }
+    if (args.includes('graphql')) {
+      const body = JSON.parse(input);
+      queries.push(body);
+      assert.equal(body.variables.id, NODE_ID);
+      assert.doesNotMatch(body.query, /databaseId/);
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          data: {
+            node: {
+              id: NODE_ID,
+              userContentEdits: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{ editor: { login: 'SkyyPlayz', __typename: 'User' } }],
+              },
+            },
+          },
+        }),
+      };
+    }
+    return { status: 0, stdout: '' };
+  };
+  const { read } = createDispatchClients({ readToken: 'r', gh });
+  const listed = await read.issueComments({ issue: 1 });
+  assert.equal(listed.ok, true);
+  assert.equal(listed.comments[0].databaseId, LARGE_ID);
+  assert.equal(listed.comments[0].nodeId, NODE_ID);
+  const { findOfficialPlan } = require('./official-plan');
+  const official = findOfficialPlan(listed.comments);
+  assert.ok(official && !official.hold);
+  assert.equal(official.nodeId, NODE_ID);
+  const edits = await read.issueCommentContentEdits({
+    issue: 1,
+    commentNodeId: official.nodeId,
+    commentDatabaseId: official.databaseId,
+  });
+  assert.equal(edits.ok, true);
+  assert.equal(edits.complete, true);
+  assert.equal(edits.editors[0].login, 'SkyyPlayz');
+  assert.equal(queries.length, 1);
+
+  const missing = await read.issueCommentContentEdits({
+    issue: 1,
+    commentDatabaseId: LARGE_ID,
+  });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.error, 'bad_comment');
 });

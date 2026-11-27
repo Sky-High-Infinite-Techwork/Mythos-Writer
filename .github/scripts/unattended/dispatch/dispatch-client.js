@@ -139,94 +139,48 @@ function createDispatchClients({
       const message = commit.stdout.replace(/\r?\n$/, '');
       return { ok: true, ref, sha, message };
     },
-    async issueCommentContentEdits({ issue, commentDatabaseId }) {
+    async issueCommentContentEdits({ issue, commentNodeId }) {
       if (!readToken) return { ok: false, editors: [], error: 'no_read_token' };
       const issueNumber = parseInt(String(issue), 10);
-      const commentId = parseInt(String(commentDatabaseId), 10);
       if (!Number.isInteger(issueNumber) || issueNumber < 1) {
         return { ok: false, editors: [], error: 'bad_issue' };
       }
-      if (!Number.isInteger(commentId) || commentId < 1) {
+      // GraphQL databaseId is a 32-bit Int; REST comment IDs can exceed it.
+      // Look up the comment by its node ID so large IDs still match.
+      const nodeId = typeof commentNodeId === 'string' ? commentNodeId.trim() : '';
+      if (!nodeId || nodeId.length > 256 || !/^[A-Za-z0-9+/=_-]+$/.test(nodeId)) {
         return { ok: false, editors: [], error: 'bad_comment' };
       }
-      const commentPageQuery = [
-        'query($owner:String!,$name:String!,$number:Int!,$after:String) {',
-        'repository(owner:$owner,name:$name) {',
-        'issue(number:$number) {',
-        'comments(first:100, after:$after) {',
-        'pageInfo { hasNextPage endCursor }',
-        'nodes { databaseId } } } } }',
-      ].join(' ');
-      let commentAfter = null;
-      let commentPageCursor = null;
-      let found = false;
-      for (let guard = 0; guard < 50; guard += 1) {
-        const body = JSON.stringify({
-          query: commentPageQuery,
-          variables: {
-            owner: target.owner,
-            name: target.name,
-            number: issueNumber,
-            after: commentAfter,
-          },
-        });
-        const result = gh(['api', 'graphql', '--input', '-'], readToken, body);
-        if (result.status !== 0) {
-          return { ok: false, editors: [], error: result.stderr || 'graphql_http' };
-        }
-        const parsed = parseGhJson(result.stdout);
-        const page = parsed?.data?.repository?.issue?.comments;
-        if (!page || !Array.isArray(page.nodes)) {
-          return { ok: false, editors: [], error: 'graphql_parse' };
-        }
-        if (page.nodes.some((n) => Number(n.databaseId) === commentId)) {
-          commentPageCursor = commentAfter;
-          found = true;
-          break;
-        }
-        if (!page.pageInfo || typeof page.pageInfo.hasNextPage !== 'boolean') {
-          return { ok: false, editors: [], error: 'editor_history_incomplete' };
-        }
-        if (!page.pageInfo.hasNextPage) break;
-        if (!page.pageInfo.endCursor) {
-          return { ok: false, editors: [], error: 'editor_history_incomplete' };
-        }
-        commentAfter = page.pageInfo.endCursor;
-      }
-      if (!found) return { ok: false, editors: [], error: 'comment_not_found' };
 
       const editors = [];
       let editAfter = null;
       const editsQuery = [
-        'query($owner:String!,$name:String!,$number:Int!,$commentPage:String,$after:String) {',
-        'repository(owner:$owner,name:$name) {',
-        'issue(number:$number) {',
-        'comments(first:100, after:$commentPage) {',
-        'nodes { databaseId userContentEdits(first:100, after:$after) {',
+        'query($id:ID!,$after:String) {',
+        'node(id:$id) {',
+        '... on IssueComment {',
+        'id',
+        'userContentEdits(first:100, after:$after) {',
         'pageInfo { hasNextPage endCursor }',
-        'nodes { editor { login __typename } } } } } } } }',
+        'nodes { editor { login __typename } } } } } }',
       ].join(' ');
       for (let guard = 0; guard < 50; guard += 1) {
         const body = JSON.stringify({
           query: editsQuery,
           variables: {
-            owner: target.owner,
-            name: target.name,
-            number: issueNumber,
-            commentPage: commentPageCursor,
+            id: nodeId,
             after: editAfter,
           },
         });
         const result = gh(['api', 'graphql', '--input', '-'], readToken, body);
         if (result.status !== 0) {
-          return { ok: false, editors: [], error: result.stderr || 'graphql_http' };
+          return { ok: false, editors: [], error: 'graphql_http' };
         }
         const parsed = parseGhJson(result.stdout);
-        const nodes = parsed?.data?.repository?.issue?.comments?.nodes;
-        const row = Array.isArray(nodes)
-          ? nodes.find((n) => Number(n.databaseId) === commentId)
-          : null;
-        if (!row || !row.userContentEdits) {
+        const row = parsed && parsed.data ? parsed.data.node : undefined;
+        if (row === null || row === undefined) {
+          return { ok: false, editors: [], error: 'comment_not_found' };
+        }
+        if (!row.id || row.id !== nodeId || !row.userContentEdits) {
           return { ok: false, editors: [], error: 'graphql_parse' };
         }
         const editPage = row.userContentEdits.pageInfo;
@@ -261,7 +215,7 @@ function createDispatchClients({
           `${base}/issues/${issue}/comments`,
           '--paginate',
           '--jq',
-          '.[] | {id, body, created_at, updated_at, user: {login: .user.login, type: .user.type}}',
+          '.[] | {id, node_id, body, created_at, updated_at, user: {login: .user.login, type: .user.type}}',
         ],
         readToken,
       );
@@ -274,6 +228,7 @@ function createDispatchClients({
         comments.push({
           id: String(row.id),
           databaseId: row.id,
+          nodeId: row.node_id || null,
           body: row.body,
           createdAt: row.created_at,
           updatedAt: row.updated_at,

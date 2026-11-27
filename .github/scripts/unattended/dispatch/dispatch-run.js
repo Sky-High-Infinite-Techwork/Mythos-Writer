@@ -84,7 +84,16 @@ async function runDispatchPlan(env) {
   const leaseMinutes = clampLeaseMinutes(
     leaseVar.ok && leaseVar.value ? leaseVar.value : DEFAULT_LEASE_MINUTES,
   );
-  const ordered = parseBuildOrderIssues(orderVar.value || '');
+  const parsedOrder = parseBuildOrderIssues(orderVar.value || '');
+  if (!parsedOrder.ok) {
+    console.log(JSON.stringify({
+      kind: 'dispatch_hold',
+      reason: parsedOrder.reason || 'invalid_build_order',
+      entry: parsedOrder.entry,
+    }));
+    return mode === 'act' ? 1 : 0;
+  }
+  const ordered = parsedOrder.issues;
 
   const client = createDispatchClient(env);
   if (!client) {

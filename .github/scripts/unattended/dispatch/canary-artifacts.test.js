@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { evaluateCanaryOutcomes } = require('./canary-artifacts');
+const { evaluateCanaryOutcomes, canaryOutcomeArtifactName, canaryOutcomeArtifactPattern } = require('./canary-artifacts');
 
 test('evaluateCanaryOutcomes requires exactly one win and five loses', () => {
   const okRows = Array.from({ length: 6 }, (_, i) => ({
@@ -21,4 +21,9 @@ test('evaluateCanaryOutcomes requires exactly one win and five loses', () => {
   assert.equal(scored.reason, 'counts');
   assert.equal(scored.wins, 1);
   assert.equal(scored.fatals, 5);
+});
+
+test('canary artifact names and download pattern are scoped to the run attempt', () => {
+  assert.equal(canaryOutcomeArtifactName(2, 3), 'canary-outcome-2-3');
+  assert.equal(canaryOutcomeArtifactPattern(2), 'canary-outcome-2-*');
 });

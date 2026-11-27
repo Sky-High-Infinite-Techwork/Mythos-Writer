@@ -245,3 +245,48 @@ test('dispatch-cli canary-ref skips mutation when switch off after repository lo
   });
   process.argv = origArgv;
 });
+
+test('dispatch-cli canary-ref fatal logs and artifacts use only allowlisted fields and stable codes', async () => {
+  const origArgv = process.argv;
+  process.argv = ['node', 'dispatch-cli.js', 'canary-ref'];
+  const logs = [];
+  const origLog = console.log;
+  const origErr = console.error;
+  console.log = (...a) => logs.push(`log:${a.join(' ')}`);
+  console.error = (...a) => logs.push(`err:${a.join(' ')}`);
+  const leak = 'server-controlled diagnostic token=ghp_leaked and GraphQL boom';
+  try {
+    await withCanaryCliEnv({}, async (outcomePath) => {
+      const code = await main({
+        readDispatchSwitchesFn: switchesOn(),
+        createDispatchClientsFn: () => mockCombinedClient({
+          createRefImpl: async () => ({
+            ok: false,
+            fatal: true,
+            error: `HTTP 500: ${leak}`,
+            errors: [{ message: leak, path: ['updateRefs'], type: 'INTERNAL' }],
+          }),
+        }),
+      });
+      assert.equal(code, 1);
+      const outcome = readOutcome(outcomePath);
+      assert.equal(outcome.kind, 'canary_fatal');
+      assert.equal(outcome.reason, 'write_failed');
+      assert.equal(outcome.runId, RUN_ID);
+      assert.equal(outcome.runAttempt, RUN_ATTEMPT);
+      assert.equal(outcome.scratchRef, SCRATCH);
+      assert.equal(outcome.errors, undefined);
+      assert.equal(outcome.error, undefined);
+      assert.deepEqual(Object.keys(outcome).sort(), ['index', 'kind', 'reason', 'runAttempt', 'runId', 'scratchRef'].sort());
+      const dumped = `${JSON.stringify(outcome)}\n${logs.join('\n')}`;
+      assert.equal(dumped.includes(leak), false);
+      assert.equal(dumped.includes('HTTP 500'), false);
+      assert.equal(dumped.includes('ghp_leaked'), false);
+      assert.ok(logs.some((l) => l.includes('canary_fatal') && l.includes('write_failed')));
+    });
+  } finally {
+    process.argv = origArgv;
+    console.log = origLog;
+    console.error = origErr;
+  }
+});

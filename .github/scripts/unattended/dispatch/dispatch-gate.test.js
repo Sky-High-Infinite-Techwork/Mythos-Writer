@@ -65,6 +65,7 @@ function planComments() {
     comments: [{
       id: '99',
       databaseId: 99,
+      nodeId: 'IC_kwDOPlan99',
       author: { login: 'SkyyPlayz' },
       body,
       createdAt: '2026-01-01T00:00:00Z',
@@ -774,11 +775,20 @@ test('fake gh e2e dry-run act claim and encoded ref paths', { timeout: 15000 }, 
     const flat = args.map((a) => String(a));
     if (flat.includes('graphql') && input) {
       const body = JSON.parse(input);
-      if (body.query.includes('userContentEdits')) {
+      if (body.query.includes('userContentEdits') || body.query.includes('node(id:')) {
+        const id = (body.variables && body.variables.id) || 'IC_kwDOPlan99';
         return {
           status: 0,
           stdout: JSON.stringify({
-            data: { repository: { issue: { comments: { nodes: [{ databaseId: 99, userContentEdits: { nodes: [] } }] } } } },
+            data: {
+              node: {
+                id,
+                userContentEdits: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [],
+                },
+              },
+            },
           }),
         };
       }
@@ -823,7 +833,7 @@ test('fake gh e2e dry-run act claim and encoded ref paths', { timeout: 15000 }, 
     if (flat.some((a) => a.includes('/issues/') && a.includes('/comments'))) {
       return {
         status: 0,
-        stdout: '{"id":99,"body":"## Files\\n- a.ts","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","user":{"login":"SkyyPlayz","type":"User"}}\n',
+        stdout: '{"id":99,"node_id":"IC_kwDOPlan99","body":"## Files\\n- a.ts","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","user":{"login":"SkyyPlayz","type":"User"}}\n',
       };
     }
     if (flat.some((a) => a.includes('/issues/') && a.includes('--jq') && !a.includes('/comments'))) {
@@ -875,4 +885,114 @@ test('fake gh e2e dry-run act claim and encoded ref paths', { timeout: 15000 }, 
   const gotLane = await client.getRef({ ref: 'refs/mythos/dispatch/lane-00' });
   assert.equal(gotLane.ok, true);
   assert.equal(gotLane.sha.length, 40);
+});
+
+test('verifyPlanCommentEditors requires edit evidence when timestamps match', async () => {
+  const client = createMockRefClient();
+  let fetched = 0;
+  client.issueCommentContentEdits = async (args) => {
+    fetched += 1;
+    assert.equal(args.commentNodeId, 'IC_kwDOSameSecond');
+    return {
+      ok: true,
+      complete: true,
+      editors: [{ login: 'evil', __typename: 'User' }],
+    };
+  };
+  const official = findOfficialPlan([{
+    id: '1',
+    databaseId: 1,
+    nodeId: 'IC_kwDOSameSecond',
+    author: { login: 'SkyyPlayz' },
+    body: '## Files\n- a.ts',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  }]);
+  assert.ok(official && !official.hold);
+  const hold = await verifyPlanCommentEditors(client, 1, official);
+  assert.equal(fetched, 1);
+  assert.equal(hold.hold, true);
+  assert.equal(hold.reason, 'untrusted_editor');
+});
+
+test('verifyPlanCommentEditors requires edit evidence when timestamps are missing', async () => {
+  const client = createMockRefClient();
+  let fetched = 0;
+  client.issueCommentContentEdits = async () => {
+    fetched += 1;
+    return {
+      ok: true,
+      complete: true,
+      editors: [{ login: 'evil', __typename: 'User' }],
+    };
+  };
+  const official = findOfficialPlan([{
+    id: '1',
+    databaseId: 1,
+    nodeId: 'IC_kwDOMissingTs',
+    author: { login: 'SkyyPlayz' },
+    body: '## Files\n- a.ts',
+  }]);
+  const hold = await verifyPlanCommentEditors(client, 1, official);
+  assert.equal(fetched, 1);
+  assert.equal(hold.hold, true);
+  assert.equal(hold.reason, 'untrusted_editor');
+});
+
+test('verifyPlanCommentEditors accepts a same-second comment with complete trusted edit history', async () => {
+  const client = createMockRefClient();
+  client.issueCommentContentEdits = async () => ({
+    ok: true,
+    complete: true,
+    editors: [{ login: 'SkyyPlayz', __typename: 'User' }],
+  });
+  const official = findOfficialPlan([{
+    id: '1',
+    databaseId: 1,
+    nodeId: 'IC_kwDOTrustedSameSecond',
+    author: { login: 'SkyyPlayz' },
+    body: '## Files\n- a.ts',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  }]);
+  const hold = await verifyPlanCommentEditors(client, 1, official);
+  assert.equal(hold.hold, false);
+});
+
+test('invalid build-order entry holds before scanning the queue', async () => {
+  const client = createMockRefClient();
+  let listed = 0;
+  let fetchedIssue = 0;
+  client.listRefs = async () => {
+    listed += 1;
+    return { ok: true, refs: [] };
+  };
+  client.getIssue = async () => {
+    fetchedIssue += 1;
+    return { ok: true, issue: { state: 'open' } };
+  };
+  const logs = [];
+  const orig = console.log;
+  console.log = (...a) => logs.push(a.join(' '));
+  try {
+    const code = await runDispatchPlan(actEnv(client, {
+      readRepoVariableFn: async (_r, _t, n) => {
+        if (n === 'MYTHOS_BUILD_ORDER_ISSUES') return { ok: true, value: '12oops,13' };
+        if (n === 'MYTHOS_DISPATCH_LANE_CAP') return { ok: true, value: '5' };
+        return { ok: true, value: null };
+      },
+    }));
+    assert.equal(code, 1);
+    const hold = logs.map((l) => {
+      try { return JSON.parse(l); } catch { return null; }
+    }).find((row) => row && row.kind === 'dispatch_hold');
+    assert.ok(hold);
+    assert.equal(hold.reason, 'invalid_build_order');
+    assert.equal(hold.entry, '12oops');
+  } finally {
+    console.log = orig;
+  }
+  assert.equal(listed, 0);
+  assert.equal(fetchedIssue, 0);
+  assertNoLaneOrClaimWrites(client);
 });

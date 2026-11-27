@@ -27,6 +27,20 @@ function outcomesMatchRun(outcomes, runId, runAttempt) {
   return true;
 }
 
+function retryRequiresAllSixLegs(outcomes, runId, runAttempt) {
+  const rid = Number.parseInt(String(runId), 10);
+  const att = Number.parseInt(String(runAttempt), 10);
+  if (!Number.isInteger(rid) || rid < 1 || !Number.isInteger(att) || att < 1) return false;
+  if (!Array.isArray(outcomes)) return false;
+  return outcomes.some((row) => (
+    row
+    && Number(row.runId) === rid
+    && Number.isInteger(Number(row.runAttempt))
+    && Number(row.runAttempt) >= 1
+    && Number(row.runAttempt) !== att
+  ));
+}
+
 async function runCanaryVerify(client, {
   reReadSwitch,
   mainSha,
@@ -62,7 +76,10 @@ async function runCanaryVerify(client, {
   }
 
   if (!outcomesMatchRun(outcomes, runId, runAttempt)) {
-    console.error(JSON.stringify({ kind: 'canary_verify_fail', reason: 'run_binding_mismatch' }));
+    const reason = retryRequiresAllSixLegs(outcomes, runId, runAttempt)
+      ? 'retry_requires_all_six_legs'
+      : 'run_binding_mismatch';
+    console.error(JSON.stringify({ kind: 'canary_verify_fail', reason }));
     return 1;
   }
 
@@ -128,4 +145,4 @@ async function runCanaryVerify(client, {
   return 0;
 }
 
-module.exports = { runCanaryVerify, outcomesMatchRun };
+module.exports = { runCanaryVerify, outcomesMatchRun, retryRequiresAllSixLegs };

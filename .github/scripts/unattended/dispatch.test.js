@@ -1030,3 +1030,86 @@ test('sweep deletes lane ref with unparseable lease expiresAt', async () => {
   assert.equal(swept.deleted.includes(lane), true);
   assert.equal(client.exists(lane), false);
 });
+
+test('closing fence marker with trailing text leaves embedded ## Files inside the fence', () => {
+  const body = [
+    '```',
+    'example plan:',
+    '## Files',
+    '- quoted.js',
+    '```not-a-close',
+    '## Files',
+    '- attacker.js',
+    '```',
+    '## Files',
+    '- frontend/real.ts',
+  ].join('\n');
+  const section = parseFilesSection(body);
+  assert.equal(section.kind, 'ok');
+  assert.deepEqual(section.files, ['frontend/real.ts']);
+});
+
+test('parseBuildOrderIssues rejects malformed entries such as 12oops', () => {
+  const { parseBuildOrderIssues } = require('./dispatch/build-order');
+  const ok = parseBuildOrderIssues('11, 12');
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.issues, [11, 12]);
+  const empty = parseBuildOrderIssues('  ');
+  assert.equal(empty.ok, true);
+  assert.deepEqual(empty.issues, []);
+  const bad = parseBuildOrderIssues('12oops,13');
+  assert.equal(bad.ok, false);
+  assert.equal(bad.reason, 'invalid_build_order');
+  assert.equal(bad.entry, '12oops');
+  const prefix = parseBuildOrderIssues('12oops');
+  assert.equal(prefix.ok, false);
+  assert.equal(prefix.entry, '12oops');
+});
+
+test('canary verify reports retry_requires_all_six_legs for previous-attempt outcomes', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { runCanaryVerify } = require('./dispatch/canary-verify');
+  const { canaryScratchRef } = require('./dispatch/constants');
+  const main = 'a'.repeat(40);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-retry-attempt-'));
+  const previousAttempt = 1;
+  const currentAttempt = 2;
+  const previousScratch = canaryScratchRef(CANARY_RUN_ID, previousAttempt);
+  const currentScratch = canaryScratchRef(CANARY_RUN_ID, currentAttempt);
+  for (let i = 0; i < 6; i += 1) {
+    fs.writeFileSync(
+      path.join(dir, `canary-outcome-${i}.json`),
+      JSON.stringify({
+        runId: CANARY_RUN_ID,
+        runAttempt: previousAttempt,
+        scratchRef: previousScratch,
+        kind: i === 0 ? 'canary_win' : 'canary_lose',
+        index: i,
+      }),
+    );
+  }
+  const client = createMockRefClient();
+  await client.createRef({ ref: currentScratch, sha: main });
+  await client.createRef({ ref: previousScratch, sha: main });
+  const logs = [];
+  const origErr = console.error;
+  console.error = (...args) => { logs.push(args.join(' ')); };
+  try {
+    const code = await runCanaryVerify(client, canaryVerifyOpts(client, {
+      mainSha: main,
+      artifactsDir: dir,
+      runId: CANARY_RUN_ID,
+      runAttempt: currentAttempt,
+    }));
+    assert.equal(code, 1);
+    assert.ok(logs.some((l) => l.includes('retry_requires_all_six_legs')));
+    assert.ok(!logs.some((l) => l.includes('run_binding_mismatch')));
+  } finally {
+    console.error = origErr;
+  }
+  assert.equal(client.exists(currentScratch), true);
+  assert.equal(client.exists(previousScratch), true);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

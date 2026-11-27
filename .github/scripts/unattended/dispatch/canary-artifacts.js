@@ -86,8 +86,18 @@ function evaluateCanaryOutcomes(outcomes) {
   return { ok: true, wins, loses, fatals, total: outcomes.length };
 }
 
+function canaryOutcomeArtifactName(runAttempt, index) {
+  return `canary-outcome-${runAttempt}-${index}`;
+}
+
+function canaryOutcomeArtifactPattern(runAttempt) {
+  return `canary-outcome-${runAttempt}-*`;
+}
+
 module.exports = {
   CANARY_LEG_COUNT,
   readCanaryOutcomesFromDir,
   evaluateCanaryOutcomes,
+  canaryOutcomeArtifactName,
+  canaryOutcomeArtifactPattern,
 };

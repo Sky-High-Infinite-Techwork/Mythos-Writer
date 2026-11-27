@@ -21,9 +21,15 @@ function isTrustedPlanAuthor(author) {
 }
 
 function fenceMarker(line) {
-  const m = line.match(/^(\s{0,3})(`{3,}|~{3,})/);
+  const m = String(line).match(/^(\s{0,3})(`{3,}|~{3,})(.*)$/);
   if (!m) return null;
-  return { indent: m[1].length, marker: m[2][0], length: m[2].length };
+  return {
+    indent: m[1].length,
+    marker: m[2][0],
+    length: m[2].length,
+    // CommonMark: a closing fence may have only trailing whitespace, not an info string.
+    isClosing: /^\s*$/.test(m[3]),
+  };
 }
 
 function stripFencedRegions(body) {
@@ -41,7 +47,7 @@ function stripFencedRegions(body) {
         open = fence;
         continue;
       }
-      if (fence.marker === open.marker && fence.length >= open.length) {
+      if (fence.isClosing && fence.marker === open.marker && fence.length >= open.length) {
         open = null;
       }
       continue;
@@ -96,6 +102,7 @@ function findOfficialPlan(comments) {
     return {
       commentId: comment.id,
       databaseId: comment.databaseId,
+      nodeId: comment.nodeId || comment.node_id || null,
       author: canonicalAuthorLogin(comment.author),
       body: comment.body,
       bodySha256,
@@ -109,16 +116,14 @@ function findOfficialPlan(comments) {
 
 async function verifyPlanCommentEditors(client, issueNumber, official) {
   if (!official || official.hold) return { hold: false };
-  const created = official.createdAt || '';
-  const updated = official.updatedAt || created;
-  const edited = Boolean(created && updated && updated !== created);
-  if (!edited) return { hold: false };
-
+  // Always fetch edit history. Matching or missing timestamps can still hide a
+  // same-second edit, so acceptance requires complete evidence for the body.
   if (!client || typeof client.issueCommentContentEdits !== 'function') {
     return { hold: true, reason: 'editor_verify_unavailable' };
   }
   const edits = await client.issueCommentContentEdits({
     issue: issueNumber,
+    commentNodeId: official.nodeId,
     commentDatabaseId: official.databaseId || official.commentId,
   });
   if (!edits.ok) {
@@ -132,10 +137,16 @@ async function verifyPlanCommentEditors(client, issueNumber, official) {
   if (edits.complete !== true) {
     return { hold: true, reason: 'editor_history_incomplete' };
   }
-  if (!Array.isArray(edits.editors) || edits.editors.length === 0) {
+  const editors = Array.isArray(edits.editors) ? edits.editors : [];
+  const created = official.createdAt || '';
+  const updated = official.updatedAt || '';
+  const timestampsDiffer = Boolean(created && updated && updated !== created);
+  // A known edit (timestamps differ) with no attributable editors is incomplete.
+  // Same-second or unedited comments may have an empty complete history.
+  if (timestampsDiffer && editors.length === 0) {
     return { hold: true, reason: 'editor_history_incomplete' };
   }
-  for (const editor of edits.editors || []) {
+  for (const editor of editors) {
     const login = canonicalAuthorLogin(editor);
     if (!OFFICIAL_PLAN_AUTHORS.has(login)) {
       return { hold: true, reason: 'untrusted_editor', editor: login };

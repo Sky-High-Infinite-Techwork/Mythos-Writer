@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 
 const { REPO, canaryScratchRef } = require('./constants');
-const { OID_HEX, UPDATE_REFS_REF_EXISTS } = require('./refs-graphql');
+const { OID_HEX } = require('./refs-graphql');
 const { createDispatchClients } = require('./dispatch-client');
 const { runDispatchPlan } = require('./dispatch-run');
 const { sweepDispatchRefs } = require('./claim');
@@ -19,6 +19,29 @@ function parseGithubRunIds() {
   return { ok: true, runId, runAttempt, scratchRef: canaryScratchRef(runId, runAttempt) };
 }
 
+const CANARY_OUTCOME_KEYS = ['kind', 'index', 'runId', 'runAttempt', 'scratchRef', 'reason'];
+const STABLE_WRITE_REASONS = new Set([
+  'switch_off',
+  'switch_read',
+  'switch_flipped',
+  'no_write_token',
+  'repo_node_id',
+]);
+
+function allowlistedCanaryOutcome(payload) {
+  const out = {};
+  for (const key of CANARY_OUTCOME_KEYS) {
+    if (payload[key] !== undefined && payload[key] !== null) out[key] = payload[key];
+  }
+  return out;
+}
+
+function stableCanaryWriteReason(result) {
+  const err = result && typeof result.error === 'string' ? result.error : '';
+  if (STABLE_WRITE_REASONS.has(err)) return err;
+  return 'write_failed';
+}
+
 function writeCanaryOutcome(payload) {
   const target = process.env.CANARY_OUTCOME_PATH;
   if (!target) return;
@@ -26,12 +49,12 @@ function writeCanaryOutcome(payload) {
   if (!ids.ok) return;
   fs.writeFileSync(
     target,
-    `${JSON.stringify({
+    `${JSON.stringify(allowlistedCanaryOutcome({
       runId: ids.runId,
       runAttempt: ids.runAttempt,
       scratchRef: ids.scratchRef,
       ...payload,
-    })}\n`,
+    }))}\n`,
     'utf8',
   );
 }
@@ -117,16 +140,13 @@ async function main(options = {}) {
       return 0;
     }
     if (result.refExists) {
-      console.log(JSON.stringify({
-        kind: 'canary_lose',
-        index,
-        errors: result.errors || [{ message: UPDATE_REFS_REF_EXISTS }],
-      }));
+      console.log(JSON.stringify(allowlistedCanaryOutcome({ kind: 'canary_lose', index })));
       writeCanaryOutcome({ kind: 'canary_lose', index });
       return 0;
     }
-    console.error(JSON.stringify({ kind: 'canary_fatal', index, errors: result.errors, error: result.error }));
-    writeCanaryOutcome({ kind: 'canary_fatal', index, errors: result.errors });
+    const reason = stableCanaryWriteReason(result);
+    console.error(JSON.stringify(allowlistedCanaryOutcome({ kind: 'canary_fatal', index, reason })));
+    writeCanaryOutcome({ kind: 'canary_fatal', index, reason });
     return 1;
   }
 
@@ -167,4 +187,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { main, writeCanaryOutcome };
+module.exports = { main, writeCanaryOutcome, allowlistedCanaryOutcome, stableCanaryWriteReason, CANARY_OUTCOME_KEYS };
