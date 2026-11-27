@@ -13,6 +13,8 @@ import {
   MAX_EARLY_CHUNKS,
   MAX_EARLY_CHUNK_CHARS,
   RESPONSE_INCOMPLETE_SUFFIX,
+  tryPushEarlyChunk,
+  takeEarlyLane,
   turnsForModelHistory,
   feedEndsWithUserPrompt,
 } from './useMiniAgentChat';
@@ -1002,6 +1004,7 @@ describe('useMiniAgentChat — failed-exchange tracking (SKY-1923 gate)', () => 
     expect(agentTurns).toHaveLength(1);
     expect(agentTurns[0]?.text).toBe(`${oversized} ${RESPONSE_INCOMPLETE_SUFFIX}`);
     expect(agentTurns[0]?.text).not.toContain('TAIL');
+    expect(agentTurns[0]?.incomplete).toBe(true);
   });
 
   it('early-chunk buffer keeps only the first MAX_EARLY_CHUNKS matching tokens', async () => {
@@ -1026,6 +1029,75 @@ describe('useMiniAgentChat — failed-exchange tracking (SKY-1923 gate)', () => 
     expect(agentTurns).toHaveLength(1);
     expect(agentTurns[0]?.text).toBe(`${'x'.repeat(MAX_EARLY_CHUNKS)} ${RESPONSE_INCOMPLETE_SUFFIX}`);
     expect(agentTurns[0]?.text).not.toContain('Y');
+    expect(agentTurns[0]?.incomplete).toBe(true);
+  });
+
+  it('first cap overflow latches: later smaller early chunks are refused (no mid-reply hole)', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('cut off')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('latch pin'); });
+    await act(async () => { await Promise.resolve(); });
+
+    // Fill the char budget almost to the cap, then overflow with a large
+    // chunk. A following smaller chunk would fit the leftover budget if
+    // the cap only skipped the oversized one — that is a silent hole.
+    const prefix = 'A'.repeat(MAX_EARLY_CHUNK_CHARS - 10);
+    act(() => { api.fireChunk(prefix, 'req-latch'); });
+    act(() => { api.fireChunk('B'.repeat(50), 'req-latch'); });
+    act(() => { api.fireChunk('small', 'req-latch'); });
+    act(() => { api.fireStreamStart('req-latch'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    const agentTurns = result.current.messages.filter((m) => m.role === 'agent');
+    expect(agentTurns).toHaveLength(1);
+    expect(agentTurns[0]?.text).toBe(`${prefix} ${RESPONSE_INCOMPLETE_SUFFIX}`);
+    expect(agentTurns[0]?.text).not.toContain('small');
+    expect(agentTurns[0]?.incomplete).toBe(true);
+  });
+
+  it('early-chunk caps are per requestId: foreign tokens cannot crowd out a matching chunk', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('cut off')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('cross cap'); });
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { api.fireChunk('F'.repeat(MAX_EARLY_CHUNK_CHARS), 'req-foreign'); });
+    act(() => {
+      for (let i = 0; i < MAX_EARLY_CHUNKS; i++) api.fireChunk('f', 'req-foreign-count');
+    });
+    act(() => { api.fireChunk('MINE', 'req-mine'); });
+    act(() => { api.fireStreamStart('req-mine'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    const agentTurns = result.current.messages.filter((m) => m.role === 'agent');
+    expect(agentTurns).toHaveLength(1);
+    expect(agentTurns[0]?.text).toBe(`MINE ${RESPONSE_INCOMPLETE_SUFFIX}`);
+    expect(agentTurns[0]?.text).not.toContain('F');
+    expect(agentTurns[0]?.incomplete).toBe(true);
+  });
+
+  it('tryPushEarlyChunk keeps a running char total and takeEarlyLane drops other requestIds', () => {
+    const lanes = new Map();
+    expect(tryPushEarlyChunk(lanes, 'a', 'abc')).toBe('accepted');
+    expect(lanes.get('a')?.chars).toBe(3);
+    expect(tryPushEarlyChunk(lanes, 'a', 'de')).toBe('accepted');
+    expect(lanes.get('a')?.chars).toBe(5);
+    expect(lanes.get('a')?.chars).toBe((lanes.get('a')?.chunks ?? []).join('').length);
+    expect(tryPushEarlyChunk(lanes, 'b', 'x')).toBe('accepted');
+    const taken = takeEarlyLane(lanes, 'a');
+    expect(taken?.chunks.join('')).toBe('abcde');
+    expect(taken?.chars).toBe(5);
+    expect(lanes.size).toBe(0);
   });
 
   it('Cancel after a mid-flight session switch does not show a cancel error in the new chat', async () => {

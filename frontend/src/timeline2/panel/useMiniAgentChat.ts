@@ -68,6 +68,53 @@ export const HARD_TIMEOUT_MS = 90_000;
 export const MAX_EARLY_CHUNKS = 1024;
 export const MAX_EARLY_CHUNK_CHARS = 262_144;
 
+/** Per-requestId early-chunk lane (caps and the running char total are scoped here). */
+export type EarlyChunkLane = { chunks: string[]; chars: number; overflowed: boolean };
+
+export type EarlyChunkLimits = { maxChunks: number; maxChars: number };
+
+const DEFAULT_EARLY_LIMITS: EarlyChunkLimits = {
+  maxChunks: MAX_EARLY_CHUNKS,
+  maxChars: MAX_EARLY_CHUNK_CHARS,
+};
+
+/**
+ * Push one early chunk into a per-requestId lane.
+ * Uses a running `lane.chars` total (linear). On the first overflow for that
+ * requestId the lane latches and later chunks are refused, so a dropped
+ * mid-reply token cannot be followed by a smaller accepted one.
+ */
+export function tryPushEarlyChunk(
+  lanes: Map<string, EarlyChunkLane>,
+  requestId: string,
+  chunk: string,
+  limits: EarlyChunkLimits = DEFAULT_EARLY_LIMITS,
+): 'accepted' | 'overflowed' | 'latched' {
+  let lane = lanes.get(requestId);
+  if (!lane) {
+    lane = { chunks: [], chars: 0, overflowed: false };
+    lanes.set(requestId, lane);
+  }
+  if (lane.overflowed) return 'latched';
+  if (lane.chunks.length >= limits.maxChunks || lane.chars + chunk.length > limits.maxChars) {
+    lane.overflowed = true;
+    return 'overflowed';
+  }
+  lane.chunks.push(chunk);
+  lane.chars += chunk.length;
+  return 'accepted';
+}
+
+/** Take one requestId's lane and drop the rest (stream-start flushes the buffer). */
+export function takeEarlyLane(
+  lanes: Map<string, EarlyChunkLane>,
+  requestId: string,
+): EarlyChunkLane | undefined {
+  const lane = lanes.get(requestId);
+  lanes.clear();
+  return lane;
+}
+
 export const RESPONSE_INCOMPLETE_SUFFIX = '(response incomplete)';
 
 type FailedExchange = {
@@ -158,8 +205,8 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
   const hardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const streamStartUnsubRef = useRef<(() => void) | null>(null);
   const chunkUnsubRef = useRef<(() => void) | null>(null);
-  /** Chunks that arrived before stream-start pinned this send's requestId. */
-  const earlyChunksRef = useRef<{ requestId: string; chunk: string }[]>([]);
+  /** Early chunks, budgeted per requestId, that arrived before stream-start. */
+  const earlyLanesRef = useRef<Map<string, EarlyChunkLane>>(new Map());
   const prevActiveSessionIdRef = useRef<string | null | undefined>(undefined);
 
   const canonicalSessionId = useCallback((id: string | undefined): string | undefined => {
@@ -262,7 +309,7 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
     clearStreamStartSub();
     clearChunkSub();
     mainRequestIdRef.current = null;
-    earlyChunksRef.current = [];
+    earlyLanesRef.current.clear();
     inFlightRef.current = null;
     setPendingPrompt(null);
     setPendingPromptInFeed(false);
@@ -314,7 +361,7 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
     setCanRetry(false);
     setStalled(false);
     streamAccumRef.current = '';
-    earlyChunksRef.current = [];
+    earlyLanesRef.current.clear();
 
     generationGenRef.current += 1;
     const gen = generationGenRef.current;
@@ -333,13 +380,11 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
         if (generationGenRef.current !== gen) return;
         mainRequestIdRef.current = requestId;
         // Stream-start and chunk travel on different IPC channels, so a
-        // chunk can land first. Keep matching early tokens; drop the rest.
-        const early = earlyChunksRef.current;
-        earlyChunksRef.current = [];
+        // chunk can land first. Keep this requestId's early tokens; drop the rest.
+        const lane = takeEarlyLane(earlyLanesRef.current, requestId);
         let flushed = false;
-        for (const c of early) {
-          if (c.requestId !== requestId) continue;
-          if (c.chunk) streamAccumRef.current += c.chunk;
+        for (const c of lane?.chunks ?? []) {
+          if (c) streamAccumRef.current += c;
           flushed = true;
         }
         if (flushed) {
@@ -362,14 +407,7 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
         if (!requestId) return;
         const mine = mainRequestIdRef.current;
         if (!mine) {
-          const buf = earlyChunksRef.current;
-          if (buf.length < MAX_EARLY_CHUNKS) {
-            let chars = 0;
-            for (const c of buf) chars += c.chunk.length;
-            if (chars + chunk.length <= MAX_EARLY_CHUNK_CHARS) {
-              buf.push({ requestId, chunk });
-            }
-          }
+          tryPushEarlyChunk(earlyLanesRef.current, requestId, chunk);
           return;
         }
         if (requestId !== mine) return;
