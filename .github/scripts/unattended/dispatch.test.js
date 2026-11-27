@@ -1481,7 +1481,9 @@ test('outcomesMatchRun treats string and number runAttempt as the same attempt',
   // row field is the string "2" and att is the number 2.
   assert.equal(outcomesMatchRun(rows(2), runId, '2'), true);
   assert.equal(outcomesMatchRun(rows('2'), runId, 2), true);
-  // Mismatched pairs must not match.
-  assert.equal(outcomesMatchRun(rows('2'), runId, 3), false);
-  assert.equal(outcomesMatchRun(rows(2), runId, '3'), false);
+  // Mismatch: scratchRef stays the expected attempt-2 ref, so only the
+  // runAttempt inequality can make these false (S19). A mutant that
+  // ignores runAttempt but still checks scratchRef would return true.
+  assert.equal(outcomesMatchRun(rows('3'), runId, 2), false);
+  assert.equal(outcomesMatchRun(rows(3), runId, '2'), false);
 });
