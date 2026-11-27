@@ -39,7 +39,7 @@ function workerLeaseSha(index, prefix = 'a') {
 
 async function concurrentSlotRace(client, slotIndex, workers, leaseShaForIndex) {
   const ref = slotRef(slotIndex);
-  const claimRefName = `${claimRef(0, 0)}-race`;
+  const claimRefName = claimRef(0, 99);
   const attempts = await Promise.all(
     Array.from({ length: workers }, (_, i) => {
       const leaseSha = leaseShaForIndex(i);
@@ -151,7 +151,7 @@ test('20-way concurrent race', async () => {
   assert.equal(race.fatal, 0);
   const win = race.attempts.find((row) => row.ok);
   assert.ok(win);
-  const claimRefName = `${claimRef(0, 0)}-race`;
+  const claimRefName = claimRef(0, 99);
   assert.equal(client.refs.get(race.ref), win.leaseSha);
   assert.equal(client.refs.get(claimRefName), win.leaseSha);
   const future = new Date(Date.now() + 3600000).toISOString();
@@ -1051,19 +1051,78 @@ test('closing fence marker with trailing text leaves embedded ## Files inside th
 
 test('parseBuildOrderIssues rejects malformed entries such as 12oops', () => {
   const { parseBuildOrderIssues } = require('./dispatch/build-order');
-  const ok = parseBuildOrderIssues('11, 12');
+  const ok = parseBuildOrderIssues('11,12');
   assert.equal(ok.ok, true);
   assert.deepEqual(ok.issues, [11, 12]);
-  const empty = parseBuildOrderIssues('  ');
-  assert.equal(empty.ok, true);
-  assert.deepEqual(empty.issues, []);
-  const bad = parseBuildOrderIssues('12oops,13');
-  assert.equal(bad.ok, false);
-  assert.equal(bad.reason, 'invalid_build_order');
-  assert.equal(bad.entry, '12oops');
+  assert.equal(parseBuildOrderIssues(null).ok, true);
+  assert.deepEqual(parseBuildOrderIssues(undefined).issues, []);
+  const cases = [
+    '12oops',
+    '+12',
+    '0x12',
+    '1e2',
+    '12.0',
+    '1.0',
+    '0x10',
+    '-1',
+    '0',
+    '\u0661\u0662', // Arabic-Indic 12
+    '\uff11\uff12', // full-width 12
+    '9007199254740993', // 2^53+1
+    ' 12',
+    '12 ',
+    '012',
+    '\u00a012', // NBSP then 12
+    '',
+    '  ',
+    ',',
+    '12,,13',
+    '12,',
+    ',12',
+    '12\n',
+  ];
+  for (const value of cases) {
+    const parsed = parseBuildOrderIssues(value);
+    assert.equal(parsed.ok, false, value);
+    assert.equal(parsed.reason, 'invalid_build_order', value);
+  }
+  const shrunk = parseBuildOrderIssues('12,,13');
+  assert.equal(shrunk.ok, false);
+  assert.equal(Array.isArray(shrunk.issues), false);
   const prefix = parseBuildOrderIssues('12oops');
   assert.equal(prefix.ok, false);
   assert.equal(prefix.entry, '12oops');
+});
+
+test('closing fence requires the same marker and at least the opener length', () => {
+  const { stripFencedRegions } = require('./dispatch/official-plan');
+  const tildeClose = [
+    '```',
+    '## Files',
+    '- trapped.ts',
+    '~~~',
+    '```',
+    '## Files',
+    '- frontend/real.ts',
+  ].join('\n');
+  assert.equal(stripFencedRegions(tildeClose).includes('trapped.ts'), false);
+  const tilde = parseFilesSection(tildeClose);
+  assert.equal(tilde.kind, 'ok');
+  assert.deepEqual(tilde.files, ['frontend/real.ts']);
+
+  const shortClose = [
+    '````',
+    '## Files',
+    '- trapped.ts',
+    '```',
+    '````',
+    '## Files',
+    '- frontend/real.ts',
+  ].join('\n');
+  assert.equal(stripFencedRegions(shortClose).includes('trapped.ts'), false);
+  const shorter = parseFilesSection(shortClose);
+  assert.equal(shorter.kind, 'ok');
+  assert.deepEqual(shorter.files, ['frontend/real.ts']);
 });
 
 test('canary verify reports retry_requires_all_six_legs for previous-attempt outcomes', async () => {
@@ -1112,4 +1171,139 @@ test('canary verify reports retry_requires_all_six_legs for previous-attempt out
   assert.equal(client.exists(currentScratch), true);
   assert.equal(client.exists(previousScratch), true);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('canary verify maps delete failures to a fixed reason and never logs raw error text', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { runCanaryVerify, STABLE_DELETE_REASONS } = require('./dispatch/canary-verify');
+  const main = 'a'.repeat(40);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-del-reason-'));
+  const scratch = canaryScratchRef(CANARY_RUN_ID, CANARY_RUN_ATTEMPT);
+  for (let i = 0; i < 6; i += 1) {
+    fs.writeFileSync(
+      path.join(dir, `canary-outcome-${i}.json`),
+      JSON.stringify({
+        runId: CANARY_RUN_ID,
+        runAttempt: CANARY_RUN_ATTEMPT,
+        scratchRef: scratch,
+        kind: i === 0 ? 'canary_win' : 'canary_lose',
+        index: i,
+      }),
+    );
+  }
+  const leak = 'GraphQL: expected OID 0000 was 1111, stderr=ghp_leaked_token HTTP 500 boom';
+  const client = createMockRefClient();
+  await client.createRef({ ref: scratch, sha: main });
+  const orig = client.deleteRef;
+  client.deleteRef = async (args) => {
+    const result = await orig.call(client, args);
+    return { ok: false, error: leak, stderr: leak, errors: [{ message: leak }], status: 500 };
+  };
+  const logs = [];
+  const origErr = console.error;
+  const origLog = console.log;
+  console.error = (...args) => { logs.push(args.join(' ')); };
+  console.log = (...args) => { logs.push(args.join(' ')); };
+  try {
+    const code = await runCanaryVerify(client, canaryVerifyOpts(client, {
+      mainSha: main,
+      artifactsDir: dir,
+    }));
+    assert.equal(code, 1);
+    const rows = logs.map((line) => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).filter(Boolean);
+    assert.ok(rows.length >= 1);
+    for (const row of rows) {
+      assert.deepEqual(Object.keys(row).sort(), ['kind', 'reason', 'ref'].sort());
+      assert.equal(row.kind, 'canary_verify_fail');
+      assert.equal(STABLE_DELETE_REASONS.has(row.reason), true, row.reason);
+      assert.equal(row.ref, scratch);
+      assert.equal(row.error, undefined);
+      assert.equal(row.stderr, undefined);
+      assert.equal(row.errors, undefined);
+    }
+    const dumped = logs.join('\n');
+    assert.equal(dumped.includes(leak), false);
+    assert.equal(dumped.includes('ghp_leaked_token'), false);
+    assert.equal(dumped.includes('GraphQL'), false);
+    assert.equal(dumped.includes('stderr'), false);
+    assert.equal(dumped.includes('HTTP 500'), false);
+  } finally {
+    console.error = origErr;
+    console.log = origLog;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('canary verify reports retry_requires_all_six_legs when a retry downloads fewer than six outcomes', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { runCanaryVerify } = require('./dispatch/canary-verify');
+  const main = 'a'.repeat(40);
+  const currentAttempt = 2;
+  const scratch = canaryScratchRef(CANARY_RUN_ID, currentAttempt);
+  const client = createMockRefClient();
+  await client.createRef({ ref: scratch, sha: main });
+
+  async function runWithFiles(count) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-retry-missing-'));
+    for (let i = 0; i < count; i += 1) {
+      fs.writeFileSync(
+        path.join(dir, `canary-outcome-${i}.json`),
+        JSON.stringify({
+          runId: CANARY_RUN_ID,
+          runAttempt: currentAttempt,
+          scratchRef: scratch,
+          kind: 'canary_lose',
+          index: i,
+        }),
+      );
+    }
+    const logs = [];
+    const origErr = console.error;
+    console.error = (...args) => { logs.push(args.join(' ')); };
+    try {
+      const code = await runCanaryVerify(client, canaryVerifyOpts(client, {
+        mainSha: main,
+        artifactsDir: dir,
+        runId: CANARY_RUN_ID,
+        runAttempt: currentAttempt,
+      }));
+      return { code, logs, dir };
+    } finally {
+      console.error = origErr;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  for (const count of [0, 5]) {
+    const { code, logs } = await runWithFiles(count);
+    assert.equal(code, 1, `count=${count}`);
+    assert.ok(logs.some((l) => l.includes('retry_requires_all_six_legs')), `count=${count}`);
+    assert.ok(!logs.some((l) => l.includes('run_binding_mismatch')), `count=${count}`);
+    assert.equal(client.exists(scratch), true);
+  }
+
+  const firstAttemptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-first-empty-'));
+  const firstLogs = [];
+  const origErr = console.error;
+  console.error = (...args) => { firstLogs.push(args.join(' ')); };
+  try {
+    const code = await runCanaryVerify(client, canaryVerifyOpts(client, {
+      mainSha: main,
+      artifactsDir: firstAttemptDir,
+      runId: CANARY_RUN_ID,
+      runAttempt: 1,
+    }));
+    assert.equal(code, 1);
+    assert.ok(firstLogs.some((l) => l.includes('run_binding_mismatch')));
+    assert.ok(!firstLogs.some((l) => l.includes('retry_requires_all_six_legs')));
+  } finally {
+    console.error = origErr;
+    fs.rmSync(firstAttemptDir, { recursive: true, force: true });
+  }
 });

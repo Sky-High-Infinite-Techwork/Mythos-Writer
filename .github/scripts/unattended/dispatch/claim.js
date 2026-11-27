@@ -11,6 +11,7 @@ const {
   clampLeaseMinutes,
 } = require('./constants');
 const { globsOverlap } = require('./path-policy');
+const { assertDispatchRef, stableDispatchMutationReason } = require('./refs-graphql');
 
 const REF_EXISTS = 'ref_exists';
 const LANE_REF_RE = /^refs\/mythos\/dispatch\/lane-\d{2}$/;
@@ -122,13 +123,13 @@ async function tryCreateRefPair(client, { laneRef, claimRef: claimRefName, lease
         laneRef,
         claimRef: claimRefName,
         rolledBack,
-        error: result.error || 'update_refs_failed',
+        reason: stableDispatchMutationReason(result.error, 'update_refs_failed'),
       }));
     }
     return {
       ok: false,
       fatal: true,
-      reason: result.error || 'update_refs_failed',
+      reason: stableDispatchMutationReason(result.error, 'update_refs_failed'),
       rolledBack,
     };
   }
@@ -139,7 +140,7 @@ async function tryCreateRefPair(client, { laneRef, claimRef: claimRefName, lease
   }
   if (laneOurs) await releaseOursIfHeld(client, laneRef, leaseSha, reReadSwitch);
   if (claimOurs) await releaseOursIfHeld(client, claimRefName, leaseSha, reReadSwitch);
-  return { ok: false, reason: result.error || 'create_failed', ambiguous: true };
+  return { ok: false, reason: stableDispatchMutationReason(result.error, 'create_failed'), ambiguous: true };
 }
 
 function computeWouldClaimSlot(refs, cap, payload, now = new Date()) {
@@ -212,14 +213,12 @@ async function releaseRefCas(client, ref, beforeOid, reReadSwitch) {
   }
   assertDispatchRefFromClaim(ref);
   const del = await client.deleteRef({ ref, beforeOid });
-  if (!del.ok) return { ok: false, reason: del.error || 'delete_failed' };
+  if (!del.ok) return { ok: false, reason: stableDispatchMutationReason(del.error, 'delete_failed') };
   return { ok: true };
 }
 
 function assertDispatchRefFromClaim(ref) {
-  if (!String(ref).startsWith('refs/mythos/dispatch/')) {
-    throw new Error(`dispatch ref expected: ${ref}`);
-  }
+  assertDispatchRef(ref);
 }
 
 async function releaseClaimPair(client, { laneRef, claimRef: claimRefName, leaseSha }, reReadSwitch) {

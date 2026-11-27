@@ -1,11 +1,9 @@
 'use strict';
 
 const { canaryScratchRef } = require('./constants');
-const { OID_HEX } = require('./refs-graphql');
+const { OID_HEX, stableDispatchDeleteReason, STABLE_DELETE_REASONS } = require('./refs-graphql');
 const { actWritesEnabled } = require('./switch');
-const { readCanaryOutcomesFromDir, evaluateCanaryOutcomes } = require('./canary-artifacts');
-
-const { CANARY_LEG_COUNT } = require('./canary-artifacts');
+const { readCanaryOutcomesFromDir, evaluateCanaryOutcomes, CANARY_LEG_COUNT } = require('./canary-artifacts');
 
 function outcomesMatchRun(outcomes, runId, runAttempt) {
   const rid = Number.parseInt(String(runId), 10);
@@ -75,6 +73,14 @@ async function runCanaryVerify(client, {
     return 1;
   }
 
+  const att = Number.parseInt(String(runAttempt), 10);
+  // download-artifact does not fail on a zero match, so a retry with fewer
+  // than six downloaded outcomes must be reported here, fail-closed.
+  if (Number.isInteger(att) && att > 1 && outcomes.length < CANARY_LEG_COUNT) {
+    console.error(JSON.stringify({ kind: 'canary_verify_fail', reason: 'retry_requires_all_six_legs' }));
+    return 1;
+  }
+
   if (!outcomesMatchRun(outcomes, runId, runAttempt)) {
     const reason = retryRequiresAllSixLegs(outcomes, runId, runAttempt)
       ? 'retry_requires_all_six_legs'
@@ -137,7 +143,8 @@ async function runCanaryVerify(client, {
   }
   const del = await client.deleteRef({ ref: row.ref, beforeOid: row.sha });
   if (!del.ok) {
-    console.error(JSON.stringify({ kind: 'canary_verify_delete_fail', error: del.error, ref: scratchRef }));
+    const reason = stableDispatchDeleteReason(del);
+    console.error(JSON.stringify({ kind: 'canary_verify_fail', reason, ref: scratchRef }));
     return 1;
   }
 
@@ -145,4 +152,4 @@ async function runCanaryVerify(client, {
   return 0;
 }
 
-module.exports = { runCanaryVerify, outcomesMatchRun, retryRequiresAllSixLegs };
+module.exports = { runCanaryVerify, outcomesMatchRun, retryRequiresAllSixLegs, stableDispatchDeleteReason, STABLE_DELETE_REASONS };

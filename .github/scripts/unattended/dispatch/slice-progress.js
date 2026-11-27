@@ -6,6 +6,7 @@ const {
   MAX_DISPATCH_ATTEMPTS,
 } = require('./constants');
 const { ZERO_OID } = require('./constants');
+const { stableDispatchMutationReason } = require('./refs-graphql');
 
 const ATTEMPTS_SCHEMA = 'mythos-dispatch-attempts/v1';
 
@@ -127,7 +128,7 @@ async function recordDispatchAttempt(client, issue, slice, options = {}) {
   const upd = beforeOid === ZERO_OID
     ? await client.createRef({ ref, sha: oid })
     : await client.renewRef({ ref, newOid: oid, beforeOid });
-  if (!upd.ok) return { ok: false, reason: upd.error || 'attempts_write_failed' };
+  if (!upd.ok) return { ok: false, reason: stableDispatchMutationReason(upd.error, 'attempts_write_failed') };
   if (client.setRefMessage) client.setRefMessage(ref, message);
   return { ok: true, count };
 }

@@ -655,11 +655,39 @@ test('sweep ok false when a delete fails', async () => {
 });
 
 test('assertDispatchRef rejects refs outside dispatch namespace', () => {
+  const { assertDispatchRef, ALLOWED_DISPATCH_REF } = require('./refs-graphql');
   const main = 'refs/heads/main';
   const oid = 'a'.repeat(40);
   assert.throws(() => refUpdateCreate(main, oid));
   assert.throws(() => refUpdateDelete(main, oid));
   assert.throws(() => refUpdateRenew(main, oid, oid));
+  const allowed = [
+    'refs/mythos/dispatch/lane-00',
+    'refs/mythos/dispatch/claim/12-0',
+    'refs/mythos/dispatch/attempts/12-0',
+    'refs/mythos/dispatch/done/12-0',
+    'refs/mythos/dispatch/canary/scratch-9-1',
+  ];
+  for (const ref of allowed) {
+    assert.equal(ALLOWED_DISPATCH_REF.test(ref), true, ref);
+    assert.equal(assertDispatchRef(ref), ref);
+  }
+  const lookalikes = [
+    'refs/mythos/dispatch/../heads/x',
+    'refs/mythos/dispatch/lane-00/../heads/main',
+    'refs/mythos/dispatch/lane-0',
+    'refs/mythos/dispatch/lane-000',
+    'refs/mythos/dispatch/canary/scratch-1',
+    'refs/mythos/dispatch/canary/other-1-1',
+    'refs/mythos/dispatch/',
+    'refs/mythos/dispatch/foo',
+    'refs/mythos/dispatch/lane-00-extra',
+  ];
+  for (const ref of lookalikes) {
+    assert.equal(ALLOWED_DISPATCH_REF.test(ref), false, ref);
+    assert.throws(() => assertDispatchRef(ref));
+    assert.throws(() => refUpdateCreate(ref, oid));
+  }
 });
 
 test('act hold when grade pass is not ok', async () => {
@@ -995,4 +1023,64 @@ test('invalid build-order entry holds before scanning the queue', async () => {
   assert.equal(listed, 0);
   assert.equal(fetchedIssue, 0);
   assertNoLaneOrClaimWrites(client);
+});
+
+test('invalid build-order hex entry holds before scanning the queue', async () => {
+  const client = createMockRefClient();
+  let listed = 0;
+  let fetchedIssue = 0;
+  client.listRefs = async () => {
+    listed += 1;
+    return { ok: true, refs: [] };
+  };
+  client.getIssue = async () => {
+    fetchedIssue += 1;
+    return { ok: true, issue: { state: 'open' } };
+  };
+  const logs = [];
+  const orig = console.log;
+  console.log = (...a) => logs.push(a.join(' '));
+  try {
+    const code = await runDispatchPlan(actEnv(client, {
+      readRepoVariableFn: async (_r, _t, n) => {
+        if (n === 'MYTHOS_BUILD_ORDER_ISSUES') return { ok: true, value: '0x12,13' };
+        if (n === 'MYTHOS_DISPATCH_LANE_CAP') return { ok: true, value: '5' };
+        return { ok: true, value: null };
+      },
+    }));
+    assert.equal(code, 1);
+    const hold = logs.map((l) => {
+      try { return JSON.parse(l); } catch { return null; }
+    }).find((row) => row && row.kind === 'dispatch_hold');
+    assert.ok(hold);
+    assert.equal(hold.reason, 'invalid_build_order');
+    assert.equal(hold.entry, '0x12');
+  } finally {
+    console.log = orig;
+  }
+  assert.equal(listed, 0);
+  assert.equal(fetchedIssue, 0);
+  assertNoLaneOrClaimWrites(client);
+});
+
+test('verifyPlanCommentEditors holds when edit history is not marked complete', async () => {
+  const official = findOfficialPlan([{
+    id: '1',
+    databaseId: 1,
+    nodeId: 'IC_kwDOIncomplete',
+    author: { login: 'SkyyPlayz' },
+    body: '## Files\n- a.ts',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  }]);
+  const client = {
+    issueCommentContentEdits: async () => ({
+      ok: true,
+      complete: false,
+      editors: [{ login: 'SkyyPlayz' }],
+    }),
+  };
+  const hold = await verifyPlanCommentEditors(client, 1, official);
+  assert.equal(hold.hold, true);
+  assert.equal(hold.reason, 'editor_history_incomplete');
 });

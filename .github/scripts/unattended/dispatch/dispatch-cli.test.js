@@ -323,3 +323,95 @@ test('dispatch-cli canary-ref second switch read failure is canary_fatal exit 1,
     console.error = origErr;
   }
 });
+
+test('allowlistedCanaryOutcome drops errors and other extra keys', () => {
+  const { allowlistedCanaryOutcome, writeCanaryOutcome } = require('./dispatch-cli');
+  const leaked = 'token=ghp_leaked stderr from updateRefs';
+  const cleaned = allowlistedCanaryOutcome({
+    kind: 'canary_fatal',
+    index: 0,
+    runId: 1,
+    runAttempt: 1,
+    scratchRef: 'refs/mythos/dispatch/canary/scratch-1-1',
+    reason: 'write_failed',
+    errors: [{ message: leaked }],
+    error: leaked,
+    stderr: leaked,
+  });
+  assert.equal(cleaned.errors, undefined);
+  assert.equal(cleaned.error, undefined);
+  assert.equal(cleaned.stderr, undefined);
+  assert.deepEqual(Object.keys(cleaned).sort(), [
+    'index', 'kind', 'reason', 'runAttempt', 'runId', 'scratchRef',
+  ].sort());
+  assert.equal(JSON.stringify(cleaned).includes(leaked), false);
+  assert.equal(JSON.stringify(cleaned).includes('ghp_leaked'), false);
+});
+
+test('writeCanaryOutcome drops injected errors from the artifact', async () => {
+  await withCanaryCliEnv({}, async (outcomePath) => {
+    const { writeCanaryOutcome } = require('./dispatch-cli');
+    writeCanaryOutcome({
+      kind: 'canary_fatal',
+      index: '2',
+      reason: 'write_failed',
+      errors: 'raw boom',
+      error: 'HTTP 500: ghp_leaked',
+    });
+    const outcome = readOutcome(outcomePath);
+    assert.equal(outcome.kind, 'canary_fatal');
+    assert.equal(outcome.error, undefined);
+    assert.equal(outcome.errors, undefined);
+    assert.equal(JSON.stringify(outcome).includes('ghp_leaked'), false);
+    assert.deepEqual(Object.keys(outcome).sort(), [
+      'index', 'kind', 'reason', 'runAttempt', 'runId', 'scratchRef',
+    ].sort());
+  });
+});
+
+test('dispatch-cli canary-ref lose log is allowlisted and omits the raw client result', async () => {
+  const origArgv = process.argv;
+  process.argv = ['node', 'dispatch-cli.js', 'canary-ref'];
+  const logs = [];
+  const origLog = console.log;
+  const origErr = console.error;
+  console.log = (...a) => logs.push(`log:${a.join(' ')}`);
+  console.error = (...a) => logs.push(`err:${a.join(' ')}`);
+  const leak = 'server-controlled diagnostic token=ghp_leaked and GraphQL boom';
+  try {
+    await withCanaryCliEnv({}, async (outcomePath) => {
+      const code = await main({
+        readDispatchSwitchesFn: switchesOn(),
+        createDispatchClientsFn: () => mockCombinedClient({
+          createRefImpl: async () => ({
+            ok: false,
+            refExists: true,
+            error: leak,
+            result: { error: leak, errors: [{ message: leak }] },
+          }),
+        }),
+      });
+      assert.equal(code, 0);
+      const outcome = readOutcome(outcomePath);
+      assert.equal(outcome.kind, 'canary_lose');
+      assert.equal(outcome.error, undefined);
+      assert.equal(outcome.result, undefined);
+      const dumped = `${JSON.stringify(outcome)}\n${logs.join('\n')}`;
+      assert.equal(dumped.includes(leak), false);
+      assert.equal(dumped.includes('ghp_leaked'), false);
+      assert.ok(logs.some((l) => l.includes('canary_lose')));
+      const loseLines = logs.filter((l) => l.includes('canary_lose'));
+      for (const line of loseLines) {
+        const json = line.replace(/^log:|^err:/, '');
+        const row = JSON.parse(json);
+        assert.equal(row.result, undefined);
+        assert.equal(row.error, undefined);
+        assert.equal(row.errors, undefined);
+      }
+    });
+  } finally {
+    process.argv = origArgv;
+    console.log = origLog;
+    console.error = origErr;
+  }
+});

@@ -186,8 +186,8 @@ async function main(options = {}) {
 if (require.main === module) {
   main()
     .then((code) => process.exit(code))
-    .catch((err) => {
-      console.error(err);
+    .catch(() => {
+      console.error(JSON.stringify({ kind: 'dispatch_cli_fail', reason: 'unhandled' }));
       process.exit(1);
     });
 }

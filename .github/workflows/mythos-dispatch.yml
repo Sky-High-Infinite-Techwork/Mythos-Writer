@@ -357,11 +357,6 @@ jobs:
           pattern: canary-outcome-${{ github.run_attempt }}-*
           merge-multiple: true
           path: canary-outcomes
-      - name: Report when a retry must rerun all six canary legs
-        if: failure() && steps.download.outcome == 'failure'
-        run: |
-          echo "retry_requires_all_six_legs: canary-verify cannot reuse outcomes from a previous attempt; rerun all six canary legs"
-          exit 1
       - name: Assert single scratch ref and CAS delete
         if: ${{ success() && steps.write.outcome == 'success' && steps.install-check.outcome == 'success' }}
         env:

@@ -84,7 +84,7 @@ async function runDispatchPlan(env) {
   const leaseMinutes = clampLeaseMinutes(
     leaseVar.ok && leaseVar.value ? leaseVar.value : DEFAULT_LEASE_MINUTES,
   );
-  const parsedOrder = parseBuildOrderIssues(orderVar.value || '');
+  const parsedOrder = parseBuildOrderIssues(orderVar.unset ? null : orderVar.value);
   if (!parsedOrder.ok) {
     console.log(JSON.stringify({
       kind: 'dispatch_hold',
@@ -192,7 +192,7 @@ async function runDispatchPlan(env) {
     const leasePayload = buildLeasePayload({
       issue: issueNumber,
       slice: slice.index,
-      planCommentId: official.databaseId || official.commentId,
+      planCommentId: official.commentId == null ? null : String(official.commentId),
       planBodySha256: official.bodySha256,
       files: slice.files,
       runId: env.RUN_ID || 0,
@@ -356,7 +356,7 @@ async function runDispatchPlan(env) {
       slot: claim.slot,
       laneRef: claim.ref,
       claimRef: claim.claimRef,
-      planCommentId: official.commentId,
+      planCommentId: official.commentId == null ? null : String(official.commentId),
     }));
     return 0;
   }

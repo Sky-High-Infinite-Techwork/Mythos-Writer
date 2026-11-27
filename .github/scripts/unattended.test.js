@@ -907,7 +907,11 @@ test('mythos-dispatch schedule never claims; discover uses mythos-control', () =
   assert.match(text, /actions\/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4\.3\.0/);
   assert.match(text, /name: canary-outcome-\$\{\{ github\.run_attempt \}\}-\$\{\{ matrix\.index \}\}/);
   assert.match(text, /pattern: canary-outcome-\$\{\{ github\.run_attempt \}\}-\*/);
-  assert.match(text, /retry_requires_all_six_legs/);
+  assert.doesNotMatch(text, /steps\.download\.outcome == 'failure'/);
+  assert.match(text, /CANARY_ARTIFACTS_DIR: canary-outcomes/);
+  const verifySrc = fs.readFileSync(path.join(__dirname, 'unattended/dispatch/canary-verify.js'), 'utf8');
+  assert.match(verifySrc, /retry_requires_all_six_legs/);
+  assert.match(verifySrc, /att > 1 && outcomes\.length < CANARY_LEG_COUNT/);
   const { canaryOutcomeArtifactName, canaryOutcomeArtifactPattern } = require('./unattended/dispatch/canary-artifacts');
   assert.equal(canaryOutcomeArtifactName('${{ github.run_attempt }}', '${{ matrix.index }}'), 'canary-outcome-${{ github.run_attempt }}-${{ matrix.index }}');
   assert.equal(canaryOutcomeArtifactPattern('${{ github.run_attempt }}'), 'canary-outcome-${{ github.run_attempt }}-*');

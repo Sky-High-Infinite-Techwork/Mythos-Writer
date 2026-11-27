@@ -3,13 +3,11 @@
 function parseBuildOrderIssues(raw) {
   if (raw === null || raw === undefined) return { ok: true, issues: [] };
   if (typeof raw !== 'string') return { ok: false, reason: 'invalid_build_order', entry: String(raw) };
-  const text = raw.trim();
-  if (!text) return { ok: true, issues: [] };
+  // No trimming: surrounding space, NBSP, leading zeros, empty slots and
+  // scientific/hex forms must hold the whole list, not shrink or coerce.
   const issues = [];
-  for (const part of text.split(',')) {
-    const entry = part.trim();
-    if (!entry) continue;
-    if (!/^\d+$/.test(entry)) {
+  for (const entry of raw.split(',')) {
+    if (!/^[1-9]\d*$/.test(entry)) {
       return { ok: false, reason: 'invalid_build_order', entry };
     }
     const n = Number(entry);

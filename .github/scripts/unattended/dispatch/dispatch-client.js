@@ -215,7 +215,7 @@ function createDispatchClients({
           `${base}/issues/${issue}/comments`,
           '--paginate',
           '--jq',
-          '.[] | {id, node_id, body, created_at, updated_at, user: {login: .user.login, type: .user.type}}',
+          '.[] | {id: (.id|tostring), node_id, body, created_at, updated_at, user: {login: .user.login, type: .user.type}}',
         ],
         readToken,
       );
@@ -226,8 +226,8 @@ function createDispatchClients({
         if (!row) return { ok: false, comments: [], error: 'comment_parse' };
         const bot = row.user && row.user.type === 'Bot';
         comments.push({
-          id: String(row.id),
-          databaseId: row.id,
+          id: row.id == null ? '' : String(row.id),
+          databaseId: row.id == null ? null : String(row.id),
           nodeId: row.node_id || null,
           body: row.body,
           createdAt: row.created_at,

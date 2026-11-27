@@ -389,6 +389,9 @@ test('issueComments maps JSONL paginate output including Bot authors', async () 
   const gh = (args) => {
     const flat = args.map((a) => String(a));
     if (flat.some((a) => a.includes('/issues/') && a.includes('/comments'))) {
+      const jq = flat[flat.indexOf('--jq') + 1] || '';
+      assert.match(jq, /\bnode_id\b/);
+      assert.match(jq, /tostring/);
       return {
         status: 0,
         stdout: [
@@ -420,8 +423,10 @@ test('issueComments maps JSONL paginate output including Bot authors', async () 
   assert.equal(listed.comments[0].author.__typename, 'Bot');
   assert.equal(listed.comments[0].author.login, 'dependabot[bot]');
   assert.equal(listed.comments[0].nodeId, 'IC_kwDOBot11');
+  assert.equal(listed.comments[0].id, '11');
   assert.equal(listed.comments[1].author.__typename, 'User');
   assert.equal(listed.comments[1].nodeId, 'IC_kwDOUser12');
+  assert.equal(listed.comments[1].id, '12');
 });
 
 test('getIssue failed gh exit does not masquerade as success', async () => {
@@ -482,7 +487,8 @@ test('issueCommentContentEdits matches a REST comment ID above 32-bit GraphQL da
   const { read } = createDispatchClients({ readToken: 'r', gh });
   const listed = await read.issueComments({ issue: 1 });
   assert.equal(listed.ok, true);
-  assert.equal(listed.comments[0].databaseId, LARGE_ID);
+  assert.equal(listed.comments[0].id, String(LARGE_ID));
+  assert.equal(listed.comments[0].databaseId, String(LARGE_ID));
   assert.equal(listed.comments[0].nodeId, NODE_ID);
   const { findOfficialPlan } = require('./official-plan');
   const official = findOfficialPlan(listed.comments);
@@ -504,4 +510,80 @@ test('issueCommentContentEdits matches a REST comment ID above 32-bit GraphQL da
   });
   assert.equal(missing.ok, false);
   assert.equal(missing.error, 'bad_comment');
+});
+
+test('issueCommentContentEdits fails closed when the echoed node id does not match', async () => {
+  const NODE_ID = 'IC_kwDORequested';
+  const gh = (_args, _tok, input) => {
+    if (_args.includes('graphql')) {
+      const body = JSON.parse(input);
+      assert.equal(body.variables.id, NODE_ID);
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          data: {
+            node: {
+              id: 'IC_kwDODifferent',
+              userContentEdits: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [],
+              },
+            },
+          },
+        }),
+      };
+    }
+    return { status: 0, stdout: '' };
+  };
+  const { read } = createDispatchClients({ readToken: 'r', gh });
+  const edits = await read.issueCommentContentEdits({ issue: 1, commentNodeId: NODE_ID });
+  assert.equal(edits.ok, false);
+  assert.equal(edits.error, 'graphql_parse');
+});
+
+test('issueComments keeps plan comment IDs as strings above Number.MAX_SAFE_INTEGER', async () => {
+  const HUGE = '9007199254740993';
+  const NODE_ID = 'IC_kwDOHugeComment';
+  const gh = (args) => {
+    const flat = args.map((a) => String(a));
+    if (flat.some((a) => a.includes('/issues/') && a.includes('/comments'))) {
+      const jq = flat[flat.indexOf('--jq') + 1] || '';
+      assert.match(jq, /tostring/);
+      assert.match(jq, /\bnode_id\b/);
+      const asNumber = JSON.parse(JSON.stringify({ id: 9007199254740993 })).id;
+      assert.notEqual(String(asNumber), HUGE);
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          id: HUGE,
+          node_id: NODE_ID,
+          body: '## Files\n- frontend/a.ts',
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+          user: { login: 'SkyyPlayz', type: 'User' },
+        }),
+      };
+    }
+    return { status: 0, stdout: '' };
+  };
+  const { read } = createDispatchClients({ readToken: 'r', gh });
+  const listed = await read.issueComments({ issue: 7 });
+  assert.equal(listed.ok, true);
+  assert.equal(listed.comments[0].id, HUGE);
+  assert.equal(listed.comments[0].databaseId, HUGE);
+  assert.equal(listed.comments[0].nodeId, NODE_ID);
+  const official = require('./official-plan').findOfficialPlan(listed.comments);
+  assert.equal(official.commentId, HUGE);
+  const { buildLeasePayload } = require('./claim');
+  const lease = buildLeasePayload({
+    issue: 7,
+    slice: 0,
+    planCommentId: official.commentId == null ? null : String(official.commentId),
+    planBodySha256: official.bodySha256,
+    files: official.files,
+  });
+  assert.equal(lease.planCommentId, HUGE);
+  assert.equal(typeof lease.planCommentId, 'string');
+  const parsed = JSON.parse(JSON.stringify(lease));
+  assert.equal(parsed.planCommentId, HUGE);
 });
