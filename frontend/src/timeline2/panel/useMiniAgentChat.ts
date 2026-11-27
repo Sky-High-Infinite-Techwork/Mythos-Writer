@@ -67,15 +67,53 @@ export const HARD_TIMEOUT_MS = 90_000;
  */
 export const MAX_EARLY_CHUNKS = 1024;
 export const MAX_EARLY_CHUNK_CHARS = 262_144;
+/**
+ * Global bounds on the early buffer, across all requestId lanes:
+ * - MAX_EARLY_LANES: at most this many lanes (bounds Map entries and, with the
+ *   per-lane count cap, total chunks to MAX_EARLY_LANES x MAX_EARLY_CHUNKS).
+ * - MAX_EARLY_TOTAL_CHARS: one running char budget shared by all lanes
+ *   (linear, like the per-lane running total). Set to 2x the per-lane cap so a
+ *   single full foreign lane can never starve the matching request (S10).
+ *
+ * Policy: refuse, never evict. Before stream-start we cannot tell which id is
+ * ours, so eviction would let a flood of foreign ids push out our own lane.
+ * A NEW id is refused once the lane table is full; a chunk that would pass the
+ * global char budget latches its lane, exactly like a per-lane overflow (S8).
+ * Residual starvation (accepted): our lane can still be starved before
+ * stream-start by 8 foreign ids (lane cap) OR by just 2 full foreign lanes
+ * (2 x MAX_EARLY_CHUNK_CHARS uses the whole char budget). One full foreign lane
+ * cannot. Main sends our stream-start before our token loop, so our id is
+ * normally among the first lanes. If our tokens were dropped anyway, the hook latches
+ * our request at stream-start (`earlyLaneLost`): no later token is appended,
+ * so a failure partial never has a hole or a missing head.
+ */
+export const MAX_EARLY_LANES = 8;
+export const MAX_EARLY_TOTAL_CHARS = 2 * MAX_EARLY_CHUNK_CHARS;
 
 /** Per-requestId early-chunk lane (caps and the running char total are scoped here). */
 export type EarlyChunkLane = { chunks: string[]; chars: number; overflowed: boolean };
 
-export type EarlyChunkLimits = { maxChunks: number; maxChars: number };
+/**
+ * Per-request early lanes, plus a running char total across all lanes and a
+ * sticky flag set when a new requestId was refused because the table was full.
+ */
+export type EarlyChunkLanes = Map<string, EarlyChunkLane> & {
+  totalChars?: number;
+  refusedNewId?: boolean;
+};
+
+export type EarlyChunkLimits = {
+  maxChunks: number;
+  maxChars: number;
+  maxLanes: number;
+  maxTotalChars: number;
+};
 
 const DEFAULT_EARLY_LIMITS: EarlyChunkLimits = {
   maxChunks: MAX_EARLY_CHUNKS,
   maxChars: MAX_EARLY_CHUNK_CHARS,
+  maxLanes: MAX_EARLY_LANES,
+  maxTotalChars: MAX_EARLY_TOTAL_CHARS,
 };
 
 /**
@@ -83,36 +121,66 @@ const DEFAULT_EARLY_LIMITS: EarlyChunkLimits = {
  * Uses a running `lane.chars` total (linear). On the first overflow for that
  * requestId the lane latches and later chunks are refused, so a dropped
  * mid-reply token cannot be followed by a smaller accepted one.
+ * Global bounds: a new requestId is refused once `maxLanes` lanes exist, and a
+ * chunk that would pass `maxTotalChars` across all lanes latches its lane.
  */
 export function tryPushEarlyChunk(
-  lanes: Map<string, EarlyChunkLane>,
+  lanes: EarlyChunkLanes,
   requestId: string,
   chunk: string,
   limits: EarlyChunkLimits = DEFAULT_EARLY_LIMITS,
-): 'accepted' | 'overflowed' | 'latched' {
+): 'accepted' | 'overflowed' | 'latched' | 'refused' {
   let lane = lanes.get(requestId);
   if (!lane) {
+    if (lanes.size >= limits.maxLanes) {
+      lanes.refusedNewId = true;
+      return 'refused';
+    }
     lane = { chunks: [], chars: 0, overflowed: false };
     lanes.set(requestId, lane);
   }
   if (lane.overflowed) return 'latched';
-  if (lane.chunks.length >= limits.maxChunks || lane.chars + chunk.length > limits.maxChars) {
+  const total = lanes.totalChars ?? 0;
+  if (
+    lane.chunks.length >= limits.maxChunks
+    || lane.chars + chunk.length > limits.maxChars
+    || total + chunk.length > limits.maxTotalChars
+  ) {
     lane.overflowed = true;
     return 'overflowed';
   }
   lane.chunks.push(chunk);
   lane.chars += chunk.length;
+  lanes.totalChars = total + chunk.length;
   return 'accepted';
+}
+
+/** Clear every lane, the global running total and the refused-id flag. */
+export function clearEarlyLanes(lanes: EarlyChunkLanes): void {
+  lanes.clear();
+  lanes.totalChars = 0;
+  lanes.refusedNewId = false;
 }
 
 /** Take one requestId's lane and drop the rest (stream-start flushes the buffer). */
 export function takeEarlyLane(
-  lanes: Map<string, EarlyChunkLane>,
+  lanes: EarlyChunkLanes,
   requestId: string,
 ): EarlyChunkLane | undefined {
   const lane = lanes.get(requestId);
-  lanes.clear();
+  clearEarlyLanes(lanes);
   return lane;
+}
+
+/**
+ * True when some of this request's early tokens were dropped: its lane
+ * overflowed (S8 latch), or it has no lane while a new id was refused because
+ * the table was full (it may have been ours). Call before takeEarlyLane.
+ */
+export function earlyLaneLost(lanes: EarlyChunkLanes, requestId: string): boolean {
+  const lane = lanes.get(requestId);
+  if (lane) return lane.overflowed;
+  return lanes.refusedNewId === true;
 }
 
 export const RESPONSE_INCOMPLETE_SUFFIX = '(response incomplete)';
@@ -206,7 +274,14 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
   const streamStartUnsubRef = useRef<(() => void) | null>(null);
   const chunkUnsubRef = useRef<(() => void) | null>(null);
   /** Early chunks, budgeted per requestId, that arrived before stream-start. */
-  const earlyLanesRef = useRef<Map<string, EarlyChunkLane>>(new Map());
+  const earlyLanesRef = useRef<EarlyChunkLanes>(new Map());
+  /**
+   * Set at stream-start when this request lost early tokens. Later chunks are
+   * not kept, so a failure partial never has a hole (they still re-arm timers).
+   * Reset once per request in send(); sticky within the request, so a repeated
+   * stream-start (lanes already empty) cannot un-latch it.
+   */
+  const mineLatchedRef = useRef(false);
   const prevActiveSessionIdRef = useRef<string | null | undefined>(undefined);
 
   const canonicalSessionId = useCallback((id: string | undefined): string | undefined => {
@@ -309,7 +384,7 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
     clearStreamStartSub();
     clearChunkSub();
     mainRequestIdRef.current = null;
-    earlyLanesRef.current.clear();
+    clearEarlyLanes(earlyLanesRef.current);
     inFlightRef.current = null;
     setPendingPrompt(null);
     setPendingPromptInFeed(false);
@@ -361,7 +436,11 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
     setCanRetry(false);
     setStalled(false);
     streamAccumRef.current = '';
-    earlyLanesRef.current.clear();
+    mineLatchedRef.current = false;
+    // Early lanes are not cleared here: every path that ends a
+    // request (finally, Cancel, hard timeout) runs resetInFlight, which clears
+    // them and drops the chunk subscription, so nothing refills them between
+    // requests. A test pins "early buffer empty after a request ends" (S12).
 
     generationGenRef.current += 1;
     const gen = generationGenRef.current;
@@ -381,6 +460,7 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
         mainRequestIdRef.current = requestId;
         // Stream-start and chunk travel on different IPC channels, so a
         // chunk can land first. Keep this requestId's early tokens; drop the rest.
+        if (earlyLaneLost(earlyLanesRef.current, requestId)) mineLatchedRef.current = true;
         const lane = takeEarlyLane(earlyLanesRef.current, requestId);
         let flushed = false;
         for (const c of lane?.chunks ?? []) {
@@ -411,7 +491,7 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
           return;
         }
         if (requestId !== mine) return;
-        if (chunk) streamAccumRef.current += chunk;
+        if (chunk && !mineLatchedRef.current) streamAccumRef.current += chunk;
         setStalled(false);
         scheduleStallTimers(gen);
       });

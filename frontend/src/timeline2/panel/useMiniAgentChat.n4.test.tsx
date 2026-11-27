@@ -12,6 +12,8 @@ import {
   STALL_WARNING_MS,
   MAX_EARLY_CHUNKS,
   MAX_EARLY_CHUNK_CHARS,
+  MAX_EARLY_LANES,
+  MAX_EARLY_TOTAL_CHARS,
   RESPONSE_INCOMPLETE_SUFFIX,
   tryPushEarlyChunk,
   takeEarlyLane,
@@ -84,6 +86,26 @@ afterEach(() => {
   __resetAgentSessionStores();
   delete (window as unknown as { api?: unknown }).api;
 });
+
+// Capture the hook's early-buffer Map(s) by watching Map.prototype.set while a
+// flood is fired (lifted from Critic's scratch). Only used by the flood tests.
+type CapturedEarly = { maps: Map<string, { chunks: string[]; chars: number }>[] };
+function captureEarly(): { cap: CapturedEarly; restore: () => void } {
+  const cap: CapturedEarly = { maps: [] };
+  const origSet = Map.prototype.set;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (Map.prototype as any).set = function (k: unknown, v: any) {
+    if (v && typeof v === 'object' && Array.isArray(v.chunks) && typeof v.chars === 'number' && !cap.maps.includes(this)) cap.maps.push(this);
+    return origSet.call(this, k, v);
+  };
+  return { cap, restore: () => { Map.prototype.set = origSet; } };
+}
+function retained(cap: CapturedEarly): { chars: number; lanes: number } {
+  let chars = 0;
+  let lanes = 0;
+  for (const m of cap.maps) for (const l of m.values()) { chars += l.chunks.reduce((n, c) => n + c.length, 0); lanes += 1; }
+  return { chars, lanes };
+}
 
 describe('useMiniAgentChat N4 cancel/stall main abort', () => {
   it('Cancel aborts the in-flight request in MAIN via cancelAiActivity', async () => {
@@ -1098,6 +1120,308 @@ describe('useMiniAgentChat — failed-exchange tracking (SKY-1923 gate)', () => 
     expect(taken?.chunks.join('')).toBe('abcde');
     expect(taken?.chars).toBe(5);
     expect(lanes.size).toBe(0);
+  });
+
+  it('early buffer has a global lane bound: a flood of distinct requestIds is refused', () => {
+    const lanes = new Map();
+    const flood = 1000;
+    const results: string[] = [];
+    for (let i = 0; i < flood; i++) {
+      results.push(tryPushEarlyChunk(lanes, `flood-${i}`, 'z'.repeat(1024)));
+    }
+    expect(MAX_EARLY_LANES).toBeGreaterThan(0);
+    expect(lanes.size).toBe(MAX_EARLY_LANES);
+    expect(results.filter((r) => r === 'accepted')).toHaveLength(MAX_EARLY_LANES);
+    expect(results.filter((r) => r === 'refused')).toHaveLength(flood - MAX_EARLY_LANES);
+    let total = 0;
+    for (const lane of lanes.values()) total += lane.chars;
+    expect(total).toBeLessThanOrEqual(MAX_EARLY_TOTAL_CHARS);
+    // Existing lanes keep their per-id budget; a refused id stays refused.
+    expect(tryPushEarlyChunk(lanes, 'flood-0', 'more')).toBe('accepted');
+    expect(tryPushEarlyChunk(lanes, `flood-${flood - 1}`, 'more')).toBe('refused');
+  });
+
+  it('global char budget: a chunk past MAX_EARLY_TOTAL_CHARS latches its lane, running total stays linear', () => {
+    const lanes = new Map() as Parameters<typeof tryPushEarlyChunk>[0];
+    expect(MAX_EARLY_TOTAL_CHARS).toBe(2 * MAX_EARLY_CHUNK_CHARS);
+    expect(tryPushEarlyChunk(lanes, 'f1', 'F'.repeat(MAX_EARLY_CHUNK_CHARS))).toBe('accepted');
+    expect(tryPushEarlyChunk(lanes, 'f2', 'G'.repeat(MAX_EARLY_CHUNK_CHARS - 1))).toBe('accepted');
+    expect(lanes.totalChars).toBe(2 * MAX_EARLY_CHUNK_CHARS - 1);
+    expect(tryPushEarlyChunk(lanes, 'late', 'xy')).toBe('overflowed');
+    expect(tryPushEarlyChunk(lanes, 'late', 'z')).toBe('latched');
+    expect(tryPushEarlyChunk(lanes, 'f2', 'h')).toBe('accepted');
+    expect(lanes.totalChars).toBe(MAX_EARLY_TOTAL_CHARS);
+    takeEarlyLane(lanes, 'f1');
+    expect(lanes.size).toBe(0);
+    expect(lanes.totalChars).toBe(0);
+  });
+
+  for (const ids of [8, 64]) {
+    // Lifted from Critic's scratch (crew/critic/pr1923-df2f3c8a-scratch.test.tsx).
+    // Bound is MAX_EARLY_TOTAL_CHARS (2 x per-lane cap), not the old 256K total,
+    // so a single full foreign lane cannot starve the matching request (S10).
+    it(`FLOOD ${ids} distinct ids x 256K before stream-start stays within the global early bound`, async () => {
+      const api = installApi();
+      const invoke = vi.fn().mockImplementationOnce(() => new Promise<string>(() => {}));
+      const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+      await act(async () => { await Promise.resolve(); });
+      act(() => { void result.current.send('flood'); });
+      await act(async () => { await Promise.resolve(); });
+      const { cap, restore } = captureEarly();
+      try {
+        act(() => {
+          for (let i = 0; i < ids; i++) {
+            const s = String.fromCharCode(65 + (i % 26)).repeat(MAX_EARLY_CHUNK_CHARS - 8) + String(i).padStart(8, '0');
+            api.fireChunk(s, `flood-${i}`);
+          }
+        });
+      } finally { restore(); }
+      const r = retained(cap);
+      expect(r.chars).toBeLessThanOrEqual(2 * MAX_EARLY_CHUNK_CHARS);
+      expect(r.lanes).toBeLessThanOrEqual(MAX_EARLY_LANES);
+    });
+  }
+
+  it('early buffer is empty after a request ends without stream-start (S12)', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('no start')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+    act(() => { void result.current.send('ends early'); });
+    await act(async () => { await Promise.resolve(); });
+    const { cap, restore } = captureEarly();
+    try {
+      act(() => {
+        for (let i = 0; i < 4; i++) api.fireChunk('E'.repeat(1000), `req-nostart-${i}`);
+      });
+    } finally { restore(); }
+    expect(retained(cap).chars).toBe(4000);
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+    expect(retained(cap)).toEqual({ chars: 0, lanes: 0 });
+    expect(result.current.messages.filter((m) => m.role === 'agent')).toHaveLength(0);
+  });
+
+  it('latch resets: a new send after an overflowed request buffers the same requestId normally', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('x')); }))
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('y')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+    act(() => { void result.current.send('one'); });
+    await act(async () => { await Promise.resolve(); });
+    act(() => { api.fireChunk('Z'.repeat(MAX_EARLY_CHUNK_CHARS + 1), 'req-same'); });
+    act(() => { api.fireStreamStart('req-same'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+    act(() => { void result.current.send('two'); });
+    await act(async () => { await Promise.resolve(); });
+    act(() => { api.fireChunk('fresh', 'req-same'); });
+    act(() => { api.fireStreamStart('req-same'); });
+    act(() => { api.fireChunk('LIVE', 'req-same'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+    const agent = result.current.messages.filter((m) => m.role === 'agent');
+    expect(agent.at(-1)?.text).toBe(`freshLIVE ${RESPONSE_INCOMPLETE_SUFFIX}`);
+  });
+
+  it('two full foreign lanes use the whole char budget: our lane is latched, error + Retry still show', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('cut off')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+    act(() => { void result.current.send('two foreign'); });
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { api.fireChunk('F'.repeat(MAX_EARLY_CHUNK_CHARS), 'req-foreign-a'); });
+    act(() => { api.fireChunk('G'.repeat(MAX_EARLY_CHUNK_CHARS), 'req-foreign-b'); });
+    act(() => { api.fireChunk('HEAD', 'req-ours-starved'); });
+    act(() => { api.fireStreamStart('req-ours-starved'); });
+    act(() => { api.fireChunk('TAIL', 'req-ours-starved'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(result.current.messages.filter((m) => m.role === 'agent')).toHaveLength(0);
+    expect(result.current.messages.some((m) => m.text.includes('TAIL'))).toBe(false);
+    expect(result.current.error).toBeTruthy();
+    expect(result.current.canRetry).toBe(true);
+  });
+
+  it('two full foreign lanes: the success path still renders the full invoke reply', async () => {
+    const api = installApi();
+    let finish: (v: string) => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+    act(() => { void result.current.send('two foreign ok'); });
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { api.fireChunk('F'.repeat(MAX_EARLY_CHUNK_CHARS), 'req-foreign-a'); });
+    act(() => { api.fireChunk('G'.repeat(MAX_EARLY_CHUNK_CHARS), 'req-foreign-b'); });
+    act(() => { api.fireChunk('HEAD', 'req-ours-ok'); });
+    act(() => { api.fireStreamStart('req-ours-ok'); });
+    act(() => { api.fireChunk('TAIL', 'req-ours-ok'); });
+    await act(async () => { finish('HEADTAIL full reply.'); await Promise.resolve(); await Promise.resolve(); });
+
+    const agentTurns = result.current.messages.filter((m) => m.role === 'agent');
+    expect(agentTurns).toHaveLength(1);
+    expect(agentTurns[0]?.text).toBe('HEADTAIL full reply.');
+    expect(agentTurns[0]?.incomplete).not.toBe(true);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('global char total does not carry across sends: a request that ends without stream-start frees its budget', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('first')); }))
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('second')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('first'); });
+    await act(async () => { await Promise.resolve(); });
+    act(() => { api.fireChunk('F'.repeat(MAX_EARLY_CHUNK_CHARS), 'req-old-a'); });
+    act(() => { api.fireChunk('G'.repeat(MAX_EARLY_CHUNK_CHARS - 1000), 'req-old-b'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    act(() => { void result.current.send('second'); });
+    await act(async () => { await Promise.resolve(); });
+    const big = 'M'.repeat(200_000);
+    act(() => { api.fireChunk(big, 'req-new'); });
+    act(() => { api.fireStreamStart('req-new'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    const agentTurns = result.current.messages.filter((m) => m.role === 'agent');
+    expect(agentTurns).toHaveLength(1);
+    expect(agentTurns[0]?.text).toBe(`${big} ${RESPONSE_INCOMPLETE_SUFFIX}`);
+  });
+
+  it('overflow latch is per requestId: A overflowing does not latch B (helper)', () => {
+    const lanes = new Map() as Parameters<typeof tryPushEarlyChunk>[0];
+    expect(tryPushEarlyChunk(lanes, 'A', 'a'.repeat(MAX_EARLY_CHUNK_CHARS + 1))).toBe('overflowed');
+    expect(tryPushEarlyChunk(lanes, 'A', 'a')).toBe('latched');
+    expect(tryPushEarlyChunk(lanes, 'B', 'ok')).toBe('accepted');
+    expect(tryPushEarlyChunk(lanes, 'B', '!')).toBe('accepted');
+    expect(takeEarlyLane(lanes, 'B')?.chunks.join('')).toBe('ok!');
+  });
+
+  it('overflow latch is per requestId: foreign A overflows, our B still buffers and flushes', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('cut off')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+    act(() => { void result.current.send('two ids latch'); });
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { api.fireChunk('A'.repeat(MAX_EARLY_CHUNK_CHARS + 1), 'req-A'); });
+    act(() => { api.fireChunk('a', 'req-A'); });
+    act(() => { api.fireChunk('ok', 'req-B'); });
+    act(() => { api.fireStreamStart('req-B'); });
+    act(() => { api.fireChunk('LIVE', 'req-B'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    const agentTurns = result.current.messages.filter((m) => m.role === 'agent');
+    expect(agentTurns).toHaveLength(1);
+    expect(agentTurns[0]?.text).toBe(`okLIVE ${RESPONSE_INCOMPLETE_SUFFIX}`);
+  });
+
+  it('Probe H1 flood: 16 ids x one max chunk stays within the global early bound', () => {
+    const lanes = new Map() as Parameters<typeof tryPushEarlyChunk>[0];
+    for (let i = 0; i < 16; i++) tryPushEarlyChunk(lanes, `p-${i}`, 'q'.repeat(MAX_EARLY_CHUNK_CHARS));
+    let chars = 0;
+    let chunks = 0;
+    for (const lane of lanes.values()) { chars += lane.chars; chunks += lane.chunks.length; }
+    expect(chars).toBeLessThanOrEqual(MAX_EARLY_TOTAL_CHARS);
+    expect(chars).toBe(2 * MAX_EARLY_CHUNK_CHARS);
+    expect(lanes.size).toBeLessThanOrEqual(MAX_EARLY_LANES);
+    expect(chunks).toBeLessThanOrEqual(MAX_EARLY_LANES * MAX_EARLY_CHUNKS);
+    expect(lanes.totalChars).toBe(chars);
+  });
+
+  it('flood of foreign requestIds before stream-start: a refused own id keeps no holed partial', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('cut off')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('flood ids'); });
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => {
+      for (let i = 0; i < 64; i++) api.fireChunk('F'.repeat(4096), `req-flood-${i}`);
+    });
+    act(() => { api.fireChunk('HEAD', 'req-mine-flood'); });
+    act(() => { api.fireStreamStart('req-mine-flood'); });
+    act(() => { api.fireChunk('TAIL', 'req-mine-flood'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    // Our HEAD was refused (table full), so a TAIL-only partial would hide a
+    // missing head. No partial is kept; the error + Retry still show.
+    const agentTurns = result.current.messages.filter((m) => m.role === 'agent');
+    expect(agentTurns).toHaveLength(0);
+    expect(result.current.messages.some((m) => m.text.includes('TAIL'))).toBe(false);
+    expect(result.current.error).toBeTruthy();
+  });
+
+  it('own lane among the first MAX_EARLY_LANES survives a later flood of foreign ids', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('cut off')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('early own'); });
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { api.fireChunk('HEAD', 'req-own-first'); });
+    act(() => {
+      for (let i = 0; i < 64; i++) api.fireChunk('F', `req-later-flood-${i}`);
+    });
+    act(() => { api.fireStreamStart('req-own-first'); });
+    act(() => { api.fireChunk('TAIL', 'req-own-first'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    const agentTurns = result.current.messages.filter((m) => m.role === 'agent');
+    expect(agentTurns).toHaveLength(1);
+    expect(agentTurns[0]?.text).toBe(`HEADTAIL ${RESPONSE_INCOMPLETE_SUFFIX}`);
+    expect(agentTurns[0]?.incomplete).toBe(true);
+  });
+
+  it('own lane overflowed before stream-start: later streamed chunks are not appended (no hole)', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('cut off')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('latch across start'); });
+    await act(async () => { await Promise.resolve(); });
+
+    const prefix = 'A'.repeat(MAX_EARLY_CHUNK_CHARS - 10);
+    act(() => { api.fireChunk(prefix, 'req-latch-start'); });
+    act(() => { api.fireChunk('B'.repeat(50), 'req-latch-start'); });
+    act(() => { api.fireStreamStart('req-latch-start'); });
+    act(() => { api.fireChunk('TAIL', 'req-latch-start'); });
+    // A repeated stream-start (lanes already empty) must not un-latch.
+    act(() => { api.fireStreamStart('req-latch-start'); });
+    act(() => { api.fireChunk('TAIL2', 'req-latch-start'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    const agentTurns = result.current.messages.filter((m) => m.role === 'agent');
+    expect(agentTurns).toHaveLength(1);
+    expect(agentTurns[0]?.text).toBe(`${prefix} ${RESPONSE_INCOMPLETE_SUFFIX}`);
+    expect(agentTurns[0]?.text).not.toContain('TAIL');
+    expect(agentTurns[0]?.incomplete).toBe(true);
   });
 
   it('Cancel after a mid-flight session switch does not show a cancel error in the new chat', async () => {
