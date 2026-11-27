@@ -14,6 +14,7 @@ const test = require('node:test');
 const shard = require('./oracle-shard.js');
 
 const REPO = path.resolve(__dirname, '..', '..');
+const N = shard.SHARD_COUNT;
 
 function fakeRepo(files, script = 'vitest run --isolate=false src/a.sweep. src/b.only') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oracle-shard-'));
@@ -26,17 +27,17 @@ function fakeRepo(files, script = 'vitest run --isolate=false src/a.sweep. src/b
   return dir;
 }
 
-test('real tree: every oracle-sweep file is in exactly one of the 2 shards', () => {
+test('real tree: every oracle-sweep file is in exactly one of the shards', () => {
   const r = shard.main(['--verify']);
   assert.equal(r.code, 0, (r.err || []).join('\n'));
   const { filters } = shard.readScript(REPO);
   const files = shard.discoverFiles(REPO, filters);
   assert.ok(files.length > 30, `expected the full sweep file set, got ${files.length}`);
-  const s1 = shard.main(['--shard', '1/2']).out;
-  const s2 = shard.main(['--shard', '2/2']).out;
-  assert.deepEqual([...s1, ...s2].sort(), files);
-  assert.equal(new Set([...s1, ...s2]).size, files.length);
-  assert.ok(s1.length > 0 && s2.length > 0);
+  const parts = Array.from({ length: N }, (_, i) => shard.main(['--shard', `${i + 1}/${N}`]).out);
+  const all = parts.flat();
+  assert.deepEqual([...all].sort(), files);
+  assert.equal(new Set(all).size, files.length);
+  assert.ok(parts.every((p) => p.length > 0));
 });
 
 test('real tree: weights table matches the files on disk (no unmeasured or stale file)', () => {
@@ -47,10 +48,12 @@ test('real tree: weights table matches the files on disk (no unmeasured or stale
 test('real tree: shards are cost balanced and the split is deterministic', () => {
   const { filters } = shard.readScript(REPO);
   const files = shard.discoverFiles(REPO, filters);
-  const a = shard.plan(files, shard.WEIGHTS, 2);
-  const b = shard.plan([...files].reverse(), shard.WEIGHTS, 2);
+  const a = shard.plan(files, shard.WEIGHTS, N);
+  const b = shard.plan([...files].reverse(), shard.WEIGHTS, N);
   assert.deepEqual(a.bins, b.bins);
-  const [x, y] = a.bins.map((bin) => bin.seconds).sort((p, q) => q - p);
+  const secs = a.bins.map((bin) => bin.seconds).sort((p, q) => q - p);
+  const x = secs[0];
+  const y = secs[secs.length - 1];
   assert.ok(x / y < 1.1, `shards differ by more than 10%: ${x} vs ${y}`);
 });
 
@@ -64,7 +67,7 @@ test('verify fails when vitest lists a file the plan lacks, or the plan has a fi
   const { filters } = shard.readScript(dir);
   const files = shard.discoverFiles(dir, filters);
   assert.deepEqual(files, ['src/a.sweep.1.test.ts', 'src/a.sweep.2.test.ts', 'src/b.only.test.ts']);
-  const { bins } = shard.plan(files, {}, 2);
+  const { bins } = shard.plan(files, {}, N);
   assert.deepEqual(shard.verify(files, bins, files), []);
   assert.match(shard.verify(files, bins, [...files, 'src/new.test.ts']).join('\n'), /vitest lists src\/new\.test\.ts/);
   assert.match(shard.verify(files, bins, files.slice(1)).join('\n'), /src\/a\.sweep\.1\.test\.ts is not in vitest/);
@@ -80,7 +83,7 @@ test('verify fails on a dropped file, a duplicated file and an empty shard', () 
 });
 
 test('check-run fails if a shard skipped a file or ran a foreign one', () => {
-  const mine = shard.main(['--shard', '1/2']).out;
+  const mine = shard.main(['--shard', `1/${N}`]).out;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oracle-run-'));
   const root = path.join(REPO, 'electron-main') + path.sep;
   const write = (names) => {
@@ -91,18 +94,18 @@ test('check-run fails if a shard skipped a file or ran a foreign one', () => {
     );
     return f;
   };
-  assert.equal(shard.main(['--check-run', write(mine), '--shard', '1/2']).code, 0);
-  const missing = shard.main(['--check-run', write(mine.slice(1)), '--shard', '1/2']);
+  assert.equal(shard.main(['--check-run', write(mine), '--shard', `1/${N}`]).code, 0);
+  const missing = shard.main(['--check-run', write(mine.slice(1)), '--shard', `1/${N}`]);
   assert.equal(missing.code, 1);
   assert.match(missing.err.join('\n'), /did not run/);
-  const foreign = shard.main(['--check-run', write([...mine, 'src/zzz.test.ts']), '--shard', '1/2']);
+  const foreign = shard.main(['--check-run', write([...mine, 'src/zzz.test.ts']), '--shard', `1/${N}`]);
   assert.equal(foreign.code, 1);
   assert.match(foreign.err.join('\n'), /not in this shard/);
 });
 
 test('--shard rejects the wrong shard count', () => {
-  assert.throws(() => shard.main(['--shard', '1/3']), /must look like N\/2/);
-  assert.throws(() => shard.main(['--shard', '3/2']), /must look like N\/2/);
+  assert.throws(() => shard.main(['--shard', `1/${N + 1}`]), new RegExp(`must look like N/${N}`));
+  assert.throws(() => shard.main(['--shard', `${N + 1}/${N}`]), new RegExp(`must look like N/${N}`));
 });
 
 /** Independent walk of ALL of electron-main (not just src/), so a bug in discoverFiles cannot hide itself. */
@@ -130,25 +133,25 @@ test('real tree: an independent scan, discoverFiles and the WEIGHTS table agree 
 
 test('--shard, --flags and --filters fail closed instead of printing nothing', () => {
   const one = fakeRepo(['a.sweep.1.test.ts']);
-  const { bins } = shard.plan(['src/a.sweep.1.test.ts'], {}, 2);
-  assert.equal(bins[1].files.length, 0);
-  const empty = shard.main(['--shard', '2/2'], one);
+  const { bins } = shard.plan(['src/a.sweep.1.test.ts'], {}, N);
+  assert.equal(bins[N - 1].files.length, 0);
+  const empty = shard.main(['--shard', `${N}/${N}`], one);
   assert.equal(empty.code, 1);
-  assert.match(empty.err.join('\n'), /shard 2\/2 has no files/);
+  assert.match(empty.err.join('\n'), new RegExp(`shard ${N}/${N} has no files`));
   const noFlags = fakeRepo(['a.sweep.1.test.ts'], 'vitest run src/a.sweep.');
   const f = shard.main(['--flags'], noFlags);
   assert.equal(f.code, 1);
   assert.deepEqual(f.out, []);
   const noFilters = fakeRepo(['a.sweep.1.test.ts'], 'vitest run --isolate=false');
   assert.equal(shard.main(['--filters'], noFilters).code, 1);
-  assert.equal(shard.main(['--shard', '1/2'], noFilters).code, 1);
+  assert.equal(shard.main(['--shard', `1/${N}`], noFilters).code, 1);
 });
 
 test('check-run reports planned vs measured seconds and only warns on drift', () => {
-  const mine = shard.main(['--shard', '1/2']).out;
+  const mine = shard.main(['--shard', `1/${N}`]).out;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oracle-run2-'));
   const root = path.join(REPO, 'electron-main') + path.sep;
-  const planned = shard.plan(shard.discoverFiles(REPO, shard.readScript(REPO).filters), shard.WEIGHTS, 2).bins[0].seconds;
+  const planned = shard.plan(shard.discoverFiles(REPO, shard.readScript(REPO).filters), shard.WEIGHTS, N).bins[0].seconds;
   const write = (seconds) => {
     const f = path.join(dir, 'run.json');
     const per = (seconds * 1000) / mine.length;
@@ -162,11 +165,11 @@ test('check-run reports planned vs measured seconds and only warns on drift', ()
     );
     return f;
   };
-  const ok = shard.main(['--check-run', write(planned), '--shard', '1/2']);
+  const ok = shard.main(['--check-run', write(planned), '--shard', `1/${N}`]);
   assert.equal(ok.code, 0);
   assert.match(ok.out.join('\n'), /planned ~\d+ s of test time, measured \d+ s \(x1\.00\)/);
   assert.doesNotMatch(ok.out.join('\n'), /WARNING/);
-  const slow = shard.main(['--check-run', write(planned * 2), '--shard', '1/2']);
+  const slow = shard.main(['--check-run', write(planned * 2), '--shard', `1/${N}`]);
   assert.equal(slow.code, 0, 'drift must warn, not fail');
   assert.match(slow.out.join('\n'), /WARNING: measured test time is more than 25% off/);
   assert.match(slow.err.join('\n'), /::warning title=oracle-sweeps weights::/);

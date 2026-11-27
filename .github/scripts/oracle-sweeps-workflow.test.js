@@ -88,7 +88,7 @@ test('the shape check fails on the bad forms (self-test)', () => {
     'continue-on-error on the sweep': (d, j) => { j.steps.find((s) => String(s.run || '').includes('vitest run'))['continue-on-error'] = true; },
     'oracle-sweeps dropped from ci.needs': (d) => { d.jobs.ci.needs = d.jobs.ci.needs.filter((n) => n !== 'oracle-sweeps'); },
     'matrix shrunk to one shard': (d, j) => { j.strategy.matrix.shard = [1]; },
-    'matrix grew to three shards without the planner': (d, j) => { j.strategy.matrix.shard = [1, 2, 3]; },
+    'matrix grew beyond the planner SHARD_COUNT': (d, j) => { j.strategy.matrix.shard = [...j.strategy.matrix.shard, j.strategy.matrix.shard.length + 1]; },
     'sweep reads planner through process substitution': (d, j) => {
       const s = j.steps.find((x) => String(x.run || '').includes('vitest run'));
       s.run = s.run.replace('files=$(node', 'mapfile -t FILES < <(node');

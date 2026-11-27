@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Cost-balanced split of the oracle-sweeps test files across the CI shards.
+ * Cost-balanced split of the oracle-sweeps test files across the CI shards (SHARD_COUNT, 3).
  *
  * Vitest's own `--shard=N/M` splits by a hash of the file path, so it balances file COUNT,
  * not cost. One file can take 20+ minutes, so the hash split left one slow shard and one fast
@@ -12,11 +12,11 @@
  * oracle sweeps". The guards below fail loudly if a file can fall outside every shard.
  *
  * Usage (from the repo root):
- *   node .github/scripts/oracle-shard.js --shard 1/2          files for one shard, one per line
+ *   node .github/scripts/oracle-shard.js --shard 1/3          files for one shard, one per line
  *   node .github/scripts/oracle-shard.js --flags              vitest flags from package.json
  *   node .github/scripts/oracle-shard.js --filters            vitest filters from package.json
  *   node .github/scripts/oracle-shard.js --verify [--vitest-list list.json]
- *   node .github/scripts/oracle-shard.js --check-run run.json --shard 1/2   (also prints planned vs measured seconds)
+ *   node .github/scripts/oracle-shard.js --check-run run.json --shard 1/3   (also prints planned vs measured seconds)
  *
  * To refresh WEIGHTS after a big change, run the sweep with `--reporter=json` and sum the
  * assertion durations per file (seconds).
@@ -27,7 +27,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..', '..');
-const SHARD_COUNT = 2;
+const SHARD_COUNT = 3;
 
 /**
  * Seconds per file, from the public CI run 46031457761 (pull_request, ubuntu-latest, 3 vitest
