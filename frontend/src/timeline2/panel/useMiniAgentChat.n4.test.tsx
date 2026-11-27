@@ -1424,6 +1424,51 @@ describe('useMiniAgentChat — failed-exchange tracking (SKY-1923 gate)', () => 
     expect(agentTurns[0]?.incomplete).toBe(true);
   });
 
+  it('refusedNewId resets across sends: a later request keeps its failure partial (S14)', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('first')); }))
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('second')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('first'); });
+    await act(async () => { await Promise.resolve(); });
+    // Fill the lane table and refuse one more id so refusedNewId is set.
+    act(() => {
+      for (let i = 0; i < MAX_EARLY_LANES + 1; i++) api.fireChunk('f', `req-fx-${i}`);
+    });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    act(() => { void result.current.send('two'); });
+    await act(async () => { await Promise.resolve(); });
+    // Stream-start lands before any early chunk. Without the refusedNewId
+    // reset in clearEarlyLanes, this request would latch and drop LIVE.
+    act(() => { api.fireStreamStart('req-mine3'); });
+    act(() => { api.fireChunk('LIVE', 'req-mine3'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    const agentTurns = result.current.messages.filter((m) => m.role === 'agent');
+    expect(agentTurns).toHaveLength(1);
+    expect(agentTurns[0]?.text).toBe(`LIVE ${RESPONSE_INCOMPLETE_SUFFIX}`);
+  });
+
+  it('early-buffer lane cap is exactly 8 (S15)', () => {
+    const lanes = new Map() as Parameters<typeof tryPushEarlyChunk>[0];
+    const results: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      results.push(tryPushEarlyChunk(lanes, `lane-${i}`, 'z'));
+    }
+    expect(results).toEqual(Array(8).fill('accepted'));
+    expect(lanes.size).toBe(8);
+    expect(tryPushEarlyChunk(lanes, 'lane-8', 'z')).toBe('refused');
+    expect(lanes.size).toBe(8);
+    // An existing lane still accepts; a 9th id stays refused.
+    expect(tryPushEarlyChunk(lanes, 'lane-0', 'more')).toBe('accepted');
+    expect(tryPushEarlyChunk(lanes, 'lane-8', 'more')).toBe('refused');
+  });
+
   it('Cancel after a mid-flight session switch does not show a cancel error in the new chat', async () => {
     const vault = installTwoSessionApi();
     const invoke = vi.fn().mockImplementationOnce(() => new Promise<string>(() => { /* hang */ }));
