@@ -1436,9 +1436,14 @@ describe('useMiniAgentChat — failed-exchange tracking (SKY-1923 gate)', () => 
     act(() => { void result.current.send('first'); });
     await act(async () => { await Promise.resolve(); });
     // Fill the lane table and refuse one more id so refusedNewId is set.
-    act(() => {
-      for (let i = 0; i < MAX_EARLY_LANES + 1; i++) api.fireChunk('f', `req-fx-${i}`);
-    });
+    const { cap, restore } = captureEarly();
+    try {
+      act(() => {
+        for (let i = 0; i < MAX_EARLY_LANES + 1; i++) api.fireChunk('f', `req-fx-${i}`);
+      });
+    } finally { restore(); }
+    // S17: assert the first request really refused an id, or this test goes vacuous.
+    expect((cap.maps[0] as { refusedNewId?: boolean } | undefined)?.refusedNewId).toBe(true);
     await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
 
     act(() => { void result.current.send('two'); });
