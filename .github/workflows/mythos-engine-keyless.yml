@@ -126,7 +126,12 @@ jobs:
           # Public: the titles of the scripts' own ::error / ::warning lines (short fixed names, nothing else) and
           # pass or fail. Private: every $LANES_LOG file, at most 5 MiB each (the tail), on the data repo branch
           # LOG_BRANCH under runs/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
-          if [ -z "${LANES_LOG:-}" ] || [ -z "$(ls -A "$LANES_LOG" 2>/dev/null)" ]; then echo "private log: nothing to save"; exit 0; fi
+          # Growth bound: only non-empty logs are saved (a no-work run commits nothing); each file is capped at 5 MiB.
+          # Dirs are runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/ so an owner-approved prune can drop old days whole.
+          # Nothing here deletes or rewrites the branch (deletes are an owner call).
+          if [ -z "${LANES_LOG:-}" ] || [ -z "$(find "$LANES_LOG" -maxdepth 1 -type f -size +0 2>/dev/null | head -n 1)" ]; then
+            echo "private log: nothing to save"; exit 0
+          fi
           for f in "$LANES_LOG"/*.log; do
             grep -ohE '^::(error|warning) title=[A-Za-z0-9 ()._/-]{1,60}::' "$f" 2>/dev/null || true
           done | sort -u | sed 's/::$/::details are in the private log/'
@@ -135,11 +140,14 @@ jobs:
           fi
           export GIT_TERMINAL_PROMPT=0
           repo="$RUNNER_TEMP/lanes-log-repo"
-          dest="runs/$RUN_KEY/$JOB"
+          dest="runs/$(TZ=America/Denver date +%F)/$RUN_KEY/$JOB"
           # shellcheck disable=SC2016  # $DATA_TOKEN expands inside the helper's own shell, not here
           lgit() { git -C "$repo" -c credential.helper= \
             -c 'credential.helper=!f(){ echo username=x-access-token; echo "password=$DATA_TOKEN"; }; f' "$@"; }
-          for _ in 1 2 3 4 5; do
+          for try in 1 2 3 4 5; do
+            if [ "$try" -gt 1 ]; then
+              sleep "$(( try * 3 + RANDOM % 5 ))"  # jittered backoff: gate, plan and fix often finish together
+            fi
             rm -rf "$repo"; git init -q "$repo"
             git -C "$repo" remote add origin "https://github.com/$DATA_REPO.git"
             r=0; lgit ls-remote --exit-code origin "refs/heads/$LOG_BRANCH" >/dev/null 2>&1 || r=$?
@@ -154,7 +162,7 @@ jobs:
             fi
             mkdir -p "$repo/$dest"
             for f in "$LANES_LOG"/*; do
-              [ -f "$f" ] || continue
+              [ -f "$f" ] && [ -s "$f" ] || continue
               tail -c 5242880 "$f" > "$repo/$dest/$(basename "$f")"
             done
             git -C "$repo" add -- "$dest"

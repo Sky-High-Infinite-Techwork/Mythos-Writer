@@ -256,7 +256,8 @@ jobs:
           EOF
           )"
           echo "$due" >>"$LANES_LOG/brother.log"
-          echo "refresh: ${due%% *}"
+          # public: a fixed word only (the reason text stays in the private log)
+          if [ "$due" = yes ]; then echo "refresh: yes"; else echo "refresh: no"; fi
           if [ "$due" = yes ]; then
             "$PY" code/scripts/watch/brother_watch.py --data-root state --repo Sky-High-Infinite-Techwork/Mythos-Writer \
               >>"$LANES_LOG/brother.log" 2>&1 || echo "::warning title=Brother watch::refresh failed (exit $?); the ready check decides"
@@ -420,6 +421,7 @@ jobs:
             if ! got="$(gh api --paginate "repos/$REPO/actions/workflows/$wf/runs?status=$st&per_page=100" \
                   --jq ".workflow_runs[]|select(.id != $RUN_ID)|.id" 2>>"$LANES_LOG/busy.log")"; then
               echo "::error title=In-flight check::cannot read $wf runs; nothing gated, planned or fixed this run"
+              { echo "gate=true"; echo "plan=true"; echo "fix=true"; } >> "$GITHUB_OUTPUT"
               exit 1
             fi
             ids="$ids $got"
@@ -429,6 +431,7 @@ jobs:
             if ! names="$(gh api --paginate "repos/$REPO/actions/runs/$id/jobs?per_page=100" --jq ".jobs[]|$live|.name" \
                   2>>"$LANES_LOG/busy.log")"; then
               echo "::error title=In-flight check::cannot read the jobs of run $id; nothing gated, planned or fixed this run"
+              { echo "gate=true"; echo "plan=true"; echo "fix=true"; } >> "$GITHUB_OUTPUT"
               exit 1
             fi
             if printf '%s\n' "$names" | grep -qx gate; then gate=true; fi
@@ -473,7 +476,7 @@ jobs:
           PRODUCER: tick
           MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
           DATA_TOKEN: ${{ secrets.MYTHOS_DATA_TOKEN }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
         run: |
           set -uo pipefail
           # PERSIST-BEGIN (the same text in tick, gate, plan and fix; only PRODUCER and DELTA_NAME differ)
@@ -488,10 +491,11 @@ jobs:
           log="$LANES_LOG/persist.log"
           msg="engine: $PRODUCER state ($RUN_URL)"
           delta="$RUNNER_TEMP/$DELTA_NAME"
-          if ! { sgit fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD; } >>"$log" 2>&1; then
+          # reset + clean: the job's own untracked writes go, so apply puts each append line on exactly once (S7)
+          if ! { sgit fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD && git -C state clean -ffdxq; } >>"$log" 2>&1; then
             echo "::error title=Persist::cannot fetch $STATE_BRANCH from the data repo"; exit 1
           fi
-          for _ in 1 2 3 4 5; do
+          for try in 1 2 3 4 5; do
             rc=0; /usr/bin/python3 code/scripts/engine_state.py apply --producer "$PRODUCER" --delta "$delta" >>"$log" 2>&1 || rc=$?
             # 3 = a verdict conflict (the rest applied): pushed, then the step fails with 3, as in Engine.
             if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ]; then echo "persist: apply exit $rc"; exit "$rc"; fi
@@ -508,7 +512,10 @@ jobs:
             if sgit push -q origin "HEAD:$STATE_BRANCH" >>"$log" 2>&1; then
               echo "pushed=true" >> "$GITHUB_OUTPUT"; echo "persist: pushed (apply exit $rc)"; exit "$rc"
             fi
-            if ! { sgit fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD; } >>"$log" 2>&1; then
+            if [ "$try" -lt 5 ]; then
+              sleep "$(( try * 3 + RANDOM % 5 ))"  # jittered backoff: gate, plan and fix often finish together
+            fi
+            if ! { sgit fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD && git -C state clean -ffdxq; } >>"$log" 2>&1; then
               echo "::error title=Persist::cannot re-fetch $STATE_BRANCH after a rejected push"; exit 1
             fi
             # a push that landed but reported failure (timeout) is not applied twice
@@ -532,7 +539,12 @@ jobs:
           # Public: the titles of the scripts' own ::error / ::warning lines (short fixed names, nothing else) and
           # pass or fail. Private: every $LANES_LOG file, at most 5 MiB each (the tail), on the data repo branch
           # LOG_BRANCH under runs/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
-          if [ -z "${LANES_LOG:-}" ] || [ -z "$(ls -A "$LANES_LOG" 2>/dev/null)" ]; then echo "private log: nothing to save"; exit 0; fi
+          # Growth bound: only non-empty logs are saved (a no-work run commits nothing); each file is capped at 5 MiB.
+          # Dirs are runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/ so an owner-approved prune can drop old days whole.
+          # Nothing here deletes or rewrites the branch (deletes are an owner call).
+          if [ -z "${LANES_LOG:-}" ] || [ -z "$(find "$LANES_LOG" -maxdepth 1 -type f -size +0 2>/dev/null | head -n 1)" ]; then
+            echo "private log: nothing to save"; exit 0
+          fi
           for f in "$LANES_LOG"/*.log; do
             grep -ohE '^::(error|warning) title=[A-Za-z0-9 ()._/-]{1,60}::' "$f" 2>/dev/null || true
           done | sort -u | sed 's/::$/::details are in the private log/'
@@ -541,11 +553,14 @@ jobs:
           fi
           export GIT_TERMINAL_PROMPT=0
           repo="$RUNNER_TEMP/lanes-log-repo"
-          dest="runs/$RUN_KEY/$JOB"
+          dest="runs/$(TZ=America/Denver date +%F)/$RUN_KEY/$JOB"
           # shellcheck disable=SC2016  # $DATA_TOKEN expands inside the helper's own shell, not here
           lgit() { git -C "$repo" -c credential.helper= \
             -c 'credential.helper=!f(){ echo username=x-access-token; echo "password=$DATA_TOKEN"; }; f' "$@"; }
-          for _ in 1 2 3 4 5; do
+          for try in 1 2 3 4 5; do
+            if [ "$try" -gt 1 ]; then
+              sleep "$(( try * 3 + RANDOM % 5 ))"  # jittered backoff: gate, plan and fix often finish together
+            fi
             rm -rf "$repo"; git init -q "$repo"
             git -C "$repo" remote add origin "https://github.com/$DATA_REPO.git"
             r=0; lgit ls-remote --exit-code origin "refs/heads/$LOG_BRANCH" >/dev/null 2>&1 || r=$?
@@ -560,7 +575,7 @@ jobs:
             fi
             mkdir -p "$repo/$dest"
             for f in "$LANES_LOG"/*; do
-              [ -f "$f" ] || continue
+              [ -f "$f" ] && [ -s "$f" ] || continue
               tail -c 5242880 "$f" > "$repo/$dest/$(basename "$f")"
             done
             git -C "$repo" add -- "$dest"
@@ -581,7 +596,7 @@ jobs:
     if: >-
       needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main' &&
       !cancelled() && needs.tick.result == 'success' && needs.tick.outputs.work == 'true' &&
-      needs.tick.outputs.gate_busy != 'true'
+      needs.tick.outputs.gate_busy == 'false'
     runs-on: ubuntu-24.04
     timeout-minutes: 350
     environment: lanes
@@ -801,7 +816,7 @@ jobs:
           PRODUCER: gate
           MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
           DATA_TOKEN: ${{ secrets.MYTHOS_DATA_TOKEN }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
         run: |
           set -uo pipefail
           # PERSIST-BEGIN (the same text in tick, gate, plan and fix; only PRODUCER and DELTA_NAME differ)
@@ -816,10 +831,11 @@ jobs:
           log="$LANES_LOG/persist.log"
           msg="engine: $PRODUCER state ($RUN_URL)"
           delta="$RUNNER_TEMP/$DELTA_NAME"
-          if ! { sgit fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD; } >>"$log" 2>&1; then
+          # reset + clean: the job's own untracked writes go, so apply puts each append line on exactly once (S7)
+          if ! { sgit fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD && git -C state clean -ffdxq; } >>"$log" 2>&1; then
             echo "::error title=Persist::cannot fetch $STATE_BRANCH from the data repo"; exit 1
           fi
-          for _ in 1 2 3 4 5; do
+          for try in 1 2 3 4 5; do
             rc=0; /usr/bin/python3 code/scripts/engine_state.py apply --producer "$PRODUCER" --delta "$delta" >>"$log" 2>&1 || rc=$?
             # 3 = a verdict conflict (the rest applied): pushed, then the step fails with 3, as in Engine.
             if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ]; then echo "persist: apply exit $rc"; exit "$rc"; fi
@@ -836,7 +852,10 @@ jobs:
             if sgit push -q origin "HEAD:$STATE_BRANCH" >>"$log" 2>&1; then
               echo "pushed=true" >> "$GITHUB_OUTPUT"; echo "persist: pushed (apply exit $rc)"; exit "$rc"
             fi
-            if ! { sgit fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD; } >>"$log" 2>&1; then
+            if [ "$try" -lt 5 ]; then
+              sleep "$(( try * 3 + RANDOM % 5 ))"  # jittered backoff: gate, plan and fix often finish together
+            fi
+            if ! { sgit fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD && git -C state clean -ffdxq; } >>"$log" 2>&1; then
               echo "::error title=Persist::cannot re-fetch $STATE_BRANCH after a rejected push"; exit 1
             fi
             # a push that landed but reported failure (timeout) is not applied twice
@@ -860,7 +879,12 @@ jobs:
           # Public: the titles of the scripts' own ::error / ::warning lines (short fixed names, nothing else) and
           # pass or fail. Private: every $LANES_LOG file, at most 5 MiB each (the tail), on the data repo branch
           # LOG_BRANCH under runs/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
-          if [ -z "${LANES_LOG:-}" ] || [ -z "$(ls -A "$LANES_LOG" 2>/dev/null)" ]; then echo "private log: nothing to save"; exit 0; fi
+          # Growth bound: only non-empty logs are saved (a no-work run commits nothing); each file is capped at 5 MiB.
+          # Dirs are runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/ so an owner-approved prune can drop old days whole.
+          # Nothing here deletes or rewrites the branch (deletes are an owner call).
+          if [ -z "${LANES_LOG:-}" ] || [ -z "$(find "$LANES_LOG" -maxdepth 1 -type f -size +0 2>/dev/null | head -n 1)" ]; then
+            echo "private log: nothing to save"; exit 0
+          fi
           for f in "$LANES_LOG"/*.log; do
             grep -ohE '^::(error|warning) title=[A-Za-z0-9 ()._/-]{1,60}::' "$f" 2>/dev/null || true
           done | sort -u | sed 's/::$/::details are in the private log/'
@@ -869,11 +893,14 @@ jobs:
           fi
           export GIT_TERMINAL_PROMPT=0
           repo="$RUNNER_TEMP/lanes-log-repo"
-          dest="runs/$RUN_KEY/$JOB"
+          dest="runs/$(TZ=America/Denver date +%F)/$RUN_KEY/$JOB"
           # shellcheck disable=SC2016  # $DATA_TOKEN expands inside the helper's own shell, not here
           lgit() { git -C "$repo" -c credential.helper= \
             -c 'credential.helper=!f(){ echo username=x-access-token; echo "password=$DATA_TOKEN"; }; f' "$@"; }
-          for _ in 1 2 3 4 5; do
+          for try in 1 2 3 4 5; do
+            if [ "$try" -gt 1 ]; then
+              sleep "$(( try * 3 + RANDOM % 5 ))"  # jittered backoff: gate, plan and fix often finish together
+            fi
             rm -rf "$repo"; git init -q "$repo"
             git -C "$repo" remote add origin "https://github.com/$DATA_REPO.git"
             r=0; lgit ls-remote --exit-code origin "refs/heads/$LOG_BRANCH" >/dev/null 2>&1 || r=$?
@@ -888,7 +915,7 @@ jobs:
             fi
             mkdir -p "$repo/$dest"
             for f in "$LANES_LOG"/*; do
-              [ -f "$f" ] || continue
+              [ -f "$f" ] && [ -s "$f" ] || continue
               tail -c 5242880 "$f" > "$repo/$dest/$(basename "$f")"
             done
             git -C "$repo" add -- "$dest"
@@ -915,7 +942,7 @@ jobs:
     if: >-
       needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main' &&
       !cancelled() && needs.tick.result == 'success' && needs.tick.outputs.mode == 'pass' && needs.tick.outputs.ready == 'true' && needs.tick.outputs.plan == 'true' &&
-      needs.tick.outputs.plan_busy != 'true'
+      needs.tick.outputs.plan_busy == 'false'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     environment: lanes
@@ -1077,7 +1104,7 @@ jobs:
           PRODUCER: plan
           MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
           DATA_TOKEN: ${{ secrets.MYTHOS_DATA_TOKEN }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
         run: |
           set -uo pipefail
           # PERSIST-BEGIN (the same text in tick, gate, plan and fix; only PRODUCER and DELTA_NAME differ)
@@ -1092,10 +1119,11 @@ jobs:
           log="$LANES_LOG/persist.log"
           msg="engine: $PRODUCER state ($RUN_URL)"
           delta="$RUNNER_TEMP/$DELTA_NAME"
-          if ! { sgit fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD; } >>"$log" 2>&1; then
+          # reset + clean: the job's own untracked writes go, so apply puts each append line on exactly once (S7)
+          if ! { sgit fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD && git -C state clean -ffdxq; } >>"$log" 2>&1; then
             echo "::error title=Persist::cannot fetch $STATE_BRANCH from the data repo"; exit 1
           fi
-          for _ in 1 2 3 4 5; do
+          for try in 1 2 3 4 5; do
             rc=0; /usr/bin/python3 code/scripts/engine_state.py apply --producer "$PRODUCER" --delta "$delta" >>"$log" 2>&1 || rc=$?
             # 3 = a verdict conflict (the rest applied): pushed, then the step fails with 3, as in Engine.
             if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ]; then echo "persist: apply exit $rc"; exit "$rc"; fi
@@ -1112,7 +1140,10 @@ jobs:
             if sgit push -q origin "HEAD:$STATE_BRANCH" >>"$log" 2>&1; then
               echo "pushed=true" >> "$GITHUB_OUTPUT"; echo "persist: pushed (apply exit $rc)"; exit "$rc"
             fi
-            if ! { sgit fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD; } >>"$log" 2>&1; then
+            if [ "$try" -lt 5 ]; then
+              sleep "$(( try * 3 + RANDOM % 5 ))"  # jittered backoff: gate, plan and fix often finish together
+            fi
+            if ! { sgit fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD && git -C state clean -ffdxq; } >>"$log" 2>&1; then
               echo "::error title=Persist::cannot re-fetch $STATE_BRANCH after a rejected push"; exit 1
             fi
             # a push that landed but reported failure (timeout) is not applied twice
@@ -1136,7 +1167,12 @@ jobs:
           # Public: the titles of the scripts' own ::error / ::warning lines (short fixed names, nothing else) and
           # pass or fail. Private: every $LANES_LOG file, at most 5 MiB each (the tail), on the data repo branch
           # LOG_BRANCH under runs/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
-          if [ -z "${LANES_LOG:-}" ] || [ -z "$(ls -A "$LANES_LOG" 2>/dev/null)" ]; then echo "private log: nothing to save"; exit 0; fi
+          # Growth bound: only non-empty logs are saved (a no-work run commits nothing); each file is capped at 5 MiB.
+          # Dirs are runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/ so an owner-approved prune can drop old days whole.
+          # Nothing here deletes or rewrites the branch (deletes are an owner call).
+          if [ -z "${LANES_LOG:-}" ] || [ -z "$(find "$LANES_LOG" -maxdepth 1 -type f -size +0 2>/dev/null | head -n 1)" ]; then
+            echo "private log: nothing to save"; exit 0
+          fi
           for f in "$LANES_LOG"/*.log; do
             grep -ohE '^::(error|warning) title=[A-Za-z0-9 ()._/-]{1,60}::' "$f" 2>/dev/null || true
           done | sort -u | sed 's/::$/::details are in the private log/'
@@ -1145,11 +1181,14 @@ jobs:
           fi
           export GIT_TERMINAL_PROMPT=0
           repo="$RUNNER_TEMP/lanes-log-repo"
-          dest="runs/$RUN_KEY/$JOB"
+          dest="runs/$(TZ=America/Denver date +%F)/$RUN_KEY/$JOB"
           # shellcheck disable=SC2016  # $DATA_TOKEN expands inside the helper's own shell, not here
           lgit() { git -C "$repo" -c credential.helper= \
             -c 'credential.helper=!f(){ echo username=x-access-token; echo "password=$DATA_TOKEN"; }; f' "$@"; }
-          for _ in 1 2 3 4 5; do
+          for try in 1 2 3 4 5; do
+            if [ "$try" -gt 1 ]; then
+              sleep "$(( try * 3 + RANDOM % 5 ))"  # jittered backoff: gate, plan and fix often finish together
+            fi
             rm -rf "$repo"; git init -q "$repo"
             git -C "$repo" remote add origin "https://github.com/$DATA_REPO.git"
             r=0; lgit ls-remote --exit-code origin "refs/heads/$LOG_BRANCH" >/dev/null 2>&1 || r=$?
@@ -1164,7 +1203,7 @@ jobs:
             fi
             mkdir -p "$repo/$dest"
             for f in "$LANES_LOG"/*; do
-              [ -f "$f" ] || continue
+              [ -f "$f" ] && [ -s "$f" ] || continue
               tail -c 5242880 "$f" > "$repo/$dest/$(basename "$f")"
             done
             git -C "$repo" add -- "$dest"
@@ -1271,7 +1310,12 @@ jobs:
           # Public: the titles of the scripts' own ::error / ::warning lines (short fixed names, nothing else) and
           # pass or fail. Private: every $LANES_LOG file, at most 5 MiB each (the tail), on the data repo branch
           # LOG_BRANCH under runs/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
-          if [ -z "${LANES_LOG:-}" ] || [ -z "$(ls -A "$LANES_LOG" 2>/dev/null)" ]; then echo "private log: nothing to save"; exit 0; fi
+          # Growth bound: only non-empty logs are saved (a no-work run commits nothing); each file is capped at 5 MiB.
+          # Dirs are runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/ so an owner-approved prune can drop old days whole.
+          # Nothing here deletes or rewrites the branch (deletes are an owner call).
+          if [ -z "${LANES_LOG:-}" ] || [ -z "$(find "$LANES_LOG" -maxdepth 1 -type f -size +0 2>/dev/null | head -n 1)" ]; then
+            echo "private log: nothing to save"; exit 0
+          fi
           for f in "$LANES_LOG"/*.log; do
             grep -ohE '^::(error|warning) title=[A-Za-z0-9 ()._/-]{1,60}::' "$f" 2>/dev/null || true
           done | sort -u | sed 's/::$/::details are in the private log/'
@@ -1280,11 +1324,14 @@ jobs:
           fi
           export GIT_TERMINAL_PROMPT=0
           repo="$RUNNER_TEMP/lanes-log-repo"
-          dest="runs/$RUN_KEY/$JOB"
+          dest="runs/$(TZ=America/Denver date +%F)/$RUN_KEY/$JOB"
           # shellcheck disable=SC2016  # $DATA_TOKEN expands inside the helper's own shell, not here
           lgit() { git -C "$repo" -c credential.helper= \
             -c 'credential.helper=!f(){ echo username=x-access-token; echo "password=$DATA_TOKEN"; }; f' "$@"; }
-          for _ in 1 2 3 4 5; do
+          for try in 1 2 3 4 5; do
+            if [ "$try" -gt 1 ]; then
+              sleep "$(( try * 3 + RANDOM % 5 ))"  # jittered backoff: gate, plan and fix often finish together
+            fi
             rm -rf "$repo"; git init -q "$repo"
             git -C "$repo" remote add origin "https://github.com/$DATA_REPO.git"
             r=0; lgit ls-remote --exit-code origin "refs/heads/$LOG_BRANCH" >/dev/null 2>&1 || r=$?
@@ -1299,7 +1346,7 @@ jobs:
             fi
             mkdir -p "$repo/$dest"
             for f in "$LANES_LOG"/*; do
-              [ -f "$f" ] || continue
+              [ -f "$f" ] && [ -s "$f" ] || continue
               tail -c 5242880 "$f" > "$repo/$dest/$(basename "$f")"
             done
             git -C "$repo" add -- "$dest"
@@ -1316,11 +1363,12 @@ jobs:
         if: always()
         run: echo "result=${{ job.status == 'success' && 'pass' || 'fail' }}"
   act:
-  # The only job that holds MYTHOS_WRITE_TOKEN (optional secret: a PAT that can comment on Writer PRs and run
-  # `gh pr merge --auto --match-head-commit` there). Without it both steps print a ::notice and exit 0: the tick is never
-  # failed for it. contents: read, no model, no other secret, writes nothing to engine-state: GitHub holds the state
-  # (a PROOF comment on the tip; auto_merge on the PR). Runs after persist + publish, so it reads the newest engine-state
-  # and the check run publish just posted. Same host / ready gate as every live step (engine_host).
+  # PROOF posts and auto-merge arming. MYTHOS_WRITE_TOKEN (optional secret: a PAT that can comment on Writer PRs and
+  # run `gh pr merge --auto --match-head-commit` there) is in these two steps only; the plan pass and the fix push hold
+  # it too, in their own jobs. Without it both steps print a ::notice and exit 0: the tick is never failed for it.
+  # contents: read, no model, no other secret, writes nothing to engine-state: GitHub holds the state (a PROOF comment
+  # on the tip; auto_merge on the PR). Runs after the gate job (which persists its own state in-job) and publish, so
+  # it reads the newest engine-state and the check run publish just posted. Same host / ready gate as every live step.
 
 
     needs: [admit, tick, gate, publish]
@@ -1406,7 +1454,12 @@ jobs:
           # Public: the titles of the scripts' own ::error / ::warning lines (short fixed names, nothing else) and
           # pass or fail. Private: every $LANES_LOG file, at most 5 MiB each (the tail), on the data repo branch
           # LOG_BRANCH under runs/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
-          if [ -z "${LANES_LOG:-}" ] || [ -z "$(ls -A "$LANES_LOG" 2>/dev/null)" ]; then echo "private log: nothing to save"; exit 0; fi
+          # Growth bound: only non-empty logs are saved (a no-work run commits nothing); each file is capped at 5 MiB.
+          # Dirs are runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/ so an owner-approved prune can drop old days whole.
+          # Nothing here deletes or rewrites the branch (deletes are an owner call).
+          if [ -z "${LANES_LOG:-}" ] || [ -z "$(find "$LANES_LOG" -maxdepth 1 -type f -size +0 2>/dev/null | head -n 1)" ]; then
+            echo "private log: nothing to save"; exit 0
+          fi
           for f in "$LANES_LOG"/*.log; do
             grep -ohE '^::(error|warning) title=[A-Za-z0-9 ()._/-]{1,60}::' "$f" 2>/dev/null || true
           done | sort -u | sed 's/::$/::details are in the private log/'
@@ -1415,11 +1468,14 @@ jobs:
           fi
           export GIT_TERMINAL_PROMPT=0
           repo="$RUNNER_TEMP/lanes-log-repo"
-          dest="runs/$RUN_KEY/$JOB"
+          dest="runs/$(TZ=America/Denver date +%F)/$RUN_KEY/$JOB"
           # shellcheck disable=SC2016  # $DATA_TOKEN expands inside the helper's own shell, not here
           lgit() { git -C "$repo" -c credential.helper= \
             -c 'credential.helper=!f(){ echo username=x-access-token; echo "password=$DATA_TOKEN"; }; f' "$@"; }
-          for _ in 1 2 3 4 5; do
+          for try in 1 2 3 4 5; do
+            if [ "$try" -gt 1 ]; then
+              sleep "$(( try * 3 + RANDOM % 5 ))"  # jittered backoff: gate, plan and fix often finish together
+            fi
             rm -rf "$repo"; git init -q "$repo"
             git -C "$repo" remote add origin "https://github.com/$DATA_REPO.git"
             r=0; lgit ls-remote --exit-code origin "refs/heads/$LOG_BRANCH" >/dev/null 2>&1 || r=$?
@@ -1434,7 +1490,7 @@ jobs:
             fi
             mkdir -p "$repo/$dest"
             for f in "$LANES_LOG"/*; do
-              [ -f "$f" ] || continue
+              [ -f "$f" ] && [ -s "$f" ] || continue
               tail -c 5242880 "$f" > "$repo/$dest/$(basename "$f")"
             done
             git -C "$repo" add -- "$dest"
@@ -1462,7 +1518,7 @@ jobs:
     if: >-
       needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main' &&
       always() && needs.admit.outputs.fix == 'on' && needs.tick.outputs.mode == 'pass' && needs.tick.outputs.ready == 'true' &&
-      needs.tick.outputs.fix == 'true' && needs.tick.outputs.fix_busy != 'true'
+      needs.tick.outputs.fix == 'true' && needs.tick.outputs.fix_busy == 'false'
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     environment: lanes
@@ -1660,7 +1716,7 @@ jobs:
           PRODUCER: fix
           MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
           DATA_TOKEN: ${{ secrets.MYTHOS_DATA_TOKEN }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
         run: |
           set -uo pipefail
           # PERSIST-BEGIN (the same text in tick, gate, plan and fix; only PRODUCER and DELTA_NAME differ)
@@ -1675,10 +1731,11 @@ jobs:
           log="$LANES_LOG/persist.log"
           msg="engine: $PRODUCER state ($RUN_URL)"
           delta="$RUNNER_TEMP/$DELTA_NAME"
-          if ! { sgit fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD; } >>"$log" 2>&1; then
+          # reset + clean: the job's own untracked writes go, so apply puts each append line on exactly once (S7)
+          if ! { sgit fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD && git -C state clean -ffdxq; } >>"$log" 2>&1; then
             echo "::error title=Persist::cannot fetch $STATE_BRANCH from the data repo"; exit 1
           fi
-          for _ in 1 2 3 4 5; do
+          for try in 1 2 3 4 5; do
             rc=0; /usr/bin/python3 code/scripts/engine_state.py apply --producer "$PRODUCER" --delta "$delta" >>"$log" 2>&1 || rc=$?
             # 3 = a verdict conflict (the rest applied): pushed, then the step fails with 3, as in Engine.
             if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ]; then echo "persist: apply exit $rc"; exit "$rc"; fi
@@ -1695,7 +1752,10 @@ jobs:
             if sgit push -q origin "HEAD:$STATE_BRANCH" >>"$log" 2>&1; then
               echo "pushed=true" >> "$GITHUB_OUTPUT"; echo "persist: pushed (apply exit $rc)"; exit "$rc"
             fi
-            if ! { sgit fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD; } >>"$log" 2>&1; then
+            if [ "$try" -lt 5 ]; then
+              sleep "$(( try * 3 + RANDOM % 5 ))"  # jittered backoff: gate, plan and fix often finish together
+            fi
+            if ! { sgit fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD && git -C state clean -ffdxq; } >>"$log" 2>&1; then
               echo "::error title=Persist::cannot re-fetch $STATE_BRANCH after a rejected push"; exit 1
             fi
             # a push that landed but reported failure (timeout) is not applied twice
@@ -1719,7 +1779,12 @@ jobs:
           # Public: the titles of the scripts' own ::error / ::warning lines (short fixed names, nothing else) and
           # pass or fail. Private: every $LANES_LOG file, at most 5 MiB each (the tail), on the data repo branch
           # LOG_BRANCH under runs/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
-          if [ -z "${LANES_LOG:-}" ] || [ -z "$(ls -A "$LANES_LOG" 2>/dev/null)" ]; then echo "private log: nothing to save"; exit 0; fi
+          # Growth bound: only non-empty logs are saved (a no-work run commits nothing); each file is capped at 5 MiB.
+          # Dirs are runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/ so an owner-approved prune can drop old days whole.
+          # Nothing here deletes or rewrites the branch (deletes are an owner call).
+          if [ -z "${LANES_LOG:-}" ] || [ -z "$(find "$LANES_LOG" -maxdepth 1 -type f -size +0 2>/dev/null | head -n 1)" ]; then
+            echo "private log: nothing to save"; exit 0
+          fi
           for f in "$LANES_LOG"/*.log; do
             grep -ohE '^::(error|warning) title=[A-Za-z0-9 ()._/-]{1,60}::' "$f" 2>/dev/null || true
           done | sort -u | sed 's/::$/::details are in the private log/'
@@ -1728,11 +1793,14 @@ jobs:
           fi
           export GIT_TERMINAL_PROMPT=0
           repo="$RUNNER_TEMP/lanes-log-repo"
-          dest="runs/$RUN_KEY/$JOB"
+          dest="runs/$(TZ=America/Denver date +%F)/$RUN_KEY/$JOB"
           # shellcheck disable=SC2016  # $DATA_TOKEN expands inside the helper's own shell, not here
           lgit() { git -C "$repo" -c credential.helper= \
             -c 'credential.helper=!f(){ echo username=x-access-token; echo "password=$DATA_TOKEN"; }; f' "$@"; }
-          for _ in 1 2 3 4 5; do
+          for try in 1 2 3 4 5; do
+            if [ "$try" -gt 1 ]; then
+              sleep "$(( try * 3 + RANDOM % 5 ))"  # jittered backoff: gate, plan and fix often finish together
+            fi
             rm -rf "$repo"; git init -q "$repo"
             git -C "$repo" remote add origin "https://github.com/$DATA_REPO.git"
             r=0; lgit ls-remote --exit-code origin "refs/heads/$LOG_BRANCH" >/dev/null 2>&1 || r=$?
@@ -1747,7 +1815,7 @@ jobs:
             fi
             mkdir -p "$repo/$dest"
             for f in "$LANES_LOG"/*; do
-              [ -f "$f" ] || continue
+              [ -f "$f" ] && [ -s "$f" ] || continue
               tail -c 5242880 "$f" > "$repo/$dest/$(basename "$f")"
             done
             git -C "$repo" add -- "$dest"

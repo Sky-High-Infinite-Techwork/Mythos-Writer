@@ -140,8 +140,15 @@ if a.cmd == "pack":
                             check=True).stdout.split()
     ents = []
     for i, rel in enumerate(sorted(set(n for n in names if mine(n, a.producer)))):
-        shutil.copyfile(os.path.join(a.root, rel), os.path.join(a.out, f"blob-{i}"))
-        ents.append({"path": rel, "blob": f"blob-{i}"})
+        data = open(os.path.join(a.root, rel), "rb").read()
+        kind = "append" if rel.endswith(".jsonl") else "replace"
+        if kind == "append":
+            old = subprocess.run(["git", "-C", a.root, "show", f"{a.base}:{rel}"], capture_output=True).stdout
+            if not data.startswith(old):
+                print("engine_state pack: refused: rewritten log"); sys.exit(3)
+            data = data[len(old):]
+        open(os.path.join(a.out, f"blob-{i}"), "wb").write(data)
+        ents.append({"path": rel, "blob": f"blob-{i}", "kind": kind})
     json.dump({"entries": ents}, open(os.path.join(a.out, "manifest.json"), "w"))
     print(f"engine_state pack ({a.producer}): {len(ents)} PRIVATE-PACK-PATHS")
 elif a.cmd == "apply":
@@ -153,7 +160,12 @@ elif a.cmd == "apply":
         print("engine_state apply: refused: no delta"); sys.exit(2)
     for e in json.load(open(man))["entries"]:
         dst = os.path.join(root, e["path"]); os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copyfile(os.path.join(a.delta, e["blob"]), dst)
+        blob = open(os.path.join(a.delta, e["blob"]), "rb").read()
+        if e.get("kind") == "append":  # blind append, as Engine's apply (no de-dup)
+            with open(dst, "ab") as f:
+                f.write(blob)
+        else:
+            open(dst, "wb").write(blob)
     print("engine_state apply: PRIVATE-APPLY-PATHS")
     sys.exit(int(os.environ.get("FAKE_APPLY_RC", "0")))
 elif a.cmd == "list":
@@ -193,6 +205,10 @@ class Box:
         with open(gh, "w") as f:
             f.write(GH_STUB.replace("/usr/bin/env python3", sys.executable, 1))
         os.chmod(gh, 0o755)
+        self.sleeps = os.path.join(self.root, "sleep-log")
+        with open(os.path.join(self.bin, "sleep"), "w") as f:  # backoff is recorded, never waited
+            f.write(f'#!/bin/sh\necho "$1" >> {self.sleeps}\n')
+        os.chmod(os.path.join(self.bin, "sleep"), 0o755)
         scripts = os.path.join(self.root, "code", "scripts")
         os.makedirs(os.path.join(scripts, "watch"))
         os.makedirs(os.path.join(scripts, "tests"))
@@ -407,6 +423,7 @@ class CheckoutsAndTokens(unittest.TestCase):
                         self.assertNotRegex(run, r"https://[^\"\s]*@")  # never in a remote URL
                 if "MYTHOS_DATA_TOKEN" in str(st.get("with") or {}):
                     self.assertIn("actions/checkout@", str(st.get("uses")))
+            self.assertNotIn("MYTHOS_DATA_TOKEN", str(doc.get("env") or {}))  # workflow level: every step would hold it
             for name, job in doc["jobs"].items():
                 self.assertNotIn("MYTHOS_DATA_TOKEN", str(job.get("env") or {}), name)
             self.assertTrue(holders)
@@ -446,11 +463,29 @@ class Wiring(unittest.TestCase):
         self.assertEqual(len(names), 4)
         self.assertNotRegex(LANES_TEXT, r"RUNNER_TEMP/(tick-|plan-|fix-|gate-)?delta\b")
 
+    def test_stages_start_only_on_a_positive_not_busy_after_a_good_tick(self):
+        for job in ("gate", "plan", "fix"):
+            c = cond(self.jobs[job])
+            self.assertIn(f"needs.tick.outputs.{job}_busy == 'false'", c, job)
+            self.assertNotIn("_busy != 'true'", c, job)
+        for job in ("gate", "plan"):
+            self.assertIn("needs.tick.result == 'success'", cond(self.jobs[job]), job)
+        self.assertEqual(self.jobs["tick"]["outputs"]["fix_busy"], "${{ steps.busy.outputs.fix }}")
+
+    def test_every_persist_step_sets_the_data_root_and_the_run_attempt(self):
+        for job in STATE_JOBS:
+            env = step(LANES_DOC, job, "persist")["env"]
+            self.assertEqual(env.get("MYTHOS_DATA_ROOT"), "${{ github.workspace }}/state", job)
+            self.assertTrue(env["RUN_URL"].endswith("/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}"), job)
+            self.assertIn('msg="engine: $PRODUCER state ($RUN_URL)"', step(LANES_DOC, job, "persist")["run"])
+
     def test_persist_is_one_text_with_engines_retry_loop(self):
         texts = {between(step(LANES_DOC, j, "persist")["run"], "# PERSIST-BEGIN", "# PERSIST-END") for j in STATE_JOBS}
         self.assertEqual(len(texts), 1)
         t = texts.pop()
-        self.assertIn("for _ in 1 2 3 4 5; do", t)
+        self.assertIn("for try in 1 2 3 4 5; do", t)
+        self.assertEqual(t.count("git -C state clean -ffdxq"), 2)  # after both resets (S7)
+        self.assertIn('sleep "$(( try * 3 + RANDOM % 5 ))"', t)
         self.assertIn("MYTHOS_DATA_ROOT", str(step(LANES_DOC, "gate", "persist")["env"]))
         self.assertNotRegex(t, r"engine_state\.py apply [^\n]*--root")  # Engine's apply has no --root
 
@@ -480,6 +515,7 @@ class Wiring(unittest.TestCase):
         for st in ci["jobs"]["lint"]["steps"]:
             if "test_engine_lanes_workflow" in str(st.get("run")):
                 self.assertNotIn("continue-on-error", st)
+                self.assertNotIn("if", st)  # an `if:` could switch the guard off (silent skip)
                 self.assertNotIn("||", st["run"])
 
     def test_missing_pyyaml_fails_not_skips(self):
@@ -696,7 +732,8 @@ class BusyBehaviour(Sandboxed):
             r, out = self.busy(**fake)
             self.assertNotEqual(r.returncode, 0, fake)
             self.assertIn("::error title=In-flight check::", r.stdout)
-            self.assertNotEqual(out.get("gate"), "true")
+            # red AND closed: all three stages read as busy even if a job condition forgets tick success (H8)
+            self.assertEqual((out.get("gate"), out.get("plan"), out.get("fix")), ("true", "true", "true"), fake)
 
 
 # ================================================================ behaviour: pack -> persist round trip (H2, H3, F1)
@@ -780,6 +817,62 @@ class PersistBehaviour(Sandboxed):
         self.assertEqual(out.get("pushed"), "true")
         self.assertTrue(self.origin_has("data/gate/new.json"))
         self.assertTrue(self.origin_has("data/other/y.json"))
+        self.assertEqual(len(open(self.box.sleeps).read().split()), 3)  # one backoff per rejected push
+
+    def origin_text(self, rel):
+        return subprocess.run(["git", "--git-dir", self.bare, "show", f"engine-state:{rel}"], capture_output=True,
+                              text=True, env=self.box.env({})).stdout
+
+    def test_untracked_files_outside_the_delta_are_never_pushed(self):
+        b = self.box
+        job_env = LANES_DOC["jobs"]["gate"]["env"]
+        self.write("gate")
+        base = b.git("rev-parse", "HEAD", cwd=self.state).stdout.strip()
+        r = b.run_step(step(LANES_DOC, "gate", "pack"), {"BASE": base}, job_env)
+        self.assertEqual(r.returncode, 0)
+        self.write("gate", "stray.json", '{"not": "in the delta"}\n')  # written after the pack
+        open(b.out, "w").close()
+        r = b.run_step(step(LANES_DOC, "gate", "persist"), {"STATE_BRANCH": "engine-state", "RUN_URL": "u",
+                       "MYTHOS_DATA_ROOT": self.state, "DATA_TOKEN": "t"}, job_env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(self.origin_has("data/gate/new.json"))
+        self.assertFalse(self.origin_has("data/gate/stray.json"))
+
+    def test_a_new_append_file_lands_once(self):
+        self.write("gate", "rows.jsonl", '{"a": 1}\n{"a": 2}\n')
+        r, out = self.pack_and_persist("gate")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.origin_text("data/gate/rows.jsonl"), '{"a": 1}\n{"a": 2}\n')
+
+    def test_a_new_append_file_lands_once_after_a_retry(self):
+        self.hook(reject=1)
+        self.write("fix", "rows.jsonl", '{"a": 1}\n')
+        r, out = self.pack_and_persist("fix")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.origin_text("data/fix/rows.jsonl"), '{"a": 1}\n')
+
+    def test_a_grown_append_file_gets_only_the_new_lines(self):
+        self.write("tick", "rows.jsonl", '{"a": 1}\n')
+        self.box.git("add", "-A", cwd=self.state)
+        self.box.git("commit", "-q", "-m", "base", cwd=self.state)
+        self.box.git("push", "-q", "origin", "HEAD:engine-state", cwd=self.state)
+        self.write("tick", "rows.jsonl", '{"a": 1}\n{"a": 2}\n')
+        r, out = self.pack_and_persist("tick")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.origin_text("data/tick/rows.jsonl"), '{"a": 1}\n{"a": 2}\n')
+
+    def test_an_earlier_attempts_commit_is_not_taken_as_this_attempts_push(self):
+        url1, url2 = "https://example.invalid/run/9/attempts/1", "https://example.invalid/run/9/attempts/2"
+        with open(os.path.join(self.seed, "data", "other", "z.json"), "w") as f:
+            f.write("{}\n")
+        self.box.git("add", "-A", cwd=self.seed)
+        self.box.git("commit", "-q", "-m", f"engine: gate state ({url1})", cwd=self.seed)
+        self.box.git("push", "-q", "origin", "HEAD:engine-state", cwd=self.seed)
+        self.hook(reject=1)
+        self.write("gate")
+        r, out = self.pack_and_persist("gate", {"RUN_URL": url2})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(self.origin_has("data/gate/new.json"))
 
     def test_a_push_that_landed_but_reported_failure_is_not_applied_twice(self):
         real = shutil.which("git")
@@ -865,9 +958,36 @@ class PrivateLogBehaviour(Sandboxed):
         return self.box.run_step(st, env)
 
     def logged(self, rel):
+        """rel is runs/<key>/<job>/<file>; the branch keeps it under runs/<YYYY-MM-DD>/<key>/<job>/<file>."""
+        day = subprocess.run(["date", "+%F"], env={"TZ": "America/Denver"}, capture_output=True, text=True).stdout.strip()
+        rel = rel.replace("runs/", f"runs/{day}/", 1)
         r = subprocess.run(["git", "--git-dir", self.bare, "show", f"lanes-logs:{rel}"], capture_output=True,
                            text=True, env=self.box.env({}))
         return r.stdout if r.returncode == 0 else None
+
+    def test_empty_logs_commit_nothing(self):
+        open(os.path.join(self.box.log, "mode.log"), "w").close()
+        r = self.privlog("tick")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("private log: nothing to save", r.stdout)
+        r = subprocess.run(["git", "--git-dir", self.bare, "rev-parse", "--verify", "-q", "lanes-logs"],
+                           capture_output=True, env=self.box.env({}))
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_empty_logs_are_left_out_and_retries_back_off(self):
+        open(os.path.join(self.box.log, "mode.log"), "w").close()
+        with open(os.path.join(self.box.log, "scan.log"), "w") as f:
+            f.write("x\n")
+        h = os.path.join(self.bare, "hooks", "pre-receive")
+        cnt = os.path.join(self.box.root, "log-push-count")
+        with open(h, "w") as f:
+            f.write(f"#!/bin/sh\nn=$(cat {cnt} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {cnt}\n[ $n -gt 2 ] || exit 1\n")
+        os.chmod(h, 0o755)
+        r = self.privlog("plan")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.logged("runs/5-1/plan/scan.log"), "x\n")
+        self.assertIsNone(self.logged("runs/5-1/plan/mode.log"))
+        self.assertEqual(len(open(self.box.sleeps).read().split()), 2)
 
     def test_full_output_goes_private_and_public_gets_titles_only(self):
         with open(os.path.join(self.box.log, "scan.log"), "w") as f:
@@ -945,6 +1065,10 @@ class RedactionBehaviour(Sandboxed):
     def test_act_scan(self):
         r, out = self.check("tick", "act", {"FAKE_LINES": "3|#5: ready to arm"})
         self.assertEqual(out.get("act"), "true")
+
+    def test_brother_seen_list_reason_stays_private(self):
+        r, _ = self.check("tick", "Brother seen list")
+        self.assertIn("refresh: no", r.stdout)
 
     def test_fix_scan_and_flow_and_publish(self):
         self.check("tick", "fix", stdout_logged=False)
