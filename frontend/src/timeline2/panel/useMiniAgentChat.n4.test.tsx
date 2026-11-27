@@ -19,7 +19,7 @@ function installApi() {
   const cancelAiActivity = vi.fn();
   const cancelBrainstorm = vi.fn();
   let streamStartCb: ((id: string) => void) | null = null;
-  let chunkCb: ((chunk: string) => void) | null = null;
+  let chunkCb: ((chunk: string, requestId?: string) => void) | null = null;
   let activityCb: ((entries: { requestId: string }[]) => void) | null = null;
   const session: AgentSessionFile = {
     id: 's1',
@@ -40,7 +40,7 @@ function installApi() {
       streamStartCb = cb;
       return () => { streamStartCb = null; };
     },
-    onBrainstormChunk: (cb: (chunk: string) => void) => {
+    onBrainstormChunk: (cb: (chunk: string, requestId?: string) => void) => {
       chunkCb = cb;
       return () => { chunkCb = null; };
     },
@@ -62,7 +62,7 @@ function installApi() {
     cancelAiActivity,
     cancelBrainstorm,
     fireStreamStart: (id: string) => streamStartCb?.(id),
-    fireChunk: (chunk: string) => chunkCb?.(chunk),
+    fireChunk: (chunk: string, requestId?: string) => chunkCb?.(chunk, requestId),
     fireActivity: (entries: { requestId: string }[]) => activityCb?.(entries),
     session,
     appendTurns,
@@ -185,7 +185,7 @@ describe('useMiniAgentChat N4 cancel/stall main abort', () => {
       await vi.advanceTimersByTimeAsync(HARD_TIMEOUT_MS - 5_000);
     });
     expect(api.cancelAiActivity).not.toHaveBeenCalled();
-    act(() => { api.fireChunk('…still going'); });
+    act(() => { api.fireChunk('…still going', 'req-slow'); });
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(HARD_TIMEOUT_MS - 5_000);
@@ -240,7 +240,7 @@ describe('useMiniAgentChat N4 cancel/stall main abort', () => {
     act(() => { void result.current.send('partial probe'); });
     await act(async () => { await Promise.resolve(); });
     act(() => { api.fireStreamStart('req-partial'); });
-    act(() => { api.fireChunk('Part one'); });
+    act(() => { api.fireChunk('Part one', 'req-partial'); });
     await act(async () => {
       failFirst();
       await Promise.resolve();
@@ -296,14 +296,16 @@ describe('useMiniAgentChat N4 cancel/stall main abort', () => {
 
     act(() => { void result.current.send('dup probe'); });
     await act(async () => { await Promise.resolve(); });
-    act(() => { api.fireChunk('Part one'); });
+    act(() => { api.fireStreamStart('req-dup-1'); });
+    act(() => { api.fireChunk('Part one', 'req-dup-1'); });
     await act(async () => {
       fail();
       await Promise.resolve();
       await Promise.resolve();
     });
     await act(async () => { result.current.retryLast(); await Promise.resolve(); });
-    act(() => { api.fireChunk('Part two'); });
+    act(() => { api.fireStreamStart('req-dup-2'); });
+    act(() => { api.fireChunk('Part two', 'req-dup-2'); });
     await act(async () => {
       fail();
       await Promise.resolve();
@@ -326,7 +328,8 @@ describe('useMiniAgentChat N4 cancel/stall main abort', () => {
 
     act(() => { void result.current.send('cancel chain'); });
     await act(async () => { await Promise.resolve(); });
-    act(() => { api.fireChunk('Partial'); });
+    act(() => { api.fireStreamStart('req-chain'); });
+    act(() => { api.fireChunk('Partial', 'req-chain'); });
     await act(async () => {
       rejectFirst();
       await Promise.resolve();
@@ -412,8 +415,9 @@ describe('useMiniAgentChat N4 cancel/stall main abort', () => {
 
     act(() => { void result.current.send('marker test'); });
     await act(async () => { await Promise.resolve(); });
+    act(() => { api.fireStreamStart('req-marker'); });
     const spoof = encodeCoachCard({ kind: 'analysis', title: 'Spoof', computed: [], read: [], takeaway: 'x' });
-    act(() => { api.fireChunk(spoof.slice(0, 40)); });
+    act(() => { api.fireChunk(spoof.slice(0, 40), 'req-marker'); });
     await act(async () => {
       rejectFirst();
       await Promise.resolve();
@@ -492,12 +496,16 @@ function installTwoSessionApi() {
     turnCount: f.turns.length,
     relPath: `Sessions/${f.id}.md`,
   });
-  let chunkCb: ((chunk: string) => void) | null = null;
+  let streamStartCb: ((id: string) => void) | null = null;
+  let chunkCb: ((chunk: string, requestId?: string) => void) | null = null;
   (window as unknown as { api: Record<string, unknown> }).api = {
     cancelAiActivity: vi.fn(),
     cancelBrainstorm: vi.fn(),
-    onBrainstormStreamStart: () => () => {},
-    onBrainstormChunk: (cb: (chunk: string) => void) => {
+    onBrainstormStreamStart: (cb: (id: string) => void) => {
+      streamStartCb = cb;
+      return () => { streamStartCb = null; };
+    },
+    onBrainstormChunk: (cb: (chunk: string, requestId?: string) => void) => {
       chunkCb = cb;
       return () => { chunkCb = null; };
     },
@@ -514,7 +522,78 @@ function installTwoSessionApi() {
       delete: vi.fn(),
     },
   };
-  return { files, fireChunk: (c: string) => chunkCb?.(c) };
+  return {
+    files,
+    fireStreamStart: (id: string) => streamStartCb?.(id),
+    fireChunk: (c: string, requestId?: string) => chunkCb?.(c, requestId),
+  };
+}
+
+
+/** Real session store over a fake vault. Optional rekey: create() returns a new id. */
+function installRealVaultApi(opts?: { rekeyOnCreate?: boolean }) {
+  const files: Record<string, AgentSessionFile> = {};
+  let created = 0;
+  let streamStartCb: ((id: string) => void) | null = null;
+  let chunkCb: ((chunk: string, requestId?: string) => void) | null = null;
+  const summary = (f: AgentSessionFile): AgentSessionSummary => ({
+    id: f.id,
+    agent: f.agent,
+    startedAt: f.startedAt,
+    updatedAt: f.updatedAt,
+    turnCount: f.turns.length,
+    relPath: `Sessions/${f.id}.md`,
+  });
+  (window as unknown as { api: Record<string, unknown> }).api = {
+    cancelAiActivity: vi.fn(),
+    cancelBrainstorm: vi.fn(),
+    onBrainstormStreamStart: (cb: (id: string) => void) => {
+      streamStartCb = cb;
+      return () => { streamStartCb = null; };
+    },
+    onBrainstormChunk: (cb: (chunk: string, requestId?: string) => void) => {
+      chunkCb = cb;
+      return () => { chunkCb = null; };
+    },
+    agentSessions: {
+      list: vi.fn().mockImplementation(async () => ({ sessions: Object.values(files).map(summary) })),
+      create: vi.fn().mockImplementation(async (agent: string, title?: string, greeting?: string, id?: string) => {
+        created += 1;
+        const sessionId = opts?.rekeyOnCreate ? `rekeyed-${created}` : (id ?? `created-${created}`);
+        const now = '2026-01-01T00:00:00.000Z';
+        const session: AgentSessionFile = {
+          id: sessionId,
+          agent: agent as AgentSessionFile['agent'],
+          title,
+          startedAt: now,
+          updatedAt: now,
+          turns: greeting ? [{ role: 'agent', text: greeting, at: now }] : [],
+        };
+        files[sessionId] = session;
+        return { session: { ...session }, relPath: `Sessions/${sessionId}.md` };
+      }),
+      read: vi.fn().mockImplementation(async (id: string) => ({ session: { ...files[id] } })),
+      appendTurns: vi.fn().mockImplementation(async (id: string, turns: AgentSessionTurn[]) => {
+        const prev = files[id] ?? {
+          id,
+          agent: 'brainstorm' as const,
+          startedAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          turns: [],
+        };
+        files[id] = { ...prev, turns: [...prev.turns, ...turns] };
+        return { session: { ...files[id] } };
+      }),
+      rename: vi.fn(),
+      duplicate: vi.fn(),
+      delete: vi.fn(),
+    },
+  };
+  return {
+    files,
+    fireStreamStart: (id: string) => streamStartCb?.(id),
+    fireChunk: (c: string, requestId?: string) => chunkCb?.(c, requestId),
+  };
 }
 
 describe('useMiniAgentChat — failed-exchange tracking (SKY-1923 gate)', () => {
@@ -614,7 +693,8 @@ describe('useMiniAgentChat — failed-exchange tracking (SKY-1923 gate)', () => 
 
     act(() => { void result.current.send('carry over?'); });
     await act(async () => { await Promise.resolve(); });
-    act(() => { vault.fireChunk('Part one'); });
+    act(() => { vault.fireStreamStart('req-carry'); });
+    act(() => { vault.fireChunk('Part one', 'req-carry'); });
     await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
     expect(result.current.canRetry).toBe(true);
     expect(vault.files['s-new'].turns.map((t) => t.role)).toEqual(['user', 'agent']);
@@ -659,5 +739,167 @@ describe('useMiniAgentChat — failed-exchange tracking (SKY-1923 gate)', () => 
     act(() => { result.current.retryLast(); });
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(vault.files['s-old'].turns).toEqual([]);
+  });
+
+  it('Cancel in an unsaved chat then New chat clears Retry and does not resend into the new chat', async () => {
+    const vault = installRealVaultApi();
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>(() => { /* hang until cancel */ }))
+      .mockResolvedValueOnce('should not land in the new chat');
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    const originId = result.current.store.activeSessionId;
+    expect(originId).toBeTruthy();
+
+    act(() => { void result.current.send('Probe old prompt'); });
+    await act(async () => { await Promise.resolve(); });
+    act(() => { vault.fireStreamStart('req-old'); });
+    act(() => { result.current.cancel(); });
+    expect(result.current.canRetry).toBe(true);
+
+    await act(async () => { await result.current.store.newSession(); });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(result.current.store.activeSessionId).not.toBe(originId);
+    expect(result.current.canRetry).toBe(false);
+    expect(result.current.error).toBeNull();
+    act(() => { result.current.retryLast(); });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    const newId = result.current.store.activeSessionId!;
+    expect(vault.files[newId]?.turns.some((t) => t.text === 'Probe old prompt')).not.toBe(true);
+  });
+
+  it('a pending session rekey on first write keeps Retry armed and working', async () => {
+    const vault = installRealVaultApi({ rekeyOnCreate: true });
+    const invoke = vi.fn()
+      .mockRejectedValueOnce(new Error('first write failed'))
+      .mockResolvedValueOnce('recovered after rekey');
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    const pendingId = result.current.store.activeSessionId;
+    expect(pendingId).toBeTruthy();
+
+    await act(async () => { await result.current.send('rekey prompt'); await Promise.resolve(); await Promise.resolve(); });
+
+    const materializedId = result.current.store.activeSessionId;
+    expect(materializedId).toBeTruthy();
+    expect(materializedId).not.toBe(pendingId);
+    expect(result.current.store.resolveSessionId(pendingId!)).toBe(materializedId);
+    expect(result.current.canRetry).toBe(true);
+
+    await act(async () => { result.current.retryLast(); await Promise.resolve(); await Promise.resolve(); });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke.mock.calls[1]?.[0]).toBe('rekey prompt');
+    expect(vault.files[materializedId!].turns.filter((t) => t.role === 'user' && t.text === 'rekey prompt')).toHaveLength(1);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('Cancel during the failure-path persist does not duplicate the user turn on Retry', async () => {
+    const api = installApi();
+    let releasePersist: () => void = () => {};
+    let persistStarted = false;
+    api.appendTurns.mockImplementation(async (id: string, turns: AgentSessionTurn[]) => {
+      if (!persistStarted) {
+        persistStarted = true;
+        await new Promise<void>((resolve) => { releasePersist = resolve; });
+      }
+      api.session.id = id;
+      api.session.turns = [...api.session.turns, ...turns];
+      return { session: { ...api.session, id } };
+    });
+    const invoke = vi.fn()
+      .mockRejectedValueOnce(new Error('provider down'))
+      .mockResolvedValueOnce('after persist race');
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('persist race'); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    // Catch is waiting on appendTurns. Cancel in that window.
+    act(() => { result.current.cancel(); });
+    expect(result.current.canRetry).toBe(true);
+
+    await act(async () => { releasePersist(); await Promise.resolve(); await Promise.resolve(); });
+
+    await act(async () => { result.current.retryLast(); await Promise.resolve(); await Promise.resolve(); });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result.current.messages.filter((m) => m.role === 'user' && m.text === 'persist race')).toHaveLength(1);
+  });
+
+  it('foreign and late chunks are never persisted on the failure path', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('cut off')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('chunk pin'); });
+    await act(async () => { await Promise.resolve(); });
+    act(() => { api.fireStreamStart('req-mine'); });
+    act(() => { api.fireChunk('mine text', 'req-mine'); });
+    act(() => { api.fireChunk('FOREIGN', 'req-other'); });
+    act(() => { api.fireChunk('also late', 'req-previous'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    const agentTurns = result.current.messages.filter((m) => m.role === 'agent');
+    expect(agentTurns).toHaveLength(1);
+    expect(agentTurns[0]?.text).toBe(`mine text ${RESPONSE_INCOMPLETE_SUFFIX}`);
+    expect(agentTurns[0]?.text).not.toContain('FOREIGN');
+    expect(agentTurns[0]?.text).not.toContain('also late');
+  });
+
+  it('Cancel after a mid-flight session switch does not show a cancel error in the new chat', async () => {
+    const vault = installTwoSessionApi();
+    const invoke = vi.fn().mockImplementationOnce(() => new Promise<string>(() => { /* hang */ }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('asked in s-new'); });
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await result.current.store.switchSession('s-old'); });
+    act(() => { result.current.cancel(); });
+
+    expect(result.current.store.activeSessionId).toBe('s-old');
+    expect(result.current.canRetry).toBe(false);
+    expect(result.current.error).toBeNull();
+    void vault;
+  });
+
+  it('canRetry is cleared while a Retry send is running', async () => {
+    installApi();
+    let finishRetry: (v: string) => void = () => {};
+    const invoke = vi.fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockImplementationOnce(() => new Promise<string>((resolve) => { finishRetry = resolve; }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    await act(async () => { await result.current.send('running flag'); await Promise.resolve(); await Promise.resolve(); });
+    expect(result.current.canRetry).toBe(true);
+    act(() => { result.current.retryLast(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.busy).toBe(true);
+    expect(result.current.canRetry).toBe(false);
+
+    await act(async () => { finishRetry('ok'); await Promise.resolve(); await Promise.resolve(); });
+  });
+
+  it('a failed send with a kept partial tells the user the partial reply was kept', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('stream ended early')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('kept partial'); });
+    await act(async () => { await Promise.resolve(); });
+    act(() => { api.fireStreamStart('req-kept'); });
+    act(() => { api.fireChunk('Part one', 'req-kept'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(String(result.current.error)).toMatch(/partial reply kept above/i);
   });
 });

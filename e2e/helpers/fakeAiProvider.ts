@@ -85,8 +85,12 @@ export function startFakeAiProvider(initialMode: FakeAiMode = {
         return;
       }
 
+      let requestAborted = false;
       res.on('close', () => {
-        if (!res.writableFinished) abortClose = true;
+        if (!res.writableFinished) {
+          requestAborted = true;
+          abortClose = true;
+        }
       });
 
       hits += 1;
@@ -108,7 +112,7 @@ export function startFakeAiProvider(initialMode: FakeAiMode = {
 
           if (mode.kind === 'stream') {
             for (const chunk of mode.chunks) {
-              if (abortClose) return;
+              if (requestAborted) return;
               writeSse(res, chunk);
               if (mode.chunkDelayMs && mode.chunkDelayMs > 0) {
                 await delay(mode.chunkDelayMs);
@@ -125,7 +129,7 @@ export function startFakeAiProvider(initialMode: FakeAiMode = {
           // drop mode
           let sent = 0;
           for (const chunk of mode.chunks) {
-            if (abortClose) return;
+            if (requestAborted) return;
             writeSse(res, chunk);
             sent += 1;
             if (mode.chunkDelayMs && mode.chunkDelayMs > 0) {

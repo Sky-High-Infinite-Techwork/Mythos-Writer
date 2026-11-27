@@ -66,6 +66,12 @@ export interface UseAgentSessionsResult {
   appendTurns: (turns: AgentSessionTurn[], sessionId?: string) => Promise<void>;
   /** Reload sessions from vault. */
   refresh: () => Promise<AgentSessionSummary[] | undefined>;
+  /**
+   * If a pending in-memory session was written to a vault file under a new
+   * id, return that id; otherwise return the id unchanged. Used by the
+   * mini-chat hook so a first-write rekey is not treated as a session switch.
+   */
+  resolveSessionId: (id: string) => string;
 }
 
 interface AgentSessionStoreState {
@@ -403,6 +409,7 @@ function createStore(agent: string, autoCreate: boolean): AgentSessionStore {
       }
     },
     refresh,
+    resolveSessionId: (id: string) => materializedIds.get(id) ?? id,
   };
 
   // Kick off init lazily on first use.

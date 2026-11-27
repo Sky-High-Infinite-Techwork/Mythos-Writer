@@ -130,6 +130,7 @@ function abortInMain(requestId: string | null): void {
 
 export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniChatInvoke): MiniAgentChat {
   const store = useAgentSessions(agent);
+  const resolveSessionId = store.resolveSessionId;
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [canRetry, setCanRetry] = useState(false);
@@ -146,47 +147,50 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
   const streamStartUnsubRef = useRef<(() => void) | null>(null);
   const chunkUnsubRef = useRef<(() => void) | null>(null);
   const prevActiveSessionIdRef = useRef<string | null | undefined>(undefined);
-  /** The active session as of the previous render was still the in-memory pending one. */
-  const activeWasPendingRef = useRef(false);
-  /** pending id → materialized id, for stores that assign a new id on first write. */
-  const sessionAliasRef = useRef(new Map<string, string>());
 
   const canonicalSessionId = useCallback((id: string | undefined): string | undefined => {
-    let cur = id;
-    for (let hops = 0; cur !== undefined && hops < 8; hops += 1) {
-      const next = sessionAliasRef.current.get(cur);
-      if (next === undefined) break;
-      cur = next;
+    if (id === undefined) return undefined;
+    return resolveSessionId(id);
+  }, [resolveSessionId]);
+
+  const pinUndefinedOrigins = useCallback((sessionId: string) => {
+    if (inFlightRef.current && inFlightRef.current.originSessionId === undefined) {
+      inFlightRef.current.originSessionId = sessionId;
     }
-    return cur;
-  }, []);
+    const failed = lastFailedExchangeRef.current;
+    if (failed && failed.originSessionId === undefined) {
+      failed.originSessionId = sessionId;
+      if (canonicalSessionId(sessionId) === canonicalSessionId(store.activeSessionId ?? undefined)) {
+        setCanRetry(true);
+      }
+    }
+  }, [canonicalSessionId, store.activeSessionId]);
 
   // A failed exchange belongs to the session it was sent from. A genuine
   // session switch drops Retry + the error strip (Retry would otherwise
   // resend the old prompt into the newly opened thread). The one id change
-  // that is NOT a switch — the pending session getting its file on first
-  // write — is recorded as an alias so the exchange follows it.
+  // that is NOT a switch is a first-write rekey reported by the session
+  // store (resolveSessionId). "+ New chat" and deleting an unsaved chat
+  // are switches — the old heuristic treated them as materialization.
   useEffect(() => {
     const prev = prevActiveSessionIdRef.current;
     const cur = store.activeSessionId ?? null;
     prevActiveSessionIdRef.current = cur;
-    if (prev === undefined || prev === null || cur === prev) return;
-    const materialized = cur !== null
-      && activeWasPendingRef.current
-      && !store.sessions.some((s) => s.id === prev);
-    if (materialized) {
-      sessionAliasRef.current.set(prev, cur);
+    if (prev === undefined) return;
+    if (cur === prev) return;
+    // Init (or the first session appearing): pin exchanges that had no
+    // origin yet. Do not treat this as "belongs to every session".
+    if (prev === null && cur !== null) {
+      pinUndefinedOrigins(cur);
+      return;
+    }
+    if (prev !== null && cur !== null && resolveSessionId(prev) === cur) {
       return;
     }
     lastFailedExchangeRef.current = null;
     setCanRetry(false);
     setError(null);
-  }, [store.activeSessionId, store.sessions]);
-
-  useEffect(() => {
-    activeWasPendingRef.current =
-      store.sessions.find((s) => s.id === store.activeSessionId)?.relPath === '';
-  });
+  }, [store.activeSessionId, resolveSessionId, pinUndefinedOrigins]);
 
   // The chat on screen right now (read inside timers / awaited catches, where
   // the render-time value would be stale).
@@ -196,7 +200,8 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
   /** True when a failed exchange was sent from the chat that is open now. */
   const belongsToActiveSession = useCallback((exchange: FailedExchange | null): boolean => {
     if (exchange === null) return false;
-    if (exchange.originSessionId === undefined) return true;
+    // An unverified origin must not be treated as belonging to every session.
+    if (exchange.originSessionId === undefined) return false;
     return canonicalSessionId(exchange.originSessionId) === canonicalSessionId(activeSessionIdRef.current);
   }, [canonicalSessionId]);
 
@@ -205,6 +210,12 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
   // the old chat: Retry stays off so its prompt is never resent into the new
   // one. Returns whether Retry was armed.
   const recordFailedExchange = useCallback((exchange: FailedExchange): boolean => {
+    if (exchange.originSessionId === undefined) {
+      // Keep the exchange so the first session that appears can pin it.
+      // Do not arm Retry until the origin is verified.
+      lastFailedExchangeRef.current = exchange;
+      return false;
+    }
     if (!belongsToActiveSession(exchange)) return false;
     lastFailedExchangeRef.current = exchange;
     setCanRetry(true);
@@ -275,7 +286,7 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
     resetInFlight();
     const armed = recordFailedExchange(cancelled ?? {
       prompt: pendingPrompt,
-      originSessionId: undefined,
+      originSessionId: activeSessionIdRef.current,
       userPersisted: false,
     });
     if (armed) setError('Generation cancelled. You can retry now.');
@@ -315,8 +326,12 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
         ? window.api?.onBrainstormChunk
         : window.api?.onWritingAssistantChunk;
     if (typeof onChunk === 'function') {
-      chunkUnsubRef.current = onChunk((chunk: string) => {
+      chunkUnsubRef.current = onChunk((chunk: string, requestId?: string) => {
         if (generationGenRef.current !== gen) return;
+        // Only buffer chunks that name THIS request. A late or overlapping
+        // stream on the shared channel must not land in this chat's vault.
+        const mine = mainRequestIdRef.current;
+        if (!requestId || !mine || requestId !== mine) return;
         if (chunk) streamAccumRef.current += chunk;
         setStalled(false);
         scheduleStallTimers(gen);
@@ -339,7 +354,6 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
       && failedExchange.prompt === trimmed
       && canonicalSessionId(failedExchange.originSessionId) === canonicalSessionId(originSessionId);
     const userAlreadyInFeed = isRetryOfFailed
-      && failedExchange.userPersisted
       && feedEndsWithUserPrompt(liveTurns, trimmed);
     inFlightRef.current = { prompt: trimmed, originSessionId, userPersisted: userAlreadyInFeed };
     setPendingPrompt(trimmed);
@@ -415,6 +429,20 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
         try {
           await store.appendTurns(failedTurns, originSessionId);
           userPersisted = true;
+          // Cancel / timeout may have already armed Retry from inFlightRef
+          // (userPersisted: false) while this write was in flight. Update
+          // the shared object so the next Retry does not append again.
+          const already = lastFailedExchangeRef.current;
+          if (
+            already
+            && already.prompt === trimmed
+            && (
+              already.originSessionId === undefined
+              || canonicalSessionId(already.originSessionId) === canonicalSessionId(originSessionId)
+            )
+          ) {
+            already.userPersisted = true;
+          }
         } catch {
           /* vault write failed — keep userPersisted as it was */
         }
