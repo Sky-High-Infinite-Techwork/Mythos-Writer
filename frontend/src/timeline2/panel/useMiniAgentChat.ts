@@ -60,6 +60,13 @@ export const MAX_HISTORY_TURNS = 20;
 export const STALL_WARNING_MS = 20_000;
 /** Hard timeout — abort the provider stream in MAIN. */
 export const HARD_TIMEOUT_MS = 90_000;
+/**
+ * Bound the early-chunk buffer when stream-start is late or never arrives.
+ * Main sends stream-start before the token loop, so this only covers IPC
+ * reordering plus a missing start — not a full reply on the happy path.
+ */
+export const MAX_EARLY_CHUNKS = 1024;
+export const MAX_EARLY_CHUNK_CHARS = 262_144;
 
 export const RESPONSE_INCOMPLETE_SUFFIX = '(response incomplete)';
 
@@ -355,7 +362,14 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
         if (!requestId) return;
         const mine = mainRequestIdRef.current;
         if (!mine) {
-          earlyChunksRef.current.push({ requestId, chunk });
+          const buf = earlyChunksRef.current;
+          if (buf.length < MAX_EARLY_CHUNKS) {
+            let chars = 0;
+            for (const c of buf) chars += c.chunk.length;
+            if (chars + chunk.length <= MAX_EARLY_CHUNK_CHARS) {
+              buf.push({ requestId, chunk });
+            }
+          }
           return;
         }
         if (requestId !== mine) return;

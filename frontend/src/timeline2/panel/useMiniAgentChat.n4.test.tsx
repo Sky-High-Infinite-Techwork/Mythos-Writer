@@ -10,6 +10,8 @@ import {
   useMiniAgentChat,
   HARD_TIMEOUT_MS,
   STALL_WARNING_MS,
+  MAX_EARLY_CHUNKS,
+  MAX_EARLY_CHUNK_CHARS,
   RESPONSE_INCOMPLETE_SUFFIX,
   turnsForModelHistory,
   feedEndsWithUserPrompt,
@@ -921,15 +923,17 @@ describe('useMiniAgentChat — failed-exchange tracking (SKY-1923 gate)', () => 
     act(() => { void result.current.send('early pin'); });
     await act(async () => { await Promise.resolve(); });
     // Chunks can land before stream-start: they share no IPC channel.
+    // Two matching early chunks pin flush order (Critic S6 / C2).
     act(() => { api.fireChunk('Prefix', 'req-early'); });
     act(() => { api.fireChunk('FOREIGN', 'req-other'); });
+    act(() => { api.fireChunk(' mid', 'req-early'); });
     act(() => { api.fireStreamStart('req-early'); });
     act(() => { api.fireChunk(' and rest', 'req-early'); });
     await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
 
     const agentTurns = result.current.messages.filter((m) => m.role === 'agent');
     expect(agentTurns).toHaveLength(1);
-    expect(agentTurns[0]?.text).toBe(`Prefix and rest ${RESPONSE_INCOMPLETE_SUFFIX}`);
+    expect(agentTurns[0]?.text).toBe(`Prefix mid and rest ${RESPONSE_INCOMPLETE_SUFFIX}`);
     expect(agentTurns[0]?.text).not.toContain('FOREIGN');
   });
 
@@ -949,6 +953,79 @@ describe('useMiniAgentChat — failed-exchange tracking (SKY-1923 gate)', () => 
     expect(result.current.messages.filter((m) => m.role === 'agent')).toHaveLength(0);
     expect(api.appendTurns.mock.calls.flatMap((c) => c[1] as AgentSessionTurn[])
       .some((t) => t.text.includes('orphan early'))).toBe(false);
+  });
+
+  it('flushing early chunks clears a stall warning and re-arms the stall timers', async () => {
+    const api = installApi();
+    const invoke = vi.fn(() => new Promise<string>(() => { /* hang */ }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('early stall'); });
+    await act(async () => { await Promise.resolve(); });
+
+    // Tokens can all land before stream-start. The stall clock still runs
+    // from send() until the flush, so the hint may fire first.
+    await act(async () => { await vi.advanceTimersByTimeAsync(STALL_WARNING_MS); });
+    expect(result.current.stalled).toBe(true);
+
+    act(() => { api.fireChunk('early-only', 'req-flush-stall'); });
+    act(() => { api.fireStreamStart('req-flush-stall'); });
+    expect(result.current.stalled).toBe(false);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(STALL_WARNING_MS - 1); });
+    expect(result.current.stalled).toBe(false);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2); });
+    expect(result.current.stalled).toBe(true);
+    expect(api.cancelAiActivity).not.toHaveBeenCalled();
+  });
+
+  it('early-chunk buffer drops overflow past the size and char caps', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('cut off')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('cap pin'); });
+    await act(async () => { await Promise.resolve(); });
+
+    const oversized = 'A'.repeat(MAX_EARLY_CHUNK_CHARS);
+    act(() => { api.fireChunk(oversized, 'req-cap'); });
+    act(() => { api.fireChunk('TAIL', 'req-cap'); });
+    act(() => { api.fireStreamStart('req-cap'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    const agentTurns = result.current.messages.filter((m) => m.role === 'agent');
+    expect(agentTurns).toHaveLength(1);
+    expect(agentTurns[0]?.text).toBe(`${oversized} ${RESPONSE_INCOMPLETE_SUFFIX}`);
+    expect(agentTurns[0]?.text).not.toContain('TAIL');
+  });
+
+  it('early-chunk buffer keeps only the first MAX_EARLY_CHUNKS matching tokens', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('cut off')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('count cap'); });
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => {
+      for (let i = 0; i < MAX_EARLY_CHUNKS; i++) api.fireChunk('x', 'req-count');
+      api.fireChunk('Y', 'req-count');
+    });
+    act(() => { api.fireStreamStart('req-count'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    const agentTurns = result.current.messages.filter((m) => m.role === 'agent');
+    expect(agentTurns).toHaveLength(1);
+    expect(agentTurns[0]?.text).toBe(`${'x'.repeat(MAX_EARLY_CHUNKS)} ${RESPONSE_INCOMPLETE_SUFFIX}`);
+    expect(agentTurns[0]?.text).not.toContain('Y');
   });
 
   it('Cancel after a mid-flight session switch does not show a cancel error in the new chat', async () => {
