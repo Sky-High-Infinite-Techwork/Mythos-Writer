@@ -87,28 +87,35 @@ def logical_lines(run):
         out.append(cur)
     return out
 
+_GREPS = ("grep", "egrep", "fgrep")
+_GREP_ARG_OPTS = ("-e", "-f", "-A", "-B", "-C", "-d", "-D", "--regexp", "--file", "--context", "--after-context",
+                  "--before-context", "--directories", "--devices", "--label", "--include", "--exclude",
+                  "--exclude-dir", "--color", "--colour", "--binary-files")
+_GREP_EXIT_LONG = ("--quiet", "--silent", "--max-count", "--files-with-matches", "--files-without-match")
+
+
 def _grep_early_exit_flag(argv_text):
-    """Return the early-exit flag if grep argv uses -q/--quiet/-m/--max-count before operands."""
+    """The early-exit option in a grep argv, else None. GNU grep takes options anywhere before `--` (also after the
+    pattern), so every word is read: -q, -m, -l or -L in any short cluster, and the long forms."""
     tokens = argv_text.split()
     i = 0
     while i < len(tokens):
         t = tokens[i]
-        if t == "--" or not t.startswith("-") or t == "-":
+        if t == "--":
             return None
-        if t in ("-e", "-f", "--regexp", "--file", "-A", "-B", "-C", "-d", "-D"):
-            i += 2  # an option that takes the next word
+        if t in _GREP_ARG_OPTS:
+            i += 2  # an option that takes the next word (that word is never an option)
             continue
-        if t == "--quiet" or t.startswith("--quiet="):
-            return t
-        if t == "--max-count" or t.startswith("--max-count="):
-            return t
         if t.startswith("--"):
-            i += 1
-            continue
-        # Short cluster: -q, -qxF, -x -q, -Fq, -m, -m1, -im
-        body = t[1:]
-        if "q" in body or "m" in body:
-            return t
+            if t.split("=", 1)[0] in _GREP_EXIT_LONG:
+                return t
+        elif t.startswith("-") and len(t) > 1:
+            # Short cluster: -q, -qxF, -Fq, -m, -m1, -l, -lF, -L. An arg option (e, f, A, B, C, d, D) ends the cluster.
+            for ch in t[1:]:
+                if ch in "qmlL":
+                    return t
+                if ch in "efABCdD":
+                    break
         i += 1
     return None
 
@@ -132,31 +139,97 @@ def _strip_substitutions(line):
     return re.sub(r"`[^`]*`", "", "".join(out))
 
 
+_CONDITION = re.compile(r"(?:^|[;\s])(?:if|elif|while|until)\s|&&|\|\||^\s*!\s")
+_SED_Q = re.compile(r"""(?:^|[;{}'"\s/$\d])[qQ]\d*\s*(?:[;}'"]|$)""")  # a q / Q command, after an address too
+
+
+def _pipelines(line):
+    """The pipelines of a shell line, each a list of stage texts. Quote-aware: | and |& split stages; ; & && || and
+    a closing ) end a pipeline; nothing inside '...' or "..." splits."""
+    out, stages, cur, q, i = [], [], "", None, 0
+    while i < len(line):
+        c = line[i]
+        if q:
+            cur += c
+            if c == q:
+                q = None
+            elif c == "\\" and q == '"' and i + 1 < len(line):
+                cur += line[i + 1]
+                i += 1
+        elif c in "'\"":
+            q = c
+            cur += c
+        elif c == "\\" and i + 1 < len(line):
+            cur += line[i:i + 2]
+            i += 1
+        elif line.startswith("||", i) or line.startswith("&&", i) or c in ";&)":
+            stages.append(cur)
+            out.append(stages)
+            stages, cur = [], ""
+            i += 2 if line.startswith(("||", "&&"), i) else 1
+            continue
+        elif c == "|":
+            stages.append(cur)
+            cur = ""
+            i += 2 if line.startswith("|&", i) else 1
+            continue
+        else:
+            cur += c
+        i += 1
+    stages.append(cur)
+    out.append(stages)
+    return [p for p in out if any(st.strip() for st in p)]
+
+
+def _stage_program(stage):
+    """(program basename, rest) of a pipeline stage; a leading `command` or `builtin` is skipped."""
+    words = stage.split(None, 1)
+    while words and words[0] in ("command", "builtin"):
+        words = words[1].split(None, 1) if len(words) > 1 else []
+    if not words:
+        return "", ""
+    return os.path.basename(words[0]), (words[1] if len(words) > 1 else "")
+
+
 def early_exit_pipe_grep(line):
-    """If a pipeline stage is grep with an early-exit flag, return (flag, stage). If a pipeline whose status is a
-    condition (if / elif / while / until, or && / ||) ends in head outside $( ), return ("head", line). Else None.
-    Under pipefail an early-exit reader can SIGPIPE the writer, and the condition reads false."""
-    for m in re.finditer(r"\|\s*grep(?:\s+|$)", line):
-        rest = line[m.end():]
-        stage = re.split(r"\s*\|\s*", rest, maxsplit=1)[0]
-        flag = _grep_early_exit_flag(stage)
-        if flag:
-            return flag, "grep " + stage
+    """An early-exit reader in a pipeline, else None. Under pipefail it can SIGPIPE the writer, and a condition on the
+    pipeline then reads false.
+    - grep / egrep / fgrep (also `command grep`, /usr/bin/grep) after `|` or `|&` with -q, --quiet, --silent, -m,
+      --max-count, -l, -L or the long forms, anywhere in its argv: (flag, stage).
+    - head, `awk ... exit` or `sed ... q` in a pipeline that is a condition (if / elif / while / until, ! , && / ||)
+      outside $( ): (program, line)."""
+    for pipeline in _pipelines(line):
+        for stage in pipeline[1:]:
+            prog, rest = _stage_program(stage)
+            if prog in _GREPS:
+                flag = _grep_early_exit_flag(rest)
+                if flag:
+                    return flag, f"{prog} {rest}"
     bare = _strip_substitutions(line)
-    if re.search(r"\|\s*head\b", bare) and re.search(r"(?:^|[;\s])(?:if|elif|while|until)\s|&&|\|\|", bare):
-        return "head", line
+    if not _CONDITION.search(bare):
+        return None
+    for pipeline in _pipelines(bare):
+        for stage in pipeline[1:]:
+            prog, rest = _stage_program(stage)
+            if prog == "head":
+                return "head", line
+            if prog in ("awk", "gawk", "mawk") and re.search(r"\bexit\b", rest):
+                return "awk exit", line
+            if prog == "sed" and _SED_Q.search(rest):
+                return "sed q", line
     return None
 
 
 def pipefail_steps(doc):
-    """Steps of a workflow that run bash with pipefail: an explicit `shell: bash` (GitHub runs it as
-    bash -eo pipefail; the default is bash -e) on the step, the job's or the workflow's defaults, or a pipefail
-    in the run text."""
+    """Steps of a workflow that run bash with pipefail: `shell: bash` (GitHub runs it as bash -eo pipefail; the
+    default is bash -e) or a custom shell string with pipefail, on the step, the job's or the workflow's defaults,
+    or a pipefail in the run text."""
     wf_shell = ((doc.get("defaults") or {}).get("run") or {}).get("shell")
     for name, job, st in all_steps(doc):
         shell = st.get("shell") or ((job.get("defaults") or {}).get("run") or {}).get("shell") or wf_shell
+        shell = str(shell or "")
         run = str(st.get("run") or "")
-        if run and (shell == "bash" or "pipefail" in run):
+        if run and (shell == "bash" or "pipefail" in shell or "pipefail" in run):
             yield name, job, st
 
 
@@ -565,8 +638,9 @@ class Wiring(unittest.TestCase):
         self.assertIn("MYTHOS_DATA_ROOT", str(step(LANES_DOC, "gate", "persist")["env"]))
         self.assertNotRegex(t, r"engine_state\.py apply [^\n]*--root")  # Engine's apply has no --root
         # S17: git log is captured (a failure is an explicit error), then matched off the text
-        self.assertIn("if ! subjects=$(git -C state log -n 50 --format=%s FETCH_HEAD); then", t)
-        self.assertIn("::error title=Persist::cannot read landed-push subjects from $STATE_BRANCH", t)
+        self.assertIn('if ! subjects=$(git -C state log -n 50 --format=%s FETCH_HEAD 2>>"$log"); then', t)
+        self.assertIn("::error title=Persist::cannot read landed-push subjects from $STATE_BRANCH; the push may have "
+                      'landed: check $STATE_BRANCH for \\"$msg\\" before re-running', t)
         self.assertNotRegex(t, r"git -C state log[^\n]*\|\s*grep")
 
     def test_publish_and_chain_wait_for_pushed_state(self):
@@ -999,6 +1073,18 @@ class StageConditions(Sandboxed):
         self.assertTrue(ok)
         self.assertTrue(self.runs("fix", outs, ok))
 
+    def test_a_tick_that_fails_after_the_busy_step_still_lets_fix_run(self):
+        # Intended (Probe S20): fix's `if:` has no needs.tick.result term, on purpose. Engine's fix ran after a red
+        # tick; this workflow keeps fix closed only when the tick fails before the in-flight check (no positive
+        # not-busy, test above). A tick that fails after it (WAKE, pack or its own persist) still lets fix run: fix
+        # reads the newest persisted engine-state itself, and a long or failed tick must not block fixes.
+        self.assertNotIn("needs.tick.result", cond(LANES_DOC["jobs"]["fix"]))
+        outs, ok = self.tick_outputs("pass", FAKE_GH_RUNS="", FAKE_GH_JOBS="")
+        self.assertTrue(ok)
+        self.assertTrue(self.runs("fix", outs, tick_ok=False))  # the tick went red after the check
+        self.assertFalse(self.runs("gate", outs, tick_ok=False))
+        self.assertFalse(self.runs("plan", outs, tick_ok=False))
+
     def test_a_not_ready_pass_tick_is_red_and_reads_nothing(self):
         # HARD-J: pass mode with ready != true must end red (never a silent green with every stage closed).
         # S2: and it must not read the API (the busy step needs ready itself, not only the stages).
@@ -1255,6 +1341,30 @@ class PersistBehaviour(Sandboxed):
         self.assertIsNone(early_exit_pipe_grep('x="$(ls a | head -1)"'))
         self.assertIsNone(early_exit_pipe_grep('var() { printf a | sed -n "s/^$1=//p" | head -n 1; }'))
         self.assertIsNone(early_exit_pipe_grep('git log | grep -e -q >/dev/null'))  # -q is the pattern here
+        # S20 (Critic) / S16b (Probe): grep options anywhere before --, every early-exit flag, the grep variants and
+        # wrappers, |&, and awk exit / sed q as pipe conditions
+        for form in ('if ls | grep --silent x; then :; fi', 'if ls | grep x -q; then :; fi',
+                     'if ls | grep -F x --quiet; then :; fi',
+                     'if ls | egrep -q x; then :; fi', 'if ls | fgrep -q x; then :; fi',
+                     'if ls | command grep -q x; then :; fi', 'if ls | /usr/bin/grep -q x; then :; fi',
+                     'if ls | grep -l x >/dev/null; then :; fi', 'if ls | grep -L x >/dev/null; then :; fi',
+                     'if ls | grep --files-with-matches x >/dev/null; then :; fi', 'if ls |& grep -q x; then :; fi',
+                     'if ls | grep -m 1 x >/dev/null; then :; fi',
+                     "if ls | awk '/x/{f=1; exit} END{exit !f}'; then :; fi", "ls | awk '/x/{exit}' && echo y",
+                     "if ls | sed -n '/x/{p;q}' >/dev/null; then :; fi", "while ls | sed '/x/q' >/dev/null; do :; done",
+                     "if ! ls | head -1 >/dev/null; then :; fi"):
+            self.assertIsNotNone(early_exit_pipe_grep(form), form)
+        synthetic = {"jobs": {
+            "a": {"steps": [{"name": "custom", "shell": "bash --noprofile --norc -eo pipefail {0}", "run": "x"},
+                            {"name": "plain-e", "shell": "bash -e {0}", "run": "x"},
+                            {"name": "default", "run": "x"}, {"name": "inline", "run": "set -o pipefail; x"}]},
+            "b": {"defaults": {"run": {"shell": "bash"}}, "steps": [{"name": "job-default", "run": "x"}]}}}
+        self.assertEqual([st["name"] for _, _, st in pipefail_steps(synthetic)], ["custom", "inline", "job-default"])
+        for form in ('if ls | grep -c x >/dev/null; then :; fi', 'if ls | grep -x -- -q >/dev/null; then :; fi',
+                     'if ls || grep -q x f; then :; fi', "x=\"$(ls | awk '{print; exit}')\"",
+                     "if ls | sed 's/q/x/' >/dev/null; then :; fi", "ls | awk '{print}' | tail -n 1",
+                     'if ls | grep -e -l -F >/dev/null; then :; fi'):
+            self.assertIsNone(early_exit_pipe_grep(form), form)
         # Scope: lanes and keyless in full, and every pipefail step of ci.yml (explicit shell: bash, or a pipefail
         # in the run). ci.yml's default-shell steps run bash -e with no pipefail, so a SIGPIPE cannot turn a
         # condition false there (the preexisting `git ls-files | grep -Pq` in lint is one).
@@ -1289,6 +1399,9 @@ class PersistBehaviour(Sandboxed):
         r, out = self.pack_and_persist("fix")
         self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("::error title=Persist::cannot read landed-push subjects", r.stdout)
+        self.assertIn("before re-running", r.stdout)  # S21: tells the operator to check the state branch first
+        self.assertNotIn("fatal: bad FETCH_HEAD", r.stdout + r.stderr)  # git log's stderr stays private
+        self.assertIn("fatal: bad FETCH_HEAD", self.box.logs_text())
         self.assertFalse(self.origin_has("data/fix/new.json"))
         self.assertNotEqual(out.get("pushed"), "true")
 
@@ -1315,6 +1428,9 @@ class PersistBehaviour(Sandboxed):
                 self.assertTrue(os.path.exists(flag))
                 self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
                 self.assertIn("::error title=Persist::cannot read landed-push subjects", r.stdout)
+                self.assertIn(f'the push may have landed: check engine-state for "engine: {job} state '
+                              f'(https://example.invalid/run/1)" before re-running', r.stdout)
+                self.assertNotIn("bad object FETCH_HEAD", r.stdout + r.stderr)
                 self.assertNotEqual(out.get("pushed"), "true")
                 msgs = subprocess.run(["git", "--git-dir", self.bare, "log", "--format=%s", "engine-state"],
                                       capture_output=True, text=True, env=self.box.env({})).stdout.splitlines()
