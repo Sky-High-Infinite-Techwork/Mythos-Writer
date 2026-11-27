@@ -197,3 +197,6 @@ test('deleted workflows are absent', () => {
 require('./batch-automerge.test.js');
 // Phase 1 unattended controller and workflow contracts. Loaded here so CI runs it.
 require('./unattended.test.js');
+
+// Shape of the oracle-sweeps job (shell: bash on the check step, matrix, aggregator). Loaded here so CI runs it.
+require('./oracle-sweeps-workflow.test.js');

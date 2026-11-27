@@ -15,12 +15,12 @@ const shard = require('./oracle-shard.js');
 
 const REPO = path.resolve(__dirname, '..', '..');
 
-function fakeRepo(files) {
+function fakeRepo(files, script = 'vitest run --isolate=false src/a.sweep. src/b.only') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oracle-shard-'));
   fs.mkdirSync(path.join(dir, 'electron-main', 'src'), { recursive: true });
   fs.writeFileSync(
     path.join(dir, 'electron-main', 'package.json'),
-    JSON.stringify({ scripts: { 'test:oracle-sweeps': 'vitest run --isolate=false src/a.sweep. src/b.only' } }),
+    JSON.stringify({ scripts: { 'test:oracle-sweeps': script } }),
   );
   for (const f of files) fs.writeFileSync(path.join(dir, 'electron-main', 'src', f), '');
   return dir;
@@ -103,4 +103,71 @@ test('check-run fails if a shard skipped a file or ran a foreign one', () => {
 test('--shard rejects the wrong shard count', () => {
   assert.throws(() => shard.main(['--shard', '1/3']), /must look like N\/2/);
   assert.throws(() => shard.main(['--shard', '3/2']), /must look like N\/2/);
+});
+
+/** Independent walk of ALL of electron-main (not just src/), so a bug in discoverFiles cannot hide itself. */
+function independentScan(filters) {
+  const root = path.join(REPO, 'electron-main');
+  const found = [];
+  const walk = (dir) => {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (ent.name === 'node_modules' || ent.name === 'dist' || ent.name === 'coverage') continue;
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) walk(full);
+      else if (ent.name.endsWith('.test.ts')) found.push(path.relative(root, full).split(path.sep).join('/'));
+    }
+  };
+  walk(root);
+  return found.filter((f) => filters.some((flt) => f.includes(flt))).sort();
+}
+
+test('real tree: an independent scan, discoverFiles and the WEIGHTS table agree on the file set', () => {
+  const { filters } = shard.readScript(REPO);
+  const scanned = independentScan(filters);
+  assert.deepEqual(shard.discoverFiles(REPO, filters), scanned);
+  assert.deepEqual(Object.keys(shard.WEIGHTS).sort(), scanned);
+});
+
+test('--shard, --flags and --filters fail closed instead of printing nothing', () => {
+  const one = fakeRepo(['a.sweep.1.test.ts']);
+  const { bins } = shard.plan(['src/a.sweep.1.test.ts'], {}, 2);
+  assert.equal(bins[1].files.length, 0);
+  const empty = shard.main(['--shard', '2/2'], one);
+  assert.equal(empty.code, 1);
+  assert.match(empty.err.join('\n'), /shard 2\/2 has no files/);
+  const noFlags = fakeRepo(['a.sweep.1.test.ts'], 'vitest run src/a.sweep.');
+  const f = shard.main(['--flags'], noFlags);
+  assert.equal(f.code, 1);
+  assert.deepEqual(f.out, []);
+  const noFilters = fakeRepo(['a.sweep.1.test.ts'], 'vitest run --isolate=false');
+  assert.equal(shard.main(['--filters'], noFilters).code, 1);
+  assert.equal(shard.main(['--shard', '1/2'], noFilters).code, 1);
+});
+
+test('check-run reports planned vs measured seconds and only warns on drift', () => {
+  const mine = shard.main(['--shard', '1/2']).out;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oracle-run2-'));
+  const root = path.join(REPO, 'electron-main') + path.sep;
+  const planned = shard.plan(shard.discoverFiles(REPO, shard.readScript(REPO).filters), shard.WEIGHTS, 2).bins[0].seconds;
+  const write = (seconds) => {
+    const f = path.join(dir, 'run.json');
+    const per = (seconds * 1000) / mine.length;
+    fs.writeFileSync(
+      f,
+      JSON.stringify({
+        numTotalTests: 1,
+        numFailedTests: 0,
+        testResults: mine.map((n) => ({ name: root + n, assertionResults: [{ duration: per }] })),
+      }),
+    );
+    return f;
+  };
+  const ok = shard.main(['--check-run', write(planned), '--shard', '1/2']);
+  assert.equal(ok.code, 0);
+  assert.match(ok.out.join('\n'), /planned ~\d+ s of test time, measured \d+ s \(x1\.00\)/);
+  assert.doesNotMatch(ok.out.join('\n'), /WARNING/);
+  const slow = shard.main(['--check-run', write(planned * 2), '--shard', '1/2']);
+  assert.equal(slow.code, 0, 'drift must warn, not fail');
+  assert.match(slow.out.join('\n'), /WARNING: measured test time is more than 25% off/);
+  assert.match(slow.err.join('\n'), /::warning title=oracle-sweeps weights::/);
 });

@@ -314,14 +314,21 @@ jobs:
         if: steps.nm-cache.outputs.cache-hit != 'true'
         run: source scripts/ci-retry.sh && retry npm ci
 
+      # The three planner steps run under `shell: bash` (-eo pipefail), and read planner output
+      # with `$(...)` assignments, so a planner crash fails the step instead of becoming an empty
+      # list (an empty list would make `vitest run` run the whole electron-main suite).
       - name: Verify the shard plan covers every oracle-sweep file
+        shell: bash
         run: |
           cd electron-main
-          mapfile -t FILTERS < <(node ../.github/scripts/oracle-shard.js --filters)
+          filters=$(node ../.github/scripts/oracle-shard.js --filters)
+          [ -n "$filters" ] || { echo "::error::planner returned no vitest filters"; exit 1; }
+          mapfile -t FILTERS <<<"$filters"
           npx vitest list --filesOnly --json="$RUNNER_TEMP/oracle-files.json" "${FILTERS[@]}" > /dev/null
           node ../.github/scripts/oracle-shard.js --verify --vitest-list "$RUNNER_TEMP/oracle-files.json"
 
       - name: Oracle-class and equivalence-strength sweeps
+        shell: bash
         env:
           # Per-shard temp only. os.tmpdir() and any nsh copies follow TMPDIR,
           # so this leg never shares temp files with the other shard.
@@ -331,14 +338,20 @@ jobs:
         run: |
           mkdir -p "$TMPDIR"
           cd electron-main
-          mapfile -t FLAGS < <(node ../.github/scripts/oracle-shard.js --flags)
-          mapfile -t FILES < <(node ../.github/scripts/oracle-shard.js --shard "${{ matrix.shard }}/2")
+          flags=$(node ../.github/scripts/oracle-shard.js --flags)
+          files=$(node ../.github/scripts/oracle-shard.js --shard "${{ matrix.shard }}/2")
+          [ -n "$flags" ] && [ -n "$files" ] || { echo "::error::planner returned no vitest flags or no files for this shard"; exit 1; }
+          mapfile -t FLAGS <<<"$flags"
+          mapfile -t FILES <<<"$files"
           echo "Shard ${{ matrix.shard }}/2 runs ${#FILES[@]} files"
           SECONDS=0
           npx vitest run "${FLAGS[@]}" --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/oracle-run.json" "${FILES[@]}"
           echo "oracle-sweeps shard ${{ matrix.shard }}/2 test run: ${SECONDS}s" >> "$GITHUB_STEP_SUMMARY"
 
+      # `shell: bash` matters here: the default `bash -e` has no pipefail, so `| tee` would hide
+      # a failing check. This step must have no `if:` and no `continue-on-error`.
       - name: Check this shard ran exactly its files
+        shell: bash
         run: node .github/scripts/oracle-shard.js --check-run "$RUNNER_TEMP/oracle-run.json" --shard "${{ matrix.shard }}/2" | tee -a "$GITHUB_STEP_SUMMARY"
 
   build-electron:
