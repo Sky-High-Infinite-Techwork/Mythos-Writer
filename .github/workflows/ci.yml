@@ -249,6 +249,9 @@ jobs:
       - name: Test (workflow rules)
         run: node .github/scripts/workflow-rules.test.js
 
+      - name: Test (oracle-sweeps shard planner)
+        run: node .github/scripts/oracle-shard.test.js
+
       - name: Test (ops-guards hygiene last-success selection)
         run: bash scripts/mythos-ops/ops-guards.test.sh
       - name: Test (mythos-pr-hygiene auto-rebase gate)
@@ -267,19 +270,21 @@ jobs:
 
   # PLAN-058 L8 Ivy carve-out: 12k oracle-class survivor walks, equivalence-strength
   # shards, and the HARD-2 nested-Downloads region-map walks run here in parallel
-  # with `unit`. Two vitest shards, each with its own 40-minute cap and its own
-  # temp dir. The required `ci` aggregator needs both shards and fails unless
-  # each one succeeded (a failed, skipped, or missing shard fails `ci`).
+  # with `unit`. Three shards, each with its own 40-minute cap and its own temp dir.
+  # Files are assigned to shards by measured cost (.github/scripts/oracle-shard.js),
+  # not by vitest's path hash, because a hash split left one shard ~2x slower.
+  # The required `ci` aggregator needs every shard and fails unless each one
+  # succeeded (a failed, skipped, or missing shard fails `ci`).
   # Unit excludes this nested-Downloads file and the oracle-class / equivalence shards.
   oracle-sweeps:
-    name: oracle-sweeps (${{ matrix.shard }}/2)
+    name: oracle-sweeps (${{ matrix.shard }}/3)
     needs: [setup]
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
 
     steps:
       - uses: actions/checkout@v7
@@ -309,7 +314,21 @@ jobs:
         if: steps.nm-cache.outputs.cache-hit != 'true'
         run: source scripts/ci-retry.sh && retry npm ci
 
+      # The three planner steps run under `shell: bash` (-eo pipefail), and read planner output
+      # with `$(...)` assignments, so a planner crash fails the step instead of becoming an empty
+      # list (an empty list would make `vitest run` run the whole electron-main suite).
+      - name: Verify the shard plan covers every oracle-sweep file
+        shell: bash
+        run: |
+          cd electron-main
+          filters=$(node ../.github/scripts/oracle-shard.js --filters)
+          [ -n "$filters" ] || { echo "::error::planner returned no vitest filters"; exit 1; }
+          mapfile -t FILTERS <<<"$filters"
+          npx vitest list --filesOnly --json="$RUNNER_TEMP/oracle-files.json" "${FILTERS[@]}" > /dev/null
+          node ../.github/scripts/oracle-shard.js --verify --vitest-list "$RUNNER_TEMP/oracle-files.json"
+
       - name: Oracle-class and equivalence-strength sweeps
+        shell: bash
         env:
           # Per-shard temp only. os.tmpdir() and any nsh copies follow TMPDIR,
           # so this leg never shares temp files with the other shard.
@@ -318,7 +337,22 @@ jobs:
           TMP: ${{ runner.temp }}/oracle-sweeps-shard-${{ matrix.shard }}
         run: |
           mkdir -p "$TMPDIR"
-          npm run test:oracle-sweeps -w electron-main -- --shard=${{ matrix.shard }}/2
+          cd electron-main
+          flags=$(node ../.github/scripts/oracle-shard.js --flags)
+          files=$(node ../.github/scripts/oracle-shard.js --shard "${{ matrix.shard }}/3")
+          [ -n "$flags" ] && [ -n "$files" ] || { echo "::error::planner returned no vitest flags or no files for this shard"; exit 1; }
+          mapfile -t FLAGS <<<"$flags"
+          mapfile -t FILES <<<"$files"
+          echo "Shard ${{ matrix.shard }}/3 runs ${#FILES[@]} files"
+          SECONDS=0
+          npx vitest run "${FLAGS[@]}" --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/oracle-run.json" "${FILES[@]}"
+          echo "oracle-sweeps shard ${{ matrix.shard }}/3 test run: ${SECONDS}s" >> "$GITHUB_STEP_SUMMARY"
+
+      # `shell: bash` matters here: the default `bash -e` has no pipefail, so `| tee` would hide
+      # a failing check. This step must have no `if:` and no `continue-on-error`.
+      - name: Check this shard ran exactly its files
+        shell: bash
+        run: node .github/scripts/oracle-shard.js --check-run "$RUNNER_TEMP/oracle-run.json" --shard "${{ matrix.shard }}/3" | tee -a "$GITHUB_STEP_SUMMARY"
 
   build-electron:
     # SKY-2425: fuzz steps removed from this job — they were causing OOM-induced

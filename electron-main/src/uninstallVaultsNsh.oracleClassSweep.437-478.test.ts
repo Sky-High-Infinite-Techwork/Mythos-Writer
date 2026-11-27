@@ -1,3 +1,3 @@
 import { registerOracleClassLineSweep } from './sidecarOracleClassSweep.test-helpers.js';
 
-registerOracleClassLineSweep(541, 582);
+registerOracleClassLineSweep(437, 478);
