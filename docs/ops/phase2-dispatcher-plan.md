@@ -29,7 +29,7 @@ Manual `workflow_dispatch` defaults to **dry-run** (works with switches **off**)
 
 ## Build-order work queue
 
-**Source of truth:** open issues listed in repository variable `MYTHOS_BUILD_ORDER_ISSUES` (comma-separated issue numbers, highest priority first). Optional label `mythos:build-order` on issues is advisory; the variable is authoritative for v1.
+**Source of truth:** open issues listed in repository variable `MYTHOS_BUILD_ORDER_ISSUES` (an exact comma-separated list of positive decimal issue numbers with no spaces, for example `11,12`, highest priority first). A list written as `11, 12` (space after the comma), an empty item, a leading zero or any other numeric form holds the whole list as `invalid_build_order`. An unset variable is an empty list and idle; a variable set to the empty string holds as `invalid_build_order`. Optional label `mythos:build-order` on issues is advisory; the variable is authoritative for v1.
 
 **Eligibility (read-only scan):**
 

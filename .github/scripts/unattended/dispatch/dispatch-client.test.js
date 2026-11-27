@@ -385,33 +385,31 @@ test('issueCommentContentEdits holds on redacted editor', async () => {
   assert.equal(edits.error, 'editor_redacted');
 });
 
-test('issueComments maps JSONL paginate output including Bot authors', async () => {
+test('issueComments maps paginated JSON arrays including Bot authors', async () => {
   const gh = (args) => {
     const flat = args.map((a) => String(a));
     if (flat.some((a) => a.includes('/issues/') && a.includes('/comments'))) {
-      const jq = flat[flat.indexOf('--jq') + 1] || '';
-      assert.match(jq, /\bnode_id\b/);
-      assert.match(jq, /tostring/);
+      assert.equal(flat.includes('--paginate'), true);
+      assert.equal(flat.includes('--jq'), false);
+      const page1 = [{
+        id: 11,
+        node_id: 'IC_kwDOBot11',
+        body: '## Files\nbot-a.ts',
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        user: { login: 'dependabot[bot]', type: 'Bot' },
+      }];
+      const page2 = [{
+        id: 12,
+        node_id: 'IC_kwDOUser12',
+        body: '## Files\nuser-a.ts',
+        created_at: '2026-01-02T00:00:00Z',
+        updated_at: '2026-01-02T00:00:00Z',
+        user: { login: 'SkyyPlayz', type: 'User' },
+      }];
       return {
         status: 0,
-        stdout: [
-          JSON.stringify({
-            id: 11,
-            node_id: 'IC_kwDOBot11',
-            body: '## Files\nbot-a.ts',
-            created_at: '2026-01-01T00:00:00Z',
-            updated_at: '2026-01-01T00:00:00Z',
-            user: { login: 'dependabot[bot]', type: 'Bot' },
-          }),
-          JSON.stringify({
-            id: 12,
-            node_id: 'IC_kwDOUser12',
-            body: '## Files\nuser-a.ts',
-            created_at: '2026-01-02T00:00:00Z',
-            updated_at: '2026-01-02T00:00:00Z',
-            user: { login: 'SkyyPlayz', type: 'User' },
-          }),
-        ].join('\n'),
+        stdout: `${JSON.stringify(page1)}${JSON.stringify(page2)}`,
       };
     }
     return { status: 0, stdout: '' };
@@ -541,28 +539,19 @@ test('issueCommentContentEdits fails closed when the echoed node id does not mat
   assert.equal(edits.error, 'graphql_parse');
 });
 
-test('issueComments keeps plan comment IDs as strings above Number.MAX_SAFE_INTEGER', async () => {
+test('issueComments keeps plan comment IDs as strings above Number.MAX_SAFE_INTEGER from raw JSON numbers', async () => {
   const HUGE = '9007199254740993';
   const NODE_ID = 'IC_kwDOHugeComment';
+  assert.notEqual(String(Number(HUGE)), HUGE);
   const gh = (args) => {
     const flat = args.map((a) => String(a));
     if (flat.some((a) => a.includes('/issues/') && a.includes('/comments'))) {
-      const jq = flat[flat.indexOf('--jq') + 1] || '';
-      assert.match(jq, /tostring/);
-      assert.match(jq, /\bnode_id\b/);
-      const asNumber = JSON.parse(JSON.stringify({ id: 9007199254740993 })).id;
-      assert.notEqual(String(asNumber), HUGE);
-      return {
-        status: 0,
-        stdout: JSON.stringify({
-          id: HUGE,
-          node_id: NODE_ID,
-          body: '## Files\n- frontend/a.ts',
-          created_at: '2026-01-01T00:00:00Z',
-          updated_at: '2026-01-01T00:00:00Z',
-          user: { login: 'SkyyPlayz', type: 'User' },
-        }),
-      };
+      assert.equal(flat.includes('--paginate'), true);
+      assert.equal(flat.includes('--jq'), false, 'gh --jq stringifies IDs after float64 conversion');
+      // Exact decimal digits in the raw REST body. JSON.stringify would already
+      // have lost the low bits, and so would gh --jq | tostring.
+      const raw = `[{"id": ${HUGE}, "node_id": "${NODE_ID}", "body": "## Files\\n- frontend/a.ts", "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z", "user": {"login": "SkyyPlayz", "type": "User"}}]`;
+      return { status: 0, stdout: raw };
     }
     return { status: 0, stdout: '' };
   };
@@ -615,4 +604,37 @@ test('getRef, createRef, renewRef and deleteRef reject look-alike refs before an
     await assert.rejects(() => combined.renewRef({ ref, beforeOid: 'a'.repeat(40), newOid: 'b'.repeat(40) }), undefined, ref);
   }
   assert.deepEqual(calls, []);
+});
+
+test('parseGhJsonDocuments preserves integer ids above 2^53 and ignores id-like text in bodies', () => {
+  const { parseGhJsonDocuments, quoteJsonIntegerKeys } = require('./dispatch-client');
+  const HUGE = '9007199254740993';
+  const raw = `[{"id": ${HUGE}, "body": "see \\"id\\": 1 in the plan"},{"id": 12}][{"id": 13}]`;
+  const docs = parseGhJsonDocuments(raw);
+  assert.ok(Array.isArray(docs));
+  assert.equal(docs.length, 2);
+  assert.equal(docs[0][0].id, HUGE);
+  assert.equal(docs[0][0].body, 'see "id": 1 in the plan');
+  assert.equal(docs[0][1].id, '12');
+  assert.equal(docs[1][0].id, '13');
+  assert.notEqual(String(JSON.parse(`{"id": ${HUGE}}`).id), HUGE);
+  const quoted = quoteJsonIntegerKeys(`{"id": ${HUGE}, "body": "x"}`);
+  assert.match(quoted, /"id"\s*:\s*"9007199254740993"/);
+  assert.deepEqual(parseGhJsonDocuments(''), []);
+  assert.equal(parseGhJsonDocuments('{"id":'), null);
+});
+
+test('issueCommentContentEdits returns graphql_http on a failed GraphQL HTTP call, never raw stderr', async () => {
+  const leak = 'HTTP 500 ghp_SECRETTOKEN GraphQL stderr boom';
+  const NODE_ID = 'IC_kwDOGraphqlHttp';
+  const gh = (args) => {
+    if (args.includes('graphql')) {
+      return { status: 1, stdout: '', stderr: leak };
+    }
+    return { status: 0, stdout: '' };
+  };
+  const { read } = createDispatchClients({ readToken: 'r', gh });
+  const edits = await read.issueCommentContentEdits({ issue: 1, commentNodeId: NODE_ID });
+  assert.deepEqual(edits, { ok: false, editors: [], error: 'graphql_http' });
+  assert.doesNotMatch(JSON.stringify(edits), /SECRETTOKEN|GraphQL|stderr|boom|HTTP 500/);
 });

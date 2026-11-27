@@ -1395,3 +1395,69 @@ test('canary verify delete failure logs a fixed reason: keyword-free leak is wri
     assert.doesNotMatch(out.logs.join('\n'), /ghp_|boom|HTTP 500|GraphQL|stderr|Resource not accessible/);
   }
 });
+
+test('outcomesMatchRun rejects six outcomes with the same runId but a different runAttempt', () => {
+  const { outcomesMatchRun } = require('./dispatch/canary-verify');
+  const runId = CANARY_RUN_ID;
+  const attempt = 2;
+  const other = 1;
+  const scratch = canaryScratchRef(runId, attempt);
+  const otherScratch = canaryScratchRef(runId, other);
+  function rows(runAttempt, scratchRef) {
+    return Array.from({ length: 6 }, (_, i) => ({
+      runId,
+      runAttempt,
+      scratchRef,
+      kind: i === 0 ? 'canary_win' : 'canary_lose',
+      index: i,
+    }));
+  }
+  assert.equal(outcomesMatchRun(rows(attempt, scratch), runId, attempt), true);
+  assert.equal(outcomesMatchRun(rows(other, scratch), runId, attempt), false);
+  assert.equal(outcomesMatchRun(rows(other, otherScratch), runId, attempt), false);
+});
+
+test('canary verify fails closed when six artifacts share runId and scratch but not runAttempt', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { runCanaryVerify } = require('./dispatch/canary-verify');
+  const main = 'a'.repeat(40);
+  const attempt = 2;
+  const other = 1;
+  const scratch = canaryScratchRef(CANARY_RUN_ID, attempt);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-att-'));
+  for (let i = 0; i < 6; i += 1) {
+    fs.writeFileSync(
+      path.join(dir, `canary-outcome-${i}.json`),
+      JSON.stringify({
+        runId: CANARY_RUN_ID,
+        runAttempt: other,
+        scratchRef: scratch,
+        kind: i === 0 ? 'canary_win' : 'canary_lose',
+        index: i,
+      }),
+    );
+  }
+  const client = createMockRefClient();
+  await client.createRef({ ref: scratch, sha: main });
+  const logs = [];
+  const origErr = console.error;
+  console.error = (...a) => logs.push(a.join(' '));
+  let code;
+  try {
+    code = await runCanaryVerify(client, canaryVerifyOpts(client, {
+      mainSha: main,
+      artifactsDir: dir,
+      runAttempt: attempt,
+    }));
+  } finally {
+    console.error = origErr;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  assert.equal(code, 1);
+  assert.equal(client.exists(scratch), true);
+  const fail = logs.map((line) => { try { return JSON.parse(line); } catch { return null; } }).find((row) => row && row.kind === 'canary_verify_fail');
+  assert.ok(fail);
+  assert.ok(['run_binding_mismatch', 'retry_requires_all_six_legs'].includes(fail.reason), fail.reason);
+});

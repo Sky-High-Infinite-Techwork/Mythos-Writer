@@ -37,6 +37,136 @@ function parseGhJson(stdout) {
   }
 }
 
+// gh --jq (and JSON.parse) coerce numbers through IEEE-754, so comment IDs
+// above 2^53 lose low bits before tostring can run. Quote integer values of
+// selected keys in the raw text, then parse each concatenated JSON document
+// (--paginate without --jq may emit one array per page).
+function quoteJsonIntegerKeys(text, keys = ['id', 'database_id']) {
+  const keySet = new Set(keys);
+  const s = String(text || '');
+  let out = '';
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch !== '"') {
+      if (ch === '\\') {
+        out += ch;
+        if (i + 1 < s.length) {
+          out += s[i + 1];
+          i += 2;
+          continue;
+        }
+        i += 1;
+        continue;
+      }
+      out += ch;
+      i += 1;
+      continue;
+    }
+    let j = i + 1;
+    let esc = false;
+    let key = '';
+    while (j < s.length) {
+      const c = s[j];
+      if (esc) {
+        key += c;
+        esc = false;
+        j += 1;
+        continue;
+      }
+      if (c === '\\') {
+        esc = true;
+        j += 1;
+        continue;
+      }
+      if (c === '"') break;
+      key += c;
+      j += 1;
+    }
+    if (j >= s.length) {
+      out += s.slice(i);
+      break;
+    }
+    const afterKey = j + 1;
+    if (keySet.has(key)) {
+      let k = afterKey;
+      while (k < s.length && /[ \t\r\n]/.test(s[k])) k += 1;
+      if (s[k] === ':') {
+        k += 1;
+        while (k < s.length && /[ \t\r\n]/.test(s[k])) k += 1;
+        let d = k;
+        if (s[d] === '-') d += 1;
+        if (d < s.length && s[d] >= '0' && s[d] <= '9') {
+          while (d < s.length && s[d] >= '0' && s[d] <= '9') d += 1;
+          if (s[d] !== '.' && s[d] !== 'e' && s[d] !== 'E' && s[d] !== 'x' && s[d] !== 'X') {
+            out += s.slice(i, k) + '"' + s.slice(k, d) + '"';
+            i = d;
+            continue;
+          }
+        }
+      }
+    }
+    out += s.slice(i, afterKey);
+    i = afterKey;
+  }
+  return out;
+}
+
+function sliceJsonValue(text, start) {
+  const s = String(text || '');
+  let i = start;
+  while (i < s.length && /[ \t\r\n]/.test(s[i])) i += 1;
+  if (i >= s.length) return { end: i };
+  const open = s[i];
+  if (open !== '{' && open !== '[') return { error: true, end: i };
+  const close = open === '{' ? '}' : ']';
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let j = i; j < s.length; j += 1) {
+    const c = s[j];
+    if (inString) {
+      if (escape) escape = false;
+      else if (c === '\\') escape = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') inString = true;
+    else if (c === open || ((open === '[' && c === '{') || (open === '{' && c === '['))) {
+      // depth should count all braces/brackets
+    }
+    if (c === '{' || c === '[') depth += 1;
+    else if (c === '}' || c === ']') {
+      depth -= 1;
+      if (depth === 0) {
+        if (c !== close) return { error: true, end: j };
+        return { raw: s.slice(i, j + 1), end: j + 1 };
+      }
+    }
+  }
+  return { error: true, end: s.length };
+}
+
+function parseGhJsonDocuments(text) {
+  if (text === '' || text === undefined || text === null) return [];
+  const quoted = quoteJsonIntegerKeys(text);
+  const docs = [];
+  let i = 0;
+  while (i < quoted.length) {
+    while (i < quoted.length && /[ \t\r\n]/.test(quoted[i])) i += 1;
+    if (i >= quoted.length) break;
+    const next = sliceJsonValue(quoted, i);
+    if (next.error || !next.raw) return null;
+    try {
+      docs.push(JSON.parse(next.raw));
+    } catch {
+      return null;
+    }
+    i = next.end;
+  }
+  return docs;
+}
+
 function createDispatchClients({
   repo = REPO,
   readToken,
@@ -209,37 +339,42 @@ function createDispatchClients({
     },
     async issueComments({ issue }) {
       if (!readToken) return { ok: false, comments: [], error: 'no_read_token' };
+      // Raw pages, not --jq: gh applies jq after decoding numbers as float64,
+      // which quietly changes comment IDs above 2^53.
       const result = gh(
         [
           'api',
           `${base}/issues/${issue}/comments`,
           '--paginate',
-          '--jq',
-          '.[] | {id: (.id|tostring), node_id, body, created_at, updated_at, user: {login: .user.login, type: .user.type}}',
         ],
         readToken,
       );
       if (result.status !== 0) return { ok: false, comments: [], error: result.stderr };
+      const docs = parseGhJsonDocuments(result.stdout);
+      if (!docs) return { ok: false, comments: [], error: 'comment_parse' };
       const comments = [];
-      for (const line of (result.stdout || '').split('\n').filter(Boolean)) {
-        const row = parseGhJson(line);
-        if (!row) return { ok: false, comments: [], error: 'comment_parse' };
-        const bot = row.user && row.user.type === 'Bot';
-        comments.push({
-          id: row.id == null ? '' : String(row.id),
-          databaseId: row.id == null ? null : String(row.id),
-          nodeId: row.node_id || null,
-          body: row.body,
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-          author: {
-            login: row.user && row.user.login,
-            __typename: bot ? 'Bot' : 'User',
-          },
-        });
+      for (const doc of docs) {
+        const rows = Array.isArray(doc) ? doc : [doc];
+        for (const row of rows) {
+          if (!row || typeof row !== 'object') return { ok: false, comments: [], error: 'comment_parse' };
+          const bot = row.user && row.user.type === 'Bot';
+          comments.push({
+            id: row.id == null ? '' : String(row.id),
+            databaseId: row.id == null ? null : String(row.id),
+            nodeId: row.node_id || null,
+            body: row.body,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+            author: {
+              login: row.user && row.user.login,
+              __typename: bot ? 'Bot' : 'User',
+            },
+          });
+        }
       }
       return { ok: true, comments };
     },
+
     async getIssue({ issue }) {
       if (!readToken) return { ok: false, error: 'no_read_token' };
       const result = gh(
@@ -406,5 +541,7 @@ function createDispatchClients({
 module.exports = {
   createDispatchClients,
   parseGhJson,
+  quoteJsonIntegerKeys,
+  parseGhJsonDocuments,
   UPDATE_REFS_REF_EXISTS,
 };
