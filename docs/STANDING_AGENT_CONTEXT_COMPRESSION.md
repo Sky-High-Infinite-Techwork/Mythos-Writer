@@ -37,7 +37,7 @@ Repo docs only unless Ivy owns Grok Bot memory separately.
 Standing cloud agent `bc-fb92daf9` REPLY prompts should **start from the
 compressed summary path** (`docs/archive/standing-briefs/CURRENT.md` or the
 latest `YYYY-MM` summary header), not full history paste. Compress agent briefs
-in mythos-ops separately if that store is outside this repo.
+in mythos-engine separately if that store is outside this repo.
 
 ## What not to do
 
