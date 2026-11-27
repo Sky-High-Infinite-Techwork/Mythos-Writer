@@ -32,6 +32,8 @@ function makeChat(opts?: {
     busy: false,
     stalled: false,
     error: null,
+    canRetry: false,
+    retryLast: vi.fn(),
     store: {
       activeSession: {
         id: 's1',
@@ -56,6 +58,61 @@ function makeChat(opts?: {
     postActionResult: vi.fn(),
   };
 }
+
+describe('MiniAgentChat error strip', () => {
+  it('shows Retry when the chat hook exposes canRetry', () => {
+    const retryLast = vi.fn();
+    render(
+      <MiniAgentChat
+        chat={{
+          ...makeChat(),
+          error: 'Network error',
+          canRetry: true,
+          retryLast,
+        }}
+        accent="brainstorm"
+        placeholder="Message…"
+        testidPrefix="ahp-partner"
+      />,
+    );
+    fireEvent.click(screen.getByTestId('ahp-partner-chat-retry'));
+    expect(retryLast).toHaveBeenCalled();
+  });
+});
+
+describe('MiniAgentChat pending bubble', () => {
+  it('draws the optimistic user bubble for a fresh in-flight send', () => {
+    render(
+      <MiniAgentChat
+        chat={{ ...makeChat(), pendingPrompt: 'hello there', busy: true, pendingPromptInFeed: false }}
+        accent="brainstorm"
+        placeholder="Message…"
+        testidPrefix="ahp-partner"
+      />,
+    );
+    expect(screen.getAllByText('hello there')).toHaveLength(1);
+    expect(screen.getByTestId('ahp-partner-typing')).toBeTruthy();
+  });
+
+  it('does not draw a second user bubble when a Retry prompt is already in the feed', () => {
+    const messages: AgentSessionTurn[] = [{ role: 'user', text: 'hello there', at: '1' }];
+    render(
+      <MiniAgentChat
+        chat={{
+          ...makeChat({ messages }),
+          pendingPrompt: 'hello there',
+          busy: true,
+          pendingPromptInFeed: true,
+        }}
+        accent="brainstorm"
+        placeholder="Message…"
+        testidPrefix="ahp-partner"
+      />,
+    );
+    expect(screen.getAllByText('hello there')).toHaveLength(1);
+    expect(screen.getByTestId('ahp-partner-typing')).toBeTruthy();
+  });
+});
 
 describe('MiniAgentChat voice (unified composer)', () => {
   beforeEach(() => {

@@ -234,8 +234,8 @@ contextBridge.exposeInMainWorld('api', {
   // Agent channels (Epic 5)
   agentWritingAssistant: (prompt: string, context?: string) =>
     ipcRenderer.invoke('agent:writing-assistant', { prompt, context }),
-  onWritingAssistantChunk: (cb: (chunk: string) => void) => {
-    const handler = (_: unknown, data: { chunk: string }) => cb(data.chunk);
+  onWritingAssistantChunk: (cb: (chunk: string, requestId?: string) => void) => {
+    const handler = (_: unknown, data: { chunk: string; requestId?: string }) => cb(data.chunk, data.requestId);
     ipcRenderer.on('agent:writing-assistant:chunk', handler);
     return () => ipcRenderer.removeListener('agent:writing-assistant:chunk', handler);
   },
@@ -244,8 +244,8 @@ contextBridge.exposeInMainWorld('api', {
   // Beta 4 M25 — Archive Agent chat (timeline side-chat + quick-add dating).
   agentArchive: (prompt: string, history?: Array<{ role: 'user' | 'assistant'; content: string }>) =>
     ipcRenderer.invoke('agent:archive', { prompt, history }),
-  onBrainstormChunk: (cb: (chunk: string) => void) => {
-    const handler = (_: unknown, data: { chunk: string }) => cb(data.chunk);
+  onBrainstormChunk: (cb: (chunk: string, requestId?: string) => void) => {
+    const handler = (_: unknown, data: { chunk: string; requestId?: string }) => cb(data.chunk, data.requestId);
     ipcRenderer.on('agent:brainstorm:chunk', handler);
     return () => ipcRenderer.removeListener('agent:brainstorm:chunk', handler);
   },
@@ -1413,6 +1413,7 @@ contextBridge.exposeInMainWorld('api', {
       cardTitle?: string;
       cardFoot?: string;
       cardKind?: 'analysis' | 'lesson' | 'action';
+      incomplete?: true;
     }>) =>
       ipcRenderer.invoke('agentSession:appendTurns', { sessionId, turns }),
   },

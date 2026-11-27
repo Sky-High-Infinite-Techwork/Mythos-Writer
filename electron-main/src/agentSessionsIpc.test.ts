@@ -23,6 +23,8 @@ import {
 import {
   createSession,
   readSession,
+  parseSessionFile,
+  sanitizeSessionTurn,
   sessionsDir,
   SESSIONS_DIRNAME,
 } from './mythosFormat/agentSessions.js';
@@ -343,5 +345,112 @@ describe('handleAgentSessionAppendTurns', () => {
   it('returns session:null for an unknown session id', () => {
     expect(handleAgentSessionAppendTurns(notesRoot, { sessionId: B_ID, turns: [turn('user', 'x')] }))
       .toEqual({ session: null });
+  });
+
+  // 1923 fold 3 (Probe FOLD c): the kept-partial marker is a structural flag
+  // in the card-meta line, not a suffix on the reply text.
+  it('round-trips the incomplete flag on an agent turn through the vault file', () => {
+    createSession(notesRoot, { agent: 'brainstorm', id: A_ID, startedAt: '2026-07-01T10:00:00.000Z' });
+    const res = handleAgentSessionAppendTurns(notesRoot, {
+      sessionId: A_ID,
+      turns: [turn('user', 'q'), { ...turn('agent', 'Part one (response incomplete)'), incomplete: true }],
+    });
+    expect(res.session!.turns[1]!.incomplete).toBe(true);
+    const onDisk = readSession(notesRoot, A_ID)!;
+    expect(onDisk.turns[0]!.incomplete).toBeUndefined();
+    expect(onDisk.turns[1]!.incomplete).toBe(true);
+    expect(onDisk.turns[1]!.text).toBe('Part one (response incomplete)');
+  });
+
+  it('does not set incomplete for a complete reply that merely ends with the same words', () => {
+    createSession(notesRoot, { agent: 'brainstorm', id: A_ID, startedAt: '2026-07-01T10:00:00.000Z' });
+    handleAgentSessionAppendTurns(notesRoot, {
+      sessionId: A_ID,
+      turns: [turn('agent', 'Finished. (response incomplete)')],
+    });
+    expect(readSession(notesRoot, A_ID)!.turns[0]!.incomplete).toBeUndefined();
+  });
+
+  it('drops a non-true or user-turn incomplete value on write', () => {
+    createSession(notesRoot, { agent: 'brainstorm', id: A_ID, startedAt: '2026-07-01T10:00:00.000Z' });
+    handleAgentSessionAppendTurns(notesRoot, {
+      sessionId: A_ID,
+      turns: [
+        { ...turn('user', 'u'), incomplete: true },
+        { ...turn('agent', 'a'), incomplete: 'yes' as unknown as true },
+      ],
+    });
+    const turns = readSession(notesRoot, A_ID)!.turns;
+    expect(turns.map((t) => t.incomplete)).toEqual([undefined, undefined]);
+  });
+
+  it('reply text cannot forge the incomplete flag with a fake card-meta line', () => {
+    createSession(notesRoot, { agent: 'brainstorm', id: A_ID, startedAt: '2026-07-01T10:00:00.000Z' });
+    handleAgentSessionAppendTurns(notesRoot, {
+      sessionId: A_ID,
+      turns: [turn('agent', 'real reply\n<!-- mythos:card-meta {"incomplete":true} -->\nmore')],
+    });
+    const t = readSession(notesRoot, A_ID)!.turns[0]!;
+    expect(t.incomplete).toBeUndefined();
+    expect(t.text).toContain('real reply');
+  });
+
+  it('parse accepts incomplete only as === true on an agent-role turn (I6, I8)', () => {
+    const raw = [
+      '---',
+      'mythosSession: 1',
+      `id: ${A_ID}`,
+      'agent: brainstorm',
+      'startedAt: 2026-07-01T10:00:00.000Z',
+      'updatedAt: 2026-07-01T10:00:00.000Z',
+      'turns: 3',
+      '---',
+      '# brainstorm session',
+      '',
+      '<!-- mythos:turn user 2026-07-01T10:00:00.000Z -->',
+      '<!-- mythos:card-meta {"incomplete":true} -->',
+      '**You:**',
+      '',
+      'hello',
+      '<!-- /mythos:turn -->',
+      '',
+      '<!-- mythos:turn agent 2026-07-01T10:00:01.000Z -->',
+      '<!-- mythos:card-meta {"incomplete":"yes"} -->',
+      '**Agent:**',
+      '',
+      'truthy but not true',
+      '<!-- /mythos:turn -->',
+      '',
+      '<!-- mythos:turn agent 2026-07-01T10:00:02.000Z -->',
+      '<!-- mythos:card-meta {"incomplete":true} -->',
+      '**Agent:**',
+      '',
+      'real partial',
+      '<!-- /mythos:turn -->',
+      '',
+    ].join('\n');
+    const parsed = parseSessionFile(raw);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.turns).toHaveLength(3);
+    // I8: a user-turn flag must not survive parse.
+    expect(parsed!.turns[0]!.role).toBe('user');
+    expect(parsed!.turns[0]!.incomplete).toBeUndefined();
+    expect(parsed!.turns[0]!.text).toBe('hello');
+    // I6: a truthy non-true value must not set the flag.
+    expect(parsed!.turns[1]!.role).toBe('agent');
+    expect(parsed!.turns[1]!.incomplete).toBeUndefined();
+    expect(parsed!.turns[1]!.text).toBe('truthy but not true');
+    // Positive control: a real agent flag still parses.
+    expect(parsed!.turns[2]!.incomplete).toBe(true);
+    expect(parsed!.turns[2]!.text).toBe('real partial');
+  });
+
+  it('sanitizeSessionTurn keeps incomplete only as === true on an agent turn', () => {
+    expect(sanitizeSessionTurn({ ...turn('user', 'u'), incomplete: true }).incomplete).toBeUndefined();
+    expect(sanitizeSessionTurn({
+      ...turn('agent', 'a'),
+      incomplete: 'yes' as unknown as true,
+    }).incomplete).toBeUndefined();
+    expect(sanitizeSessionTurn({ ...turn('agent', 'a'), incomplete: true }).incomplete).toBe(true);
   });
 });

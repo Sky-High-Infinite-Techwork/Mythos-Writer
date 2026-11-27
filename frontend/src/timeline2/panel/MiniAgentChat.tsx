@@ -162,7 +162,10 @@ export default function MiniAgentChat({
         })}
         {chat.pendingPrompt !== null && (
           <>
-            <div className="trp-bubble trp-bubble--user">{chat.pendingPrompt}</div>
+            {/* A Retry's user turn is already in the feed above — don't render it twice. */}
+            {!chat.pendingPromptInFeed && (
+              <div className="trp-bubble trp-bubble--user">{chat.pendingPrompt}</div>
+            )}
             <div className="trp-typing" data-testid={`${testidPrefix}-typing`} aria-label="Agent is typing">
               <span className="trp-typing-dot" />
               <span className="trp-typing-dot trp-typing-dot--d2" />
@@ -185,7 +188,17 @@ export default function MiniAgentChat({
         )}
         {chat.error && (
           <div className="trp-chat-error" role="alert" data-testid={`${testidPrefix}-chat-error`}>
-            {chat.error}
+            <span className="trp-chat-error-text">{chat.error}</span>
+            {chat.canRetry && (
+              <button
+                type="button"
+                className="trp-chat-error-retry"
+                onClick={() => chat.retryLast()}
+                data-testid={`${testidPrefix}-chat-retry`}
+              >
+                Retry
+              </button>
+            )}
           </div>
         )}
       </div>

@@ -75,6 +75,8 @@ interface AgentSessionTurn {
    * set this — renderers show cards only when cardKind is present.
    */
   cardKind?: 'analysis' | 'lesson' | 'action';
+  /** Kept partial of a cut-off reply (set only by the failure path). */
+  incomplete?: true;
 }
 interface AgentSessionFile {
   id: string;
@@ -1199,10 +1201,10 @@ interface Window {
     writingAssistant: (manuscript: string, scenePath: string) => Promise<unknown>;
     archive: (manuscript: string, vaultPath: string) => Promise<unknown>;
     agentWritingAssistant: (prompt: string, context?: string) => Promise<{ text: string }>;
-    onWritingAssistantChunk: (cb: (chunk: string) => void) => () => void;
+    onWritingAssistantChunk: (cb: (chunk: string, requestId?: string) => void) => () => void;
     agentBrainstorm: (prompt: string, history?: Array<{ role: 'user' | 'assistant'; content: string }>) => Promise<{ text: string; cardTitle?: string; cardFoot?: string }>;
     agentArchive: (prompt: string, history?: Array<{ role: 'user' | 'assistant'; content: string }>) => Promise<{ text: string; cardTitle?: string; cardFoot?: string }>;
-    onBrainstormChunk: (cb: (chunk: string) => void) => () => void;
+    onBrainstormChunk: (cb: (chunk: string, requestId?: string) => void) => () => void;
     agentVaultIndex: () => Promise<{ entities: VaultIndexEntry[] }>;
     agentVaultCheck: (sceneContent: string) => Promise<{ text: string; inconsistencies: VaultCheckInconsistency[] }>;
     onVaultCheckChunk: (cb: (chunk: string) => void) => () => void;

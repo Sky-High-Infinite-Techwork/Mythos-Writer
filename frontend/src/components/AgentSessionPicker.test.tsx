@@ -23,6 +23,7 @@ function makeStore(overrides: Partial<UseAgentSessionsResult> = {}): UseAgentSes
     deleteSession: vi.fn(),
     appendTurns: vi.fn(),
     refresh: vi.fn(),
+    resolveSessionId: (id: string) => id,
     ...overrides,
   };
 }

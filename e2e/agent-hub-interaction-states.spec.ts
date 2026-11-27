@@ -1,13 +1,10 @@
 /**
- * agent-hub-interaction-states.spec.ts — SKY-8436
+ * agent-hub-interaction-states.spec.ts — SKY-8436 / #1909
  *
- * Real-Electron E2E for the M15 Agent Hub / Suggestion Inbox gap-spec
- * (docs/AGENT-HUB-SUGGESTION-INBOX-GAP-SPEC.md). Covers the DoD-required
- * empty/loading/error triad plus the keyboard/focus-return flow, crossing
- * the UI→IPC seam (real `suggestions:*` / `agent:writing-assistant` IPC
- * handlers, not mocked React state).
+ * Real-Electron E2E for the Agent Hub empty/loading/error triad and keyboard
+ * focus return. Partner chat uses the live agent:brainstorm handler and a
+ * loopback OpenAI-compatible provider (no ipcMain.removeHandler).
  *
- * Run (after `npm run build:electron`):
  *   npx playwright test e2e/agent-hub-interaction-states.spec.ts --reporter=list
  */
 
@@ -22,21 +19,32 @@ import {
   type Page,
 } from '@playwright/test';
 import { clickStoryNav } from './helpers/navGuard';
+import {
+  customProviderSeed,
+  startFakeAiProvider,
+  type FakeAiProvider,
+} from './helpers/fakeAiProvider';
 
 const MAIN_JS = path.resolve(__dirname, '../out/main/main.js');
 
 const STORY_ID = 'ahp-e2e-story-0001';
 const CHAPTER_ID = 'ahp-e2e-chapter-0001';
 const SCENE_ID = 'ahp-e2e-scene-0001';
+const SCENE_TITLE = 'Lighthouse Scene';
 
-function buildAppSettings(): object {
+function buildAppSettings(fake: FakeAiProvider): object {
   return {
-    apiKey: 'sk-ant-e2e-agent-hub',
     onboardingComplete: true,
+    ai: { enabled: true },
+    theme: 'dark',
+    rightSidebarVisible: true,
+    rightSidebarWidth: 420,
+    notesTabUpgradeToastShown: true,
+    provider: customProviderSeed(fake.port),
     agents: {
       writingAssistant: {
         enabled: true,
-        model: 'claude-haiku-4-5-20251001',
+        model: 'e2e-fake-model',
         scanIntervalSeconds: 60,
         autoApply: false,
         confidenceThreshold: 0.85,
@@ -46,20 +54,32 @@ function buildAppSettings(): object {
         maxTokensPerDay: 500_000,
         waScanInterval: 'manual',
       },
-      brainstorm: { enabled: false, model: 'claude-haiku-4-5-20251001', autoApply: false, confidenceThreshold: 0.85, maxTokensPerHour: 100_000, maxSuggestionsPerHour: 50, heartbeatIntervalMinutes: 5, maxTokensPerDay: 500_000 },
-      archive: { enabled: false, model: 'claude-sonnet-4-6', continuityCheckIntervalSeconds: 60, autoApply: false, confidenceThreshold: 0.85, maxTokensPerHour: 100_000, maxSuggestionsPerHour: 50, heartbeatIntervalMinutes: 5, maxTokensPerDay: 500_000 },
+      brainstorm: {
+        enabled: true,
+        model: 'e2e-fake-model',
+        autoApply: false,
+        confidenceThreshold: 0.85,
+        maxTokensPerHour: 100_000,
+        maxSuggestionsPerHour: 50,
+        heartbeatIntervalMinutes: 5,
+        maxTokensPerDay: 500_000,
+      },
+      archive: {
+        enabled: false,
+        model: 'claude-sonnet-4-6',
+        continuityCheckIntervalSeconds: 60,
+        autoApply: false,
+        confidenceThreshold: 0.85,
+        maxTokensPerHour: 100_000,
+        maxSuggestionsPerHour: 50,
+        heartbeatIntervalMinutes: 5,
+        maxTokensPerDay: 500_000,
+      },
     },
-    theme: 'dark',
-    rightSidebarVisible: true,
-    // Wide enough that WritingAssistantPanel's own AC-WA-20 280px collapse
-    // never kicks in — this suite is about the hub's OWN interaction states,
-    // not that (separately spec'd, separately shipped) collapse behavior.
-    rightSidebarWidth: 420,
-    notesTabUpgradeToastShown: true,
   };
 }
 
-function seedUserData(userData: string, vaultDir: string): void {
+function seedUserData(userData: string, vaultDir: string, fake: FakeAiProvider): void {
   const now = new Date().toISOString();
   const manifest = {
     schemaVersion: 1,
@@ -79,7 +99,7 @@ function seedUserData(userData: string, vaultDir: string): void {
             scenes: [
               {
                 id: SCENE_ID,
-                title: 'Lighthouse Scene',
+                title: SCENE_TITLE,
                 path: `stories/${STORY_ID}/chapters/${CHAPTER_ID}/scenes/${SCENE_ID}.md`,
                 order: 0,
                 chapterId: CHAPTER_ID,
@@ -108,7 +128,7 @@ function seedUserData(userData: string, vaultDir: string): void {
     ['---', `id: ${SCENE_ID}`, 'title: "Lighthouse Scene"', `updatedAt: ${now}`, '---', '', 'The lighthouse beam swept the bay.', ''].join('\n'),
   );
   fs.writeFileSync(path.join(vaultDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
-  fs.writeFileSync(path.join(userData, 'app-settings.json'), JSON.stringify(buildAppSettings(), null, 2));
+  fs.writeFileSync(path.join(userData, 'app-settings.json'), JSON.stringify(buildAppSettings(fake), null, 2));
   fs.writeFileSync(path.join(userData, 'vault-settings.json'), JSON.stringify({ vaultRoot: vaultDir }, null, 2));
 }
 
@@ -120,28 +140,6 @@ async function launchApp(userData: string): Promise<ElectronApplication> {
   });
 }
 
-/** Replace the coach chat IPC handler in the main process (real IPC seam). */
-async function mockCoachChatIpc(
-  app: ElectronApplication,
-  impl: 'succeed' | 'fail' | 'delay',
-): Promise<void> {
-  await app.evaluate(({ ipcMain }, mode) => {
-    try { ipcMain.removeHandler('agent:writing-assistant'); } catch { /* not registered */ }
-    if (mode === 'fail') {
-      ipcMain.handle('agent:writing-assistant', async () => {
-        throw new Error('Network error — check your connection and try again.');
-      });
-    } else if (mode === 'delay') {
-      ipcMain.handle('agent:writing-assistant', async () => {
-        await new Promise((r) => setTimeout(r, 900));
-        return { text: 'Delayed coach reply.' };
-      });
-    } else {
-      ipcMain.handle('agent:writing-assistant', async () => ({ text: 'Coach reply.' }));
-    }
-  }, impl);
-}
-
 async function openScene(page: Page, sceneTitle: string): Promise<void> {
   await clickStoryNav(page);
   await page.locator('[data-testid="story-subview-editor"]').click();
@@ -151,10 +149,7 @@ async function openScene(page: Page, sceneTitle: string): Promise<void> {
   await sceneRow.click();
 }
 
-/** Opens the right-panel partner shell (backs out of Writer hand if needed). */
 async function openAgentsHub(page: Page): Promise<void> {
-  // A previous test may have left AC-WA-20's mini-chat overlay open — its
-  // backdrop intercepts every subsequent click until dismissed (AC-WA-22).
   if (await page.locator('.wa-overlay-backdrop').isVisible({ timeout: 1_000 }).catch(() => false)) {
     await page.keyboard.press('Escape');
   }
@@ -162,46 +157,25 @@ async function openAgentsHub(page: Page): Promise<void> {
   if (await closeWriter.isVisible({ timeout: 1_000 }).catch(() => false)) {
     await closeWriter.click();
   }
-  await page.locator('[data-testid="ahp-tab-partner"]').click().catch(() => undefined);
-  await expect(page.locator('[data-testid="ahp-action-continuity"]')).toBeVisible({ timeout: 8_000 });
+  await expect(page.locator('[data-testid="global-right-sidebar"]')).toBeVisible({ timeout: 8_000 });
 }
 
-/** Opens the Writing Coach mini-chat from the AGENTS list, expanding it out
- *  of AC-WA-20's collapsed (icon-only) state if the panel is under 280px. */
-/** AC-WA-20's ResizeObserver can flip the mini-chat to its collapsed
- *  (icon-only) state at any point shortly after mount — race the two
- *  possible outcomes instead of a single point-in-time check, clicking the
- *  expand affordance whenever it shows up, until `target` becomes visible. */
-async function settleIntoView(page: Page, target: ReturnType<Page['locator']>): Promise<void> {
-  const collapsedBtn = page.locator('.wa-collapsed-btn');
-  const deadline = Date.now() + 8_000;
-  while (Date.now() < deadline) {
-    if (await target.isVisible({ timeout: 250 }).catch(() => false)) break;
-    if (await collapsedBtn.isVisible({ timeout: 250 }).catch(() => false)) {
-      await collapsedBtn.click().catch(() => undefined);
-    }
-  }
-  await expect(target).toBeVisible({ timeout: 8_000 });
-  // Let layout fully settle before interacting — right after the
-  // collapsed→overlay transition, another resize tick can still land.
-  await page.waitForTimeout(300);
+async function openPartnerChat(page: Page): Promise<void> {
+  await page.locator('[data-testid="ahp-tab-partner"]').click();
+  await expect(page.getByTestId('ahp-partner-chat-input')).toBeVisible({ timeout: 8_000 });
 }
 
-async function openWritingCoachChat(page: Page): Promise<void> {
-  // F3#1 — partner MiniAgentChat is always the hub composer.
-  await page.locator('[data-testid="ahp-tab-partner"]').click().catch(() => undefined);
-  await settleIntoView(page, page.getByTestId('ahp-partner-chat-input'));
-}
-
+let fake: FakeAiProvider;
 let userData: string;
 let vaultDir: string;
 let app: ElectronApplication | undefined;
 let page: Page;
 
 test.beforeAll(async () => {
+  fake = await startFakeAiProvider({ kind: 'stream', chunks: ['Coach reply.'] });
   userData = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-ahp-'));
   vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-ahp-vault-'));
-  seedUserData(userData, vaultDir);
+  seedUserData(userData, vaultDir, fake);
   app = await launchApp(userData);
   page = await app.firstWindow();
   page.on('dialog', (dialog) => void dialog.accept().catch(() => undefined));
@@ -210,111 +184,102 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   await app?.close().catch(() => undefined);
+  await fake?.close().catch(() => undefined);
   fs.rmSync(userData, { recursive: true, force: true });
   fs.rmSync(vaultDir, { recursive: true, force: true });
 });
 
 test.describe.configure({ mode: 'serial' });
 
-// ── Empty state ──────────────────────────────────────────────────────────────
-
-test('empty state: Suggestions card shows the gap-spec copy with zero pending suggestions', async () => {
-  await openScene(page, 'Lighthouse Scene');
+test('empty state: Suggestions inbox shows zero-pending copy', async () => {
+  await openScene(page, SCENE_TITLE);
   await openAgentsHub(page);
-
-  // Real IPC round-trip: window.api.suggestionsUnifiedList() against an
-  // empty vault-backed DB — not a mocked React state.
-  await expect(page.locator('.ahp-suggestion-empty')).toHaveText(
-    "No suggestions right now — the team's watching.",
-    { timeout: 8_000 },
-  );
+  await page.locator('[data-testid="ahp-tab-suggestions"]').click();
+  await expect(page.locator('[data-testid="ahp-suggestions-tab"]')).toBeVisible({ timeout: 8_000 });
+  await expect(page.locator('.sr-empty')).toHaveText('Nothing waiting on you.', { timeout: 8_000 });
 });
 
-// ── Loading state ────────────────────────────────────────────────────────────
-
-test('loading state: typing-dots appear while the coach reply is in flight, then resolve to the reply', async () => {
-  await mockCoachChatIpc(app!, 'delay');
+test('loading state: typing indicator shows until the provider stream resolves', async () => {
+  fake.setMode({ kind: 'stream', chunks: ['Delayed coach reply.'], chunkDelayMs: 900 });
   await openAgentsHub(page);
-  await openWritingCoachChat(page);
+  await openPartnerChat(page);
 
   const input = page.getByTestId('ahp-partner-chat-input');
   await input.fill('How can I raise the tension here?');
   await input.press('Enter');
 
-  // Typing-dots show before the delayed IPC handler resolves.
-  await expect(page.locator('[data-testid="wa-typing"]')).toBeVisible({ timeout: 3_000 });
-
-  // ...then the real reply lands and the indicator is gone.
-  await expect(page.locator('.wa-assistant-bubble', { hasText: 'Delayed coach reply.' }))
-    .toBeVisible({ timeout: 5_000 });
-  await expect(page.locator('[data-testid="wa-typing"]')).not.toBeAttached();
+  await expect(page.getByTestId('ahp-partner-typing')).toBeVisible({ timeout: 3_000 });
+  await expect(page.locator('.trp-bubble--agent', { hasText: 'Delayed coach reply.' }))
+    .toBeVisible({ timeout: 12_000 });
+  await expect(page.getByTestId('ahp-partner-typing')).not.toBeAttached();
 });
 
-// ── Error state ──────────────────────────────────────────────────────────────
-
-test('error state: a failed chat request keeps the user message, shows an inline error + Retry, and Retry recovers', async () => {
-  await mockCoachChatIpc(app!, 'fail');
+test('error state: failed provider response keeps the user message; resend recovers', async () => {
+  fake.setMode({ kind: 'http', status: 500, body: 'upstream exploded' });
+  await openScene(page, SCENE_TITLE);
   await openAgentsHub(page);
-  await openWritingCoachChat(page);
+  await openPartnerChat(page);
 
+  const prompt = `Give me feedback on the pacing ${Date.now()}`;
   const input = page.getByTestId('ahp-partner-chat-input');
-  await input.fill('Give me feedback on the pacing');
+  await input.fill(prompt);
   await input.press('Enter');
 
-  // Real IPC rejection surfaces as the §3 inline error row (icon + text + Retry),
-  // and the user's message is never rolled back.
-  await expect(page.locator('.writing-assistant-error')).toBeVisible({ timeout: 8_000 });
-  await expect(page.locator('.wa-error-text')).toContainText(/network error/i);
-  await expect(page.locator('.wa-user-bubble', { hasText: 'Give me feedback on the pacing' }))
-    .toBeVisible();
+  await expect(page.getByTestId('ahp-partner-chat-error')).toBeVisible({ timeout: 12_000 });
+  await expect(page.getByTestId('ahp-partner-chat-error')).toContainText(/network error/i);
+  await expect(page.locator('.trp-bubble--user', { hasText: prompt })).toBeVisible();
 
-  // Fix the handler, then Retry re-sends the SAME message without duplicating it.
-  await mockCoachChatIpc(app!, 'succeed');
-  await page.locator('.wa-error-retry-btn').click();
+  // Hold the retry's stream open so it is in flight for exactly as long as the
+  // assertions below need: no wall-clock race against a chunk delay.
+  fake.setMode({ kind: 'stream', chunks: ['Coach reply after retry.'], holdOpen: true });
+  const hitsBeforeRetry = fake.hits();
+  await page.getByTestId('ahp-partner-chat-retry').click();
 
-  await expect(page.locator('.wa-assistant-text').filter({ hasText: /^Coach reply\.$/ })).toBeVisible({ timeout: 8_000 });
-  await expect(page.locator('.writing-assistant-error')).not.toBeVisible();
-  await expect(page.locator('.wa-user-bubble', { hasText: 'Give me feedback on the pacing' })).toHaveCount(1);
+  // While the retry is in flight the saved user turn must not be drawn twice
+  // (once from the feed, once as the optimistic pending bubble).
+  await expect.poll(() => fake.hits(), { timeout: 8_000 }).toBe(hitsBeforeRetry + 1);
+  await expect(page.getByTestId('ahp-partner-typing')).toBeVisible({ timeout: 3_000 });
+  // One-shot count (not a retrying matcher): the duplicate would otherwise
+  // "heal" once the stream finishes and mask the bug. The typing indicator
+  // renders in the same commit as the optimistic bubble, and the held stream
+  // cannot finish before release(), so this count is taken mid-flight.
+  expect(await page.locator('.trp-bubble--user', { hasText: prompt }).count()).toBe(1);
+  fake.release();
+
+  await expect(page.locator('.trp-bubble--agent', { hasText: 'Coach reply after retry.' })).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.trp-bubble--user', { hasText: prompt })).toHaveCount(1);
+  await expect(page.getByTestId('ahp-partner-chat-error')).toHaveCount(0);
 });
 
-// ── Keyboard nav + focus-return ──────────────────────────────────────────────
-
-test('keyboard: Enter opens the Writer hand from a focused partner hand chip, and Close returns to partner chat', async () => {
-  await mockCoachChatIpc(app!, 'succeed');
+test('keyboard: Enter opens coach tips from the Open tips control; Close returns to partner chat', async () => {
+  await openScene(page, SCENE_TITLE);
   await openAgentsHub(page);
+  await openPartnerChat(page);
 
-  // Slice B: AGENTS rows are gone — Writer is a partner hand chip.
-  const writerHand = page.locator('[data-testid="ahp-action-continuity"]');
-  await expect(writerHand).toBeVisible({ timeout: 8_000 });
-  await writerHand.focus();
+  const openTips = page.getByTestId('ahp-open-writer-tips');
+  await expect(openTips).toBeVisible({ timeout: 8_000 });
+  await openTips.focus();
   await page.keyboard.press('Enter');
 
-  await settleIntoView(page, page.locator('[data-testid="ahp-writer-hand"]'));
-  await expect(page.getByTestId('ahp-partner-chat-input')).toBeVisible({ timeout: 8_000 });
-
-  await page.locator('[data-testid="ahp-close-writer"]').click();
-  await expect(page.locator('[data-testid="ahp-writer-hand"]')).toHaveCount(0);
-  await expect(page.locator('[data-testid="ahp-partner-thread"]')).toBeVisible();
-  await expect(writerHand).toBeVisible();
+  await expect(page.getByTestId('ahp-writer-tips')).toBeVisible({ timeout: 8_000 });
+  await page.getByTestId('ahp-close-writer').click();
+  await expect(page.getByTestId('ahp-writer-tips')).toHaveCount(0);
+  await expect(page.getByTestId('ahp-partner-chat-input')).toBeVisible();
+  await expect(openTips).toBeFocused();
 });
 
-// ── Regression guard ─────────────────────────────────────────────────────────
-//
 // `.wa-panel-root` previously had `display: contents` (AC-WA-20), which
-// strips an element's own box — the SAME element AC-WA-20's ResizeObserver
-// measures for its 280px collapse check. That made the observer always read
-// 0×0 and collapse the mini-chat permanently on every real (non-jsdom)
-// render, undetected because no prior test exercised real Chromium layout
-// here. Guards against a re-introduction of `display: contents` (or any
-// other zero-box rule) on that element. Runs last: it just opens the chat
-// and doesn't need any of the earlier tests' mock/session state.
-
+// stripped an element's own box — the SAME element AC-WA-20's ResizeObserver
+// measures for its 280px collapse check. Guards against a re-introduction of
+// `display: contents` on that element.
 test('regression guard: the Writing Coach mini-chat does not permanently collapse at a normal panel width', async () => {
-  await mockCoachChatIpc(app!, 'succeed');
   await openAgentsHub(page);
-  await openWritingCoachChat(page);
+  await openPartnerChat(page);
+  await page.getByTestId('ahp-open-writer-tips').click();
+  await expect(page.getByTestId('ahp-writer-tips')).toBeVisible({ timeout: 8_000 });
 
   await expect(page.locator('.wa-collapsed-btn')).not.toBeVisible();
+  await expect(page.locator('.wa-panel-root')).toBeVisible();
   const width = await page.locator('.wa-panel-root').evaluate((el) => el.getBoundingClientRect().width);
   expect(width).toBeGreaterThan(280);
 });
