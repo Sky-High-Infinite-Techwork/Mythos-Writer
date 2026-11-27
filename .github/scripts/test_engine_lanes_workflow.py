@@ -29,9 +29,10 @@ WF = os.path.join(os.path.dirname(HERE), "workflows")
 LANES = os.path.join(WF, "mythos-engine-lanes.yml")
 KEYLESS = os.path.join(WF, "mythos-engine-keyless.yml")
 CI = os.path.join(WF, "ci.yml")
-# Workflows this file guards. ci.yml is out of the pipe-into-grep rule (see
-# test_no_early_exit_grep_in_a_pipeline); it is still checked by test_ci_runs_this_file.
+# Workflows the no-early-exit-pipe rule scans in full. ci.yml is scanned too, but only its pipefail steps (an
+# explicit `shell: bash`, step or defaults, or a `pipefail` in the run): see test_no_early_exit_grep_in_a_pipeline.
 GUARDED_WORKFLOWS = (LANES, KEYLESS)
+PIPEFAIL_SCOPED_WORKFLOWS = (CI,)
 WRITER = "Sky-High-Infinite-Techwork/Mythos-Writer"
 ENGINE = "SkyyPlayz/Mythos-Engine"
 OPS = "SkyyPlayz/Mythos-Ops"
@@ -94,6 +95,9 @@ def _grep_early_exit_flag(argv_text):
         t = tokens[i]
         if t == "--" or not t.startswith("-") or t == "-":
             return None
+        if t in ("-e", "-f", "--regexp", "--file", "-A", "-B", "-C", "-d", "-D"):
+            i += 2  # an option that takes the next word
+            continue
         if t == "--quiet" or t.startswith("--quiet="):
             return t
         if t == "--max-count" or t.startswith("--max-count="):
@@ -109,15 +113,51 @@ def _grep_early_exit_flag(argv_text):
     return None
 
 
+def _strip_substitutions(line):
+    """line with every $( ... ) and `...` removed (balanced): their exit status is not the line's condition."""
+    out, depth, i = [], 0, 0
+    while i < len(line):
+        if line.startswith("$(", i):
+            depth += 1
+            i += 2
+            continue
+        c = line[i]
+        if depth and c == "(":
+            depth += 1
+        elif depth and c == ")":
+            depth -= 1
+        elif not depth:
+            out.append(c)
+        i += 1
+    return re.sub(r"`[^`]*`", "", "".join(out))
+
+
 def early_exit_pipe_grep(line):
-    """If a pipeline stage is grep with an early-exit flag, return (flag, stage), else None."""
+    """If a pipeline stage is grep with an early-exit flag, return (flag, stage). If a pipeline whose status is a
+    condition (if / elif / while / until, or && / ||) ends in head outside $( ), return ("head", line). Else None.
+    Under pipefail an early-exit reader can SIGPIPE the writer, and the condition reads false."""
     for m in re.finditer(r"\|\s*grep(?:\s+|$)", line):
         rest = line[m.end():]
         stage = re.split(r"\s*\|\s*", rest, maxsplit=1)[0]
         flag = _grep_early_exit_flag(stage)
         if flag:
             return flag, "grep " + stage
+    bare = _strip_substitutions(line)
+    if re.search(r"\|\s*head\b", bare) and re.search(r"(?:^|[;\s])(?:if|elif|while|until)\s|&&|\|\|", bare):
+        return "head", line
     return None
+
+
+def pipefail_steps(doc):
+    """Steps of a workflow that run bash with pipefail: an explicit `shell: bash` (GitHub runs it as
+    bash -eo pipefail; the default is bash -e) on the step, the job's or the workflow's defaults, or a pipefail
+    in the run text."""
+    wf_shell = ((doc.get("defaults") or {}).get("run") or {}).get("shell")
+    for name, job, st in all_steps(doc):
+        shell = st.get("shell") or ((job.get("defaults") or {}).get("run") or {}).get("shell") or wf_shell
+        run = str(st.get("run") or "")
+        if run and (shell == "bash" or "pipefail" in run):
+            yield name, job, st
 
 
 def between(text, begin, end):
@@ -780,9 +820,10 @@ class BusyBehaviour(Sandboxed):
 _TOK = re.compile(r"\s*(?:(\'(?:[^']|'')*\')|(==|!=|&&|\|\||!|\(|\))|([A-Za-z_][A-Za-z0-9_.\-]*)(\(\))?)")
 
 
-def gh_if(expr, ctx):
+def gh_if(expr, ctx, failed=False):
     """Evaluate a GitHub `if:` (the subset these workflows use) against ctx (dotted name -> string). A missing name is
-    '' as on GitHub; == and != compare strings case-insensitively; && and || return an operand."""
+    '' as on GitHub; == and != compare strings case-insensitively; && and || return an operand. failed: an earlier
+    step of the job failed (success() is false, failure() is true)."""
     toks, pos, expr = [], 0, expr.strip()
     while pos < len(expr):
         m = _TOK.match(expr, pos)
@@ -797,7 +838,7 @@ def gh_if(expr, ctx):
             fn = m.group(3)
             if fn not in ("always", "cancelled", "success", "failure"):
                 raise AssertionError(f"unknown function {fn}")
-            toks.append(("s", {"always": True, "cancelled": False, "success": True, "failure": False}[fn]))
+            toks.append(("s", {"always": True, "cancelled": False, "success": not failed, "failure": failed}[fn]))
         else:
             name = m.group(3)
             if name in ("true", "false"):
@@ -855,11 +896,24 @@ def gh_if(expr, ctx):
     return bool(r)
 
 
+_STATUS_FN = re.compile(r"\b(?:always|success|failure|cancelled)\s*\(\s*\)")
+
+
+def step_runs(st, ctx, failed=False):
+    """Whether a step runs. As on GitHub, an `if:` with no status function gets an implicit success(): after an
+    earlier failure in the job it is skipped."""
+    expr = str(st.get("if") or "true")
+    if not _STATUS_FN.search(expr):
+        expr = f"success() && ({expr})"
+    return gh_if(expr, ctx, failed)
+
+
 class StageConditions(Sandboxed):
     """H9: in every manual mode the tick's outputs must open the gate job; plan and fix only in pass mode; a busy read
     error closes every stage. The tick's own step conditions and the busy step's real script decide the outputs."""
 
-    def tick_outputs(self, mode, **fake):
+    def tick_outputs(self, mode, failed_before_busy=False, **fake):
+        """failed_before_busy: an earlier tick step failed (Gate App key, publish, scan) before the busy step."""
         b = self.box
         sctx = {"steps.mode.outputs.mode": mode}
         tick = LANES_DOC["jobs"]["tick"]
@@ -868,14 +922,14 @@ class StageConditions(Sandboxed):
         for sid, key in (("scan", "work"), ("plan", "plan"), ("fix", "fix")):
             if gh_if(str(step(LANES_DOC, "tick", sid)["if"]), sctx):
                 sctx[f"steps.{sid}.outputs.{key}"] = "true"  # there is work of each kind
-        tick_ok = True
+        tick_ok = not failed_before_busy
         st = step(LANES_DOC, "tick", "busy")
-        if gh_if(str(st["if"]), sctx):
+        if step_runs(st, sctx, failed_before_busy):
             open(b.out, "w").close()
             env = {"REPO": WRITER, "RUN_ID": "100", "GH_TOKEN": "x", "MODE": mode}
             env.update(fake)
             r = b.run_step(st, env)
-            tick_ok = r.returncode == 0
+            tick_ok = tick_ok and r.returncode == 0
             for k, v in b.outputs().items():
                 sctx[f"steps.busy.outputs.{k}"] = v
         outs = {}
@@ -926,6 +980,44 @@ class StageConditions(Sandboxed):
             outs, _ = self.tick_outputs(mode)
             self.assertFalse(self.runs("gate", outs, False), mode)
             self.assertFalse(self.runs("plan", outs, False), mode)
+
+    def test_a_tick_that_fails_before_the_busy_step_keeps_fix_closed(self):
+        # HARD-I: the header's claim. fix's own `if:` has always() and no tick-success term, so this holds only because
+        # the busy step is skipped after an earlier failure (fix_busy stays empty). A status function on it would
+        # run it anyway, write all false and open fix after a red tick.
+        busy_if = str(step(LANES_DOC, "tick", "busy")["if"])
+        self.assertNotRegex(busy_if, _STATUS_FN, "the busy step must keep the implicit success()")
+        self.assertIsNone(step(LANES_DOC, "tick", "busy").get("continue-on-error"))
+        open(self.box.ghlog, "w").close()
+        outs, ok = self.tick_outputs("pass", failed_before_busy=True, FAKE_GH_RUNS="", FAKE_GH_JOBS="")
+        self.assertFalse(ok)
+        self.assertEqual((outs["gate_busy"], outs["plan_busy"], outs["fix_busy"]), ("", "", ""), outs)
+        self.assertEqual(open(self.box.ghlog).read(), "")
+        self.assertEqual([self.runs(j, outs, ok) for j in ("gate", "plan", "fix")], [False] * 3)
+        # the same tick without the earlier failure does open fix (the case above is not vacuous)
+        outs, ok = self.tick_outputs("pass", FAKE_GH_RUNS="", FAKE_GH_JOBS="")
+        self.assertTrue(ok)
+        self.assertTrue(self.runs("fix", outs, ok))
+
+    def test_a_not_ready_pass_tick_is_red_and_reads_nothing(self):
+        # HARD-J: pass mode with ready != true must end red (never a silent green with every stage closed).
+        # S2: and it must not read the API (the busy step needs ready itself, not only the stages).
+        st = step(LANES_DOC, "tick", "Not ready fails the tick")
+        self.assertIsNone(st.get("continue-on-error"))
+        not_ready = {"steps.mode.outputs.mode": "pass", "steps.ready.outputs.ok": "false"}
+        self.assertTrue(step_runs(st, not_ready))
+        self.assertTrue(step_runs(st, {"steps.mode.outputs.mode": "pass"}))  # ready output missing: still red
+        for ctx in ({"steps.mode.outputs.mode": "pass", "steps.ready.outputs.ok": "true"},
+                    {"steps.mode.outputs.mode": "dry-run"}, {"steps.mode.outputs.mode": "selftest"},
+                    {"steps.mode.outputs.mode": "off"}):
+            self.assertFalse(step_runs(st, ctx), ctx)  # never a false red
+        r = self.box.run_step(st, {})
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse(step_runs(step(LANES_DOC, "tick", "busy"), not_ready), "S2: no API read when not ready")
+        self.assertEqual(LANES_DOC["jobs"]["tick"]["outputs"]["ready"], "${{ steps.ready.outputs.ok }}")
+        for j in ("gate", "plan", "fix"):
+            self.assertFalse(self.runs(j, {"mode": "pass", "ready": "false", "work": "true", "plan": "true",
+                                           "fix": "true"}, False), j)
 
     def test_busy_step_gets_the_mode(self):
         # run_step drops ${{ }} env, so pin it: without MODE the step dies on `set -u` in every mode
@@ -1152,18 +1244,31 @@ class PersistBehaviour(Sandboxed):
         self.assertIsNotNone(early_exit_pipe_grep('git log | grep --max-count=1 -xF -- "$msg"'))
         self.assertIsNone(early_exit_pipe_grep('git log | grep -xF -- "$msg" >/dev/null'))
         self.assertIsNone(early_exit_pipe_grep(r"""printf '%s\n' "$names" | grep -x gate >/dev/null"""))
-        # Scope: every workflow this file guards (lanes and keyless). ci.yml stays out of this
-        # rule: the only pipe-into-grep there (`git ls-files | grep -Pq` in the illegal-filename
-        # check) is preexisting, runs in a default bash -e step with no pipefail (a SIGPIPE cannot
-        # fail the step), and rewriting it would be a drive-by on a protected path beyond this
-        # PR's +1 lint-step carve-out. ci.yml is still in this file's scope for test_ci_runs_this_file.
-        docs = {LANES: LANES_DOC, KEYLESS: KEYLESS_DOC}
-        self.assertEqual(
-            [os.path.basename(p) for p in GUARDED_WORKFLOWS],
-            ["mythos-engine-lanes.yml", "mythos-engine-keyless.yml"],
-        )
-        for path in GUARDED_WORKFLOWS:
-            for name, _, st in all_steps(docs[path]):
+        # S16 (Probe): the forms that bypassed the fold-4 rule, and the safe forms that must stay allowed
+        self.assertIsNotNone(early_exit_pipe_grep('if git log | grep -x -q -- "$msg"; then :; fi'))
+        self.assertIsNotNone(early_exit_pipe_grep('if git log | grep --quiet -- "$msg"; then :; fi'))
+        self.assertIsNotNone(early_exit_pipe_grep('if git log | grep -m1 -- "$msg" >/dev/null; then :; fi'))
+        self.assertIsNotNone(early_exit_pipe_grep('if git log | grep -e "$msg" -q; then :; fi'))
+        self.assertIsNotNone(early_exit_pipe_grep('if git log | head -1 | grep -xF -- "$msg" >/dev/null; then :; fi'))
+        self.assertIsNotNone(early_exit_pipe_grep('git log | head -n 1 >/dev/null && echo landed'))
+        self.assertIsNone(early_exit_pipe_grep('if [ -z "$(find "$d" -type f | head -n 1)" ]; then :; fi'))
+        self.assertIsNone(early_exit_pipe_grep('x="$(ls a | head -1)"'))
+        self.assertIsNone(early_exit_pipe_grep('var() { printf a | sed -n "s/^$1=//p" | head -n 1; }'))
+        self.assertIsNone(early_exit_pipe_grep('git log | grep -e -q >/dev/null'))  # -q is the pattern here
+        # Scope: lanes and keyless in full, and every pipefail step of ci.yml (explicit shell: bash, or a pipefail
+        # in the run). ci.yml's default-shell steps run bash -e with no pipefail, so a SIGPIPE cannot turn a
+        # condition false there (the preexisting `git ls-files | grep -Pq` in lint is one).
+        self.assertEqual([os.path.basename(p) for p in GUARDED_WORKFLOWS],
+                         ["mythos-engine-lanes.yml", "mythos-engine-keyless.yml"])
+        self.assertEqual([os.path.basename(p) for p in PIPEFAIL_SCOPED_WORKFLOWS], ["ci.yml"])
+        with open(CI, encoding="utf-8") as f:
+            ci_doc = yaml.safe_load(f)
+        docs = {LANES: LANES_DOC, KEYLESS: KEYLESS_DOC, CI: ci_doc}
+        scanned = [(p, list(all_steps(docs[p]))) for p in GUARDED_WORKFLOWS]
+        scanned += [(p, list(pipefail_steps(docs[p]))) for p in PIPEFAIL_SCOPED_WORKFLOWS]
+        self.assertGreater(len(scanned[-1][1]), 10, "ci.yml's pipefail steps (build-windows, notes-windows) scanned")
+        for path, steps in scanned:
+            for name, _, st in steps:
                 for line in logical_lines(str(st.get("run") or "")):
                     hit = early_exit_pipe_grep(line)
                     self.assertIsNone(hit, (os.path.basename(path), name, st.get("name"), hit, line))
@@ -1186,6 +1291,38 @@ class PersistBehaviour(Sandboxed):
         self.assertIn("::error title=Persist::cannot read landed-push subjects", r.stdout)
         self.assertFalse(self.origin_has("data/fix/new.json"))
         self.assertNotEqual(out.get("pushed"), "true")
+
+    def test_a_lied_push_then_a_git_log_failure_is_red_and_not_applied_twice(self):
+        # HARD-H (Probe's S17 repro): the push lands but reports failure, then the landed check's git log fails. That
+        # must not read as "not landed" (re-apply onto the newest state, a second commit, a doubled append row, green).
+        # Every job's persist copy is run, so a revert in any one of the four is caught by behaviour, not only text.
+        real = shutil.which("git")
+        wrapper = os.path.join(self.box.bin, "git")
+        self.addCleanup(lambda: os.path.exists(wrapper) and os.unlink(wrapper))
+        for job in STATE_JOBS:
+            with self.subTest(job=job):
+                flag = os.path.join(self.box.root, f"push-lied-{job}")
+                with open(wrapper, "w") as f:
+                    f.write(f'#!/bin/sh\nfor a in "$@"; do\n'
+                            f'  if [ "$a" = push ] && [ ! -e {flag} ]; then\n'
+                            f'    : > {flag}; {real} "$@"; echo "timed out" >&2; exit 1\n  fi\n'
+                            f'  if [ "$a" = log ] && [ -e {flag} ]; then echo "fatal: bad object FETCH_HEAD" >&2; exit 128; fi\n'
+                            f'done\nexec {real} "$@"\n')
+                os.chmod(wrapper, 0o755)
+                self.write(job, "rows.jsonl", '{"a": 1}\n')  # an append row: a re-apply would double it
+                r, out = self.pack_and_persist(job)
+                os.unlink(wrapper)
+                self.assertTrue(os.path.exists(flag))
+                self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertIn("::error title=Persist::cannot read landed-push subjects", r.stdout)
+                self.assertNotEqual(out.get("pushed"), "true")
+                msgs = subprocess.run(["git", "--git-dir", self.bare, "log", "--format=%s", "engine-state"],
+                                      capture_output=True, text=True, env=self.box.env({})).stdout.splitlines()
+                self.assertEqual(msgs.count(f"engine: {job} state (https://example.invalid/run/1)"), 1, msgs)
+                self.assertEqual(self.origin_text(f"data/{job}/rows.jsonl"), '{"a": 1}\n')
+                # the next job starts from the newest state, as a real run would
+                self.box.git("fetch", "-q", "origin", "engine-state", cwd=self.state)
+                self.box.git("reset", "-q", "--hard", "FETCH_HEAD", cwd=self.state)
 
     def test_a_push_that_landed_but_reported_failure_is_not_applied_twice(self):
         real = shutil.which("git")
