@@ -10181,7 +10181,7 @@ function registerWritingAssistantHandler() {
       })) {
         fullText += token;
         if (!event.sender.isDestroyed()) {
-          event.sender.send('agent:brainstorm:chunk', { chunk: token, requestId });
+          event.sender.send('agent:writing-assistant:chunk', { chunk: token, requestId });
         }
       }
     } catch (err: unknown) {
