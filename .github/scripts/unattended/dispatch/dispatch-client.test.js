@@ -638,3 +638,70 @@ test('issueCommentContentEdits returns graphql_http on a failed GraphQL HTTP cal
   assert.deepEqual(edits, { ok: false, editors: [], error: 'graphql_http' });
   assert.doesNotMatch(JSON.stringify(edits), /SECRETTOKEN|GraphQL|stderr|boom|HTTP 500/);
 });
+
+test('issueComments fails closed with comment_parse on a null or primitive row', async () => {
+  const valid = {
+    id: 11,
+    node_id: 'IC_kwDOValid11',
+    body: '## Files\n- frontend/a.ts',
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    user: { login: 'SkyyPlayz', type: 'User' },
+  };
+  const gh = (args) => {
+    const flat = args.map((a) => String(a));
+    if (flat.some((a) => a.includes('/issues/') && a.includes('/comments'))) {
+      assert.equal(flat.includes('--paginate'), true);
+      assert.equal(flat.includes('--jq'), false);
+      // Valid object, null row, and primitive 1 in one page. The row guard is
+      // the only fail-closed check: parseGhJsonDocuments keeps [object, null, 1].
+      // continue would drop the bad rows and return the valid comment as ok:true.
+      // Deleting the guard throws on null, or turns a primitive into a hollow
+      // ok:true comment with id ''.
+      return { status: 0, stdout: JSON.stringify([valid, null, 1]) };
+    }
+    return { status: 0, stdout: '' };
+  };
+  const { read } = createDispatchClients({ readToken: 'r', gh });
+  const listed = await read.issueComments({ issue: 42 });
+  assert.deepEqual(listed, { ok: false, comments: [], error: 'comment_parse' });
+});
+
+test('issueComments fails closed with comment_parse when stdout is malformed', async () => {
+  const gh = (args) => {
+    const flat = args.map((a) => String(a));
+    if (flat.some((a) => a.includes('/issues/') && a.includes('/comments'))) {
+      assert.equal(flat.includes('--paginate'), true);
+      assert.equal(flat.includes('--jq'), false);
+      return { status: 0, stdout: '{"id":' };
+    }
+    return { status: 0, stdout: '' };
+  };
+  const { read } = createDispatchClients({ readToken: 'r', gh });
+  const listed = await read.issueComments({ issue: 1 });
+  assert.deepEqual(listed, { ok: false, comments: [], error: 'comment_parse' });
+});
+
+test('issueComments keeps a 2^63-1 comment ID as an exact string from raw JSON', async () => {
+  const HUGE = '9223372036854775807';
+  const NODE_ID = 'IC_kwDOMaxInt64';
+  assert.notEqual(String(Number(HUGE)), HUGE);
+  const gh = (args) => {
+    const flat = args.map((a) => String(a));
+    if (flat.some((a) => a.includes('/issues/') && a.includes('/comments'))) {
+      assert.equal(flat.includes('--paginate'), true);
+      assert.equal(flat.includes('--jq'), false, 'gh --jq stringifies IDs after float64 conversion');
+      const raw = `[{"id": ${HUGE}, "node_id": "${NODE_ID}", "body": "## Files\\n- frontend/a.ts", "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z", "user": {"login": "SkyyPlayz", "type": "User"}}]`;
+      return { status: 0, stdout: raw };
+    }
+    return { status: 0, stdout: '' };
+  };
+  const { read } = createDispatchClients({ readToken: 'r', gh });
+  const listed = await read.issueComments({ issue: 7 });
+  assert.equal(listed.ok, true);
+  assert.equal(listed.comments.length, 1);
+  assert.equal(listed.comments[0].id, HUGE);
+  assert.equal(listed.comments[0].databaseId, HUGE);
+  assert.equal(typeof listed.comments[0].id, 'string');
+  assert.equal(listed.comments[0].nodeId, NODE_ID);
+});

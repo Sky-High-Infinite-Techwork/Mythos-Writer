@@ -1461,3 +1461,27 @@ test('canary verify fails closed when six artifacts share runId and scratch but 
   assert.ok(fail);
   assert.ok(['run_binding_mismatch', 'retry_requires_all_six_legs'].includes(fail.reason), fail.reason);
 });
+
+test('outcomesMatchRun treats string and number runAttempt as the same attempt', () => {
+  const { outcomesMatchRun } = require('./dispatch/canary-verify');
+  const runId = CANARY_RUN_ID;
+  const scratch = canaryScratchRef(runId, 2);
+  function rows(runAttempt) {
+    return Array.from({ length: 6 }, (_, i) => ({
+      runId,
+      runAttempt,
+      scratchRef: scratch,
+      kind: i === 0 ? 'canary_win' : 'canary_lose',
+      index: i,
+    }));
+  }
+  // Match: string "2" against number 2, both directions. STR2 (raw
+  // row.runAttempt !== runAttempt) dies on numeric rows vs a string arg.
+  // STR1 (drop Number() on row.runAttempt vs parsed att) dies when the
+  // row field is the string "2" and att is the number 2.
+  assert.equal(outcomesMatchRun(rows(2), runId, '2'), true);
+  assert.equal(outcomesMatchRun(rows('2'), runId, 2), true);
+  // Mismatched pairs must not match.
+  assert.equal(outcomesMatchRun(rows('2'), runId, 3), false);
+  assert.equal(outcomesMatchRun(rows(2), runId, '3'), false);
+});
