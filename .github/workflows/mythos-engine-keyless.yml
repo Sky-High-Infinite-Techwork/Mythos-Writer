@@ -1,0 +1,91 @@
+name: mythos-engine-keyless
+
+# Phase 3. Engine unit tests on public Writer, no model logins.
+# Main, schedule, and manual only. Never pull_request or pull_request_target, never forks.
+# Checks out private SkyyPlayz/Mythos-Engine with a read-only token (environment "lanes"
+# so the token is not available to PRs). Public log prints only pass or fail.
+# This workflow does not depend on MYTHOS_LANES_HOST: tests can run even while
+# the live engine is still on Engine.
+
+on:
+  schedule:
+    # Nightly 07:41 UTC (12:41 AM America/Denver in winter).
+    - cron: "41 7 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: mythos-engine-keyless
+  cancel-in-progress: false
+
+jobs:
+  admit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
+    steps:
+      - name: Admit a main-branch run only
+        id: gate
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          echo "result=fail" >> "$GITHUB_OUTPUT"
+          if [ "$REPO" != "Sky-High-Infinite-Techwork/Mythos-Writer" ]; then
+            echo "reject: repository" >&2
+            exit 1
+          fi
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "reject: ref is not main" >&2
+            exit 1
+          fi
+          case "$EVENT" in
+            schedule|workflow_dispatch) ;;
+            *) echo "reject: event" >&2; exit 1 ;;
+          esac
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "result=pass" >> "$GITHUB_OUTPUT"
+
+  tests:
+    needs: admit
+    if: needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: lanes
+    permissions:
+      contents: read
+    steps:
+      - name: Confirm the trusted ref before checkout
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$REPO" = "Sky-High-Infinite-Techwork/Mythos-Writer"
+          test "$REF" = "refs/heads/main"
+
+      - name: Check out private Engine (read-only token)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SkyyPlayz/Mythos-Engine
+          ref: main
+          token: ${{ secrets.MYTHOS_ENGINE_READ_TOKEN }}
+          path: code
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Run the engine test suite
+        working-directory: code
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 scripts/tests/run_suite_clean.py
+
+      - name: Public result (pass/fail only)
+        if: always()
+        run: echo "result=${{ job.status == 'success' && 'pass' || 'fail' }}"

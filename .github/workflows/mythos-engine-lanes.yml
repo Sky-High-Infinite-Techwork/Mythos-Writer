@@ -1,0 +1,1206 @@
+name: mythos-engine-lanes
+
+# Phase 3. Heavy engine work on public Writer, behind the "lanes" environment.
+# Main, schedule, and manual only. Never pull_request or pull_request_target, never forks.
+# Public logs print only pass or fail. Prompts, notes and output go to SkyyPlayz/Mythos-Ops.
+# Skyy creates the environment and its secrets; this file only names them.
+# Live only when SkyyPlayz/Mythos-Engine variable MYTHOS_LANES_HOST is "writer" and
+# MYTHOS_ENGINE_SCHEDULE is "on" (schedule). Rollback: set MYTHOS_LANES_HOST to engine.
+# Engine jobs then run again; this workflow's admit step exits without work.
+
+on:
+  schedule:
+    # Hourly at :17 MT-ish (UTC). Offset from Writer's other unattended workflows.
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "pass | dry-run (scan + risk, nothing written or posted) | selftest (prove the runner, no gate)"
+        type: choice
+        options: [pass, dry-run, selftest]
+        default: dry-run
+      pr:
+        description: "Only this Writer PR number (optional)"
+        type: string
+        default: ""
+
+permissions: {}
+
+concurrency:
+  group: mythos-engine-lanes
+  cancel-in-progress: false
+
+env:
+  MYTHOS_ENGINE_HERE: actions
+  STATE_BRANCH: engine-state
+  GATE_APP_ID: "5736520"
+  PYTHONUNBUFFERED: "1"
+  TZ: America/Denver
+  ENGINE_REPO: SkyyPlayz/Mythos-Engine
+  DATA_REPO: SkyyPlayz/Mythos-Ops
+  WRITER_REPO: Sky-High-Infinite-Techwork/Mythos-Writer
+
+jobs:
+  admit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    environment: lanes
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
+      mode: ${{ steps.gate.outputs.mode }}
+      pr: ${{ steps.gate.outputs.pr }}
+      host: ${{ steps.gate.outputs.host }}
+    steps:
+      - name: Admit a main-branch run only when Engine lanes-host is writer
+        id: gate
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          EVENT: ${{ github.event_name }}
+          MODE: ${{ github.event.inputs.mode }}
+          PR: ${{ github.event.inputs.pr }}
+          CONTROL: ${{ secrets.MYTHOS_CONTROL_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          # ADMIT-BEGIN
+          echo "result=fail" >> "$GITHUB_OUTPUT"
+          if [ "$REPO" != "Sky-High-Infinite-Techwork/Mythos-Writer" ]; then
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            echo "reject: repository" >&2
+            exit 1
+          fi
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "reject: ref is not main" >&2
+            exit 1
+          fi
+          case "$EVENT" in
+            schedule|workflow_dispatch) ;;
+            *) echo "reject: event" >&2; exit 1 ;;
+          esac
+          if [ -z "${CONTROL:-}" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "mode=inert" >> "$GITHUB_OUTPUT"
+            echo "pr=" >> "$GITHUB_OUTPUT"
+            echo "host=unknown" >> "$GITHUB_OUTPUT"
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            echo "lanes control token is not set; exiting without work"
+            exit 0
+          fi
+          host="$(GH_TOKEN="$CONTROL" gh api "repos/SkyyPlayz/Mythos-Engine/actions/variables/MYTHOS_LANES_HOST" --jq .value 2>/dev/null || true)"
+          sched="$(GH_TOKEN="$CONTROL" gh api "repos/SkyyPlayz/Mythos-Engine/actions/variables/MYTHOS_ENGINE_SCHEDULE" --jq .value 2>/dev/null || true)"
+          # Never print token or full API bodies. Names and values of these two vars are not secrets.
+          if [ "$EVENT" = "schedule" ]; then
+            MODE=pass
+          fi
+          MODE="${MODE:-dry-run}"
+          if [ "$host" != "writer" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "mode=inert" >> "$GITHUB_OUTPUT"
+            echo "pr=" >> "$GITHUB_OUTPUT"
+            echo "host=${host:-unset}" >> "$GITHUB_OUTPUT"
+            echo "result=pass" >> "$GITHUB_OUTPUT"
+            echo "MYTHOS_LANES_HOST is not writer; exiting without work"
+            exit 0
+          fi
+          if [ "$EVENT" = "schedule" ] && [ "$sched" != "on" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "mode=inert" >> "$GITHUB_OUTPUT"
+            echo "pr=" >> "$GITHUB_OUTPUT"
+            echo "host=writer" >> "$GITHUB_OUTPUT"
+            echo "result=pass" >> "$GITHUB_OUTPUT"
+            echo "MYTHOS_ENGINE_SCHEDULE is not on; exiting without work"
+            exit 0
+          fi
+          case "$MODE" in
+            pass|dry-run|selftest) ;;
+            *) echo "reject: mode" >&2; exit 1 ;;
+          esac
+          if [ -n "${PR:-}" ] && [[ ! "$PR" =~ ^[1-9][0-9]{0,9}$ ]]; then
+            echo "reject: pr" >&2
+            exit 1
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "pr=${PR:-}" >> "$GITHUB_OUTPUT"
+          echo "host=writer" >> "$GITHUB_OUTPUT"
+          echo "result=pass" >> "$GITHUB_OUTPUT"
+          # ADMIT-END
+
+  tick:
+    if: >-
+      needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    environment: lanes
+    concurrency:
+      group: mythos-engine-tick
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
+      pr: ${{ steps.mode.outputs.pr }}
+      work: ${{ steps.scan.outputs.work }}
+      changed: ${{ steps.pack.outputs.changed }}
+      pushed: ${{ steps.persist.outputs.pushed }}
+      ready: ${{ steps.ready.outputs.ok }}
+      act: ${{ steps.act.outputs.act }}
+      plan: ${{ steps.plan.outputs.plan }}
+      fix: ${{ steps.fix.outputs.fix }}
+      gate_busy: ${{ steps.busy.outputs.gate }}
+      plan_busy: ${{ steps.busy.outputs.plan }}
+      fix_busy: ${{ steps.busy.outputs.fix }}
+    needs: [admit]
+    steps:
+      - name: Confirm the trusted ref before checkout
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$REPO" = "Sky-High-Infinite-Techwork/Mythos-Writer"
+          test "$REF" = "refs/heads/main"
+
+      - name: Code (this commit)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SkyyPlayz/Mythos-Engine
+          ref: main
+          token: ${{ secrets.MYTHOS_ENGINE_READ_TOKEN }}
+          path: code
+          persist-credentials: false
+
+      - name: Mode and host
+        id: mode
+        env:
+          IN_MODE: ${{ inputs.mode }}
+          IN_PR: ${{ inputs.pr }}
+        run: |
+          set -euo pipefail
+          mode="${IN_MODE:-pass}"
+          case "$mode" in pass|dry-run|selftest) ;; *) echo "bad mode"; exit 2 ;; esac
+          pr="${IN_PR:-}"
+          if [ -n "$pr" ] && ! [[ "$pr" =~ ^[1-9][0-9]{0,6}$ ]]; then echo "pr must be a number"; exit 2; fi
+          host="$(/usr/bin/python3 code/scripts/engine_host.py)"
+          if [ "$mode" = pass ] && [ "$host" != actions ]; then
+            echo "::notice title=Engine host is $host::scripts/data/engine_host.json; this run gates and posts nothing"
+            mode=off
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+
+      - name: State (engine-state branch)
+        id: state
+        if: steps.mode.outputs.mode == 'pass' || steps.mode.outputs.mode == 'dry-run'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SkyyPlayz/Mythos-Ops
+          ref: engine-state
+          token: ${{ secrets.MYTHOS_DATA_TOKEN }}
+          path: state
+          persist-credentials: true
+
+      - name: Setup (read)
+        if: steps.mode.outputs.mode != 'off'
+        uses: ./code/.github/actions/engine-setup
+        with:
+          kind: read
+          read-token: ${{ secrets.MYTHOS_READ_TOKEN || github.token }}
+
+      - name: Brother seen list (refresh from Writer when older than 2 h; never created here)
+        if: steps.mode.outputs.mode == 'pass'
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+        run: |
+          set -uo pipefail
+          due="$("$PY" - <<'EOF'
+          import os, sys
+          sys.path.insert(0, "code/scripts")
+          import engine_host as H
+          try:
+              age, _ = H.seen_age(os.environ["MYTHOS_DATA_ROOT"])
+          except ValueError as e:
+              print(f"no ({e}: seed engine-state from the box; never created here)"); sys.exit()
+          print("yes" if age is None or age > H.SEEN_REFRESH_S else f"no (fresh: {int(age // 60)} min)")
+          EOF
+          )"
+          echo "refresh: $due"
+          if [ "$due" = yes ]; then
+            "$PY" code/scripts/watch/brother_watch.py --data-root state --repo Sky-High-Infinite-Techwork/Mythos-Writer \
+              || echo "::warning title=Brother watch::refresh failed (exit $?); the ready check decides"
+          fi
+
+      - name: Ready (brother seen list fresh, Writer unattended gate off)
+        id: ready
+        if: steps.mode.outputs.mode == 'pass'
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+        run: |
+          set -uo pipefail
+          if "$PY" code/scripts/engine_host.py --ready; then echo "ok=true" >> "$GITHUB_OUTPUT"; else
+            echo "::error title=Engine not ready::nothing gated or posted this tick (see the line above)"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Flow step (trio-wake rows for green non-draft PRs)
+        if: steps.mode.outputs.mode == 'pass' && steps.ready.outputs.ok == 'true'
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+        run: $PY -u code/scripts/nogrok_flow_step.py --live
+
+      # Read only, no secret: does the `act` job (PROOF post + auto-merge arming, the only job that holds
+      # MYTHOS_WRITE_TOKEN) have anything to do? A PR in the flow step's proof bucket, or a gate-green armable PR.
+      - name: Act scan (PROOF needed or a PR to arm; read only)
+        id: act
+        if: steps.mode.outputs.mode == 'pass' && steps.ready.outputs.ok == 'true'
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+        run: |
+          set -uo pipefail
+          p="$("$PY" code/scripts/nogrok_engine_proof.py --count)"
+          a="$("$PY" -u code/scripts/nogrok_engine_arm.py | tee /dev/stderr | grep -c ': ready to arm$' || true)"
+          echo "act: $p PR(s) need a PROOF, $a ready to arm"
+          echo "act=$([ "${p:-0}" -gt 0 ] || [ "${a:-0}" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      # Read only, no secret value (only whether MYTHOS_WRITE_TOKEN is set): Writer issues with the ready-to-plan mark
+      # that need a plan step or a packet note (scripts/nogrok_engine_plan.py scan). No work, or no token = no plan job.
+      - name: Plan scan (ready-to-plan issues; read only)
+        id: plan
+        if: (steps.mode.outputs.mode == 'pass' && steps.ready.outputs.ok == 'true') || steps.mode.outputs.mode == 'dry-run'
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+          HAS_WRITE_TOKEN: ${{ secrets.MYTHOS_WRITE_TOKEN != '' }}
+        run: |
+          set -uo pipefail
+          rc=0
+          out="$("$PY" code/scripts/nogrok_engine_plan.py scan)" || rc=$?
+          printf '%s\n' "$out"
+          k="$(printf '%s\n' "$out" | sed -n 's/^work=\([0-9][0-9]*\)$/\1/p' | tail -n 1)"
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning title=Plan scan::failed (exit $rc); no plan job this tick"; k=0
+          elif [ "${k:-0}" -gt 0 ] && [ "$HAS_WRITE_TOKEN" != true ]; then
+            echo "::notice title=Plan lane off::MYTHOS_WRITE_TOKEN is not set: $k ready-to-plan issue(s) wait (drafts and grades post on the issue)"; k=0
+          fi
+          echo "plan=$([ "${k:-0}" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      # Read only, no secret: is a Writer PR due an engine fix round (scripts/nogrok_autofix.py --count)? With the
+      # autofix flag off (as shipped) it reads nothing and prints 0, so the fix job never starts.
+      - name: Fix scan (PRs due a fix round; read only)
+        id: fix
+        if: steps.mode.outputs.mode == 'pass' && steps.ready.outputs.ok == 'true'
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+        run: |
+          set -uo pipefail
+          n="$("$PY" code/scripts/nogrok_autofix.py --count)" || echo "::warning title=Fix scan::exit $? (counted ${n:-0})"
+          case "$n" in ''|*[!0-9]*) n=0 ;; esac
+          echo "fix: $n PR(s) due a fix round"
+          echo "fix=$([ "$n" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Gate App key
+        if: (steps.mode.outputs.mode == 'pass' && steps.ready.outputs.ok == 'true') || steps.mode.outputs.mode == 'selftest'
+        env:
+          MYTHOS_GATE_APP_PRIVATE_KEY: ${{ secrets.MYTHOS_GATE_APP_PRIVATE_KEY }}
+          INSTALLATION_ID: ${{ vars.MYTHOS_GATE_APP_INSTALLATION_ID }}
+        run: |
+          set -euo pipefail
+          "$PY" code/scripts/actions_runtime.py gate-app --dir "$RUNNER_TEMP/gate-app" --app-id "$GATE_APP_ID" \
+            --installation-id "$INSTALLATION_ID"
+          echo "MYTHOS_GATE_APP_DIR=$RUNNER_TEMP/gate-app" >> "$GITHUB_ENV"
+
+      - name: Publish mythos/final-gate
+        if: steps.mode.outputs.mode == 'pass' && steps.ready.outputs.ok == 'true'
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+        run: $PY -u code/scripts/nogrok_gate_publish.py --live
+
+      - name: Selftest (reads, App token exchange; no write)
+        if: steps.mode.outputs.mode == 'selftest'
+        env:
+          MYTHOS_DATA_ROOT: ${{ runner.temp }}/selftest-data
+        working-directory: code/scripts
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$MYTHOS_DATA_ROOT"
+          "$PY" - <<'EOF'
+          import gh_ro, nogrok_gate_publish as P
+          pulls = gh_ro.get(f"repos/{P.REPO}/pulls?state=open&per_page=100", paginate=True)
+          assert isinstance(pulls, list), f"gh_ro read failed ({gh_ro.LAST_ERROR[0]})"
+          print(f"gh_ro: {len(pulls)} open Writer PR(s) read")
+          app_id, inst, key = P.load_app()
+          tok, why = P.mint(app_id, inst, key)
+          assert tok, why
+          print("App 5736520: installation token minted (checks + statuses, Mythos-Writer only); not used")
+          EOF
+
+      - name: Scan
+        id: scan
+        if: steps.mode.outputs.mode == 'selftest' || steps.mode.outputs.mode == 'dry-run' || steps.ready.outputs.ok == 'true'
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+          PR: ${{ steps.mode.outputs.pr }}
+          MODE: ${{ steps.mode.outputs.mode }}
+        run: |
+          set -euo pipefail
+          if [ "$MODE" = selftest ]; then echo "work=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          out="$("$PY" code/scripts/nogrok_final_gate.py scan ${PR:+--pr "$PR"})"
+          printf '%s\n' "$out"
+          n="$(printf '%s\n' "$out" | grep -c ': candidate$' || true)"
+          w="$(printf '%s\n' "$out" | grep -c ': waiting (' || true)"
+          [ "$n" -gt 0 ] || echo "no candidate ($w waiting): no gate job this tick"
+          echo "work=$([ "$n" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      # Runs may overlap (see the header, runs at once). Another run's queued or running gate / plan / fix job (or the
+      # persist job that lands its state) means this run skips that stage; the next tick or chained run picks it up.
+      # A read that fails counts as busy (skip, never double up). actions: read is for this step only.
+      - name: In-flight check (stages another engine run still holds)
+        id: busy
+        if: steps.mode.outputs.mode == 'pass' && steps.ready.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          gate=false; plan=false; fix=false
+          live='select(.status=="queued" or .status=="in_progress" or .status=="waiting" or .status=="pending" or .status=="requested")'
+          # Every live run, by status (not the newest page of all runs: a long gate run must never fall off it).
+          ids=""
+          for st in in_progress queued waiting pending requested; do
+            if ! got="$(gh api --paginate "repos/$REPO/actions/workflows/mythos-engine.yml/runs?status=$st&per_page=100" \
+                  --jq ".workflow_runs[]|select(.id != $RUN_ID)|.id")"; then
+              echo "::warning title=In-flight check::engine runs unreadable; gate, plan and fix skipped this run"
+              gate=true; plan=true; fix=true; ids=""; break
+            fi
+            ids="$ids $got"
+          done
+          for id in $(printf '%s\n' $ids | sort -u); do
+            if ! names="$(gh api --paginate "repos/$REPO/actions/runs/$id/jobs?per_page=100" --jq ".jobs[]|$live|.name")"; then
+              gate=true; plan=true; fix=true; continue
+            fi
+            # persist-tick holds every stage: that run's gate, plan and fix start right after it.
+            if printf '%s\n' "$names" | grep -qx -e gate -e persist -e persist-tick; then gate=true; fi
+            if printf '%s\n' "$names" | grep -qx -e plan -e persist -e persist-tick; then plan=true; fi
+            if printf '%s\n' "$names" | grep -qx -e fix -e persist-fix -e persist-tick; then fix=true; fi
+          done
+          echo "in flight elsewhere: gate=$gate plan=$plan fix=$fix"
+          { echo "gate=$gate"; echo "plan=$plan"; echo "fix=$fix"; } >> "$GITHUB_OUTPUT"
+
+      - name: WAKE lines (to logs/engine/wake.jsonl + annotations)
+        if: always() && steps.mode.outputs.mode == 'pass' && steps.state.outcome == 'success'
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+        run: $PY code/scripts/engine_state.py wake --root state --job tick
+
+      - name: Pack tick state writes
+        id: pack
+        if: always() && steps.mode.outputs.mode == 'pass' && steps.state.outcome == 'success'
+        run: |
+          set -euo pipefail
+          base="$(git -C state rev-parse HEAD)"
+          /usr/bin/python3 code/scripts/engine_state.py pack --producer tick --root state --base "$base" \
+            --out "$RUNNER_TEMP/tick-delta"
+          n="$(/usr/bin/python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["entries"]))' "$RUNNER_TEMP/tick-delta/manifest.json")"
+          echo "changed=$([ "$n" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+
+      - name: Not ready fails the tick (the watcher raises it)
+        if: steps.mode.outputs.mode == 'pass' && steps.ready.outputs.ok != 'true'
+        run: exit 1
+
+      - name: Persist to the private data repo (no public artifact)
+        id: persist
+        if: always() && steps.pack.outputs.changed == 'true'
+        env:
+          PRODUCER: tick
+          STATE_BRANCH: engine-state
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Notes and state stay on SkyyPlayz/Mythos-Ops. Nothing is uploaded as a public artifact.
+          git -C state fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD || exit 1
+          /usr/bin/python3 code/scripts/engine_state.py apply --producer "$PRODUCER" --delta "$RUNNER_TEMP/tick-delta" --root state || exit $?
+          /usr/bin/python3 code/scripts/engine_state.py list --producer "$PRODUCER" --root state -z \
+            | (cd state && xargs -0 -r git add --)
+          git -C state -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "engine: $PRODUCER state ($RUN_URL)" || true
+          if git -C state push -q origin "HEAD:$STATE_BRANCH"; then echo "pushed=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          git -C state fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD || exit 1
+          if git -C state log -n 50 --format=%s FETCH_HEAD | grep -qxF "engine: $PRODUCER state ($RUN_URL)"; then
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          exit 1
+      - name: Public result (pass/fail only)
+        if: always()
+        run: echo "result=${{ job.status == 'success' && 'pass' || 'fail' }}"
+  gate:
+    needs: [admit, tick]
+    if: >-
+      needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main' &&
+      !cancelled() && needs.tick.result == 'success' && needs.tick.outputs.work == 'true' &&
+      needs.tick.outputs.gate_busy != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    environment: lanes
+    concurrency:
+      group: mythos-engine-gate
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.pack.outputs.changed }}
+      pushed: ${{ steps.persist.outputs.pushed }}
+    steps:
+      - name: Confirm the trusted ref before checkout
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$REPO" = "Sky-High-Infinite-Techwork/Mythos-Writer"
+          test "$REF" = "refs/heads/main"
+
+      - name: Job clock (the pass's TERM deadline counts from here)
+        run: echo "JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Code (this commit)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SkyyPlayz/Mythos-Engine
+          ref: main
+          token: ${{ secrets.MYTHOS_ENGINE_READ_TOKEN }}
+          path: code
+          persist-credentials: false
+
+      - name: State (engine-state branch)
+        if: needs.tick.outputs.mode != 'selftest'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SkyyPlayz/Mythos-Ops
+          ref: engine-state
+          token: ${{ secrets.MYTHOS_DATA_TOKEN }}
+          path: state
+          persist-credentials: true
+
+
+      - name: Setup (gate)
+        uses: ./code/.github/actions/engine-setup
+        with:
+          kind: gate
+          read-token: ${{ secrets.MYTHOS_READ_TOKEN || github.token }}
+          claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          codex-auth: ${{ secrets.CODEX_AUTH_JSON }}
+
+      # Skyy 2026-11-26 (quality first): the high-risk Probe runs the real app. Only with the flag probe_electron_cache:
+      # a display (xvfb) and Electron's shared libraries on the runner (the sandbox sees /usr read-only), then each pinned
+      # Electron zip fetched into the runner's cache, sha256 checked against scripts/data/electron_pins.json
+      # (electron_cache.py fetch: https only, no token). No model and no secret here; any miss = the Probe runs without
+      # Electron and says so (never a pass for a missing user-path run).
+      - name: Electron for the Probe (pinned, checksum-verified; no model, no secret)
+        run: |
+          set -uo pipefail
+          on="$(/usr/bin/python3 -c 'import json; print(json.load(open("code/scripts/data/final_gate.json")).get("probe_electron_cache") is True)')"
+          if [ "$on" != True ]; then echo "probe_electron_cache off: no Electron"; exit 0; fi
+          { sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends xvfb xauth libnss3 \
+              libgtk-3-0t64 libasound2t64 libgbm1 libxss1 libxtst6 libdrm2 fonts-liberation; } >/dev/null \
+            || echo "::warning title=Probe Electron::runtime libraries not installed; the Probe may not start the app"
+          for v in $(/usr/bin/python3 -c 'import json; print(" ".join(sorted(json.load(open("code/scripts/data/electron_pins.json"))["pins"])))'); do
+            /usr/bin/python3 code/scripts/electron_cache.py fetch "$v" \
+              || echo "::warning title=Probe Electron::fetch $v failed; the Probe runs without Electron"
+          done
+
+      - name: Preflight (sandbox selftest, kernel, CLIs)
+        env:
+          MYTHOS_DATA_ROOT: ${{ runner.temp }}/preflight-data
+        working-directory: code/scripts
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$MYTHOS_DATA_ROOT"
+          uname -r
+          # The high-risk Probe's sandbox must pass here, or a live pass would BLOCK every high-risk Probe for a
+          # runner fault: fail the job instead (nothing gated).
+          "$PY" nogrok_exec.py --selftest
+          "$PY" - <<'EOF'
+          import nogrok_final_gate as F
+          cfg, ok = F.config(), F.group_pidfd_ok()
+          print(f"final_gate.json parallel={cfg['parallel']} max_concurrent={cfg['max_concurrent']}; group pidfd ok={ok}")
+          assert ok or not cfg["parallel"], "parallel mode needs Linux >= 6.9 group pidfd signals; nothing gated"
+          EOF
+          # The sandboxed Probe's own boundary check (no model), on a dummy tip: a runner fault fails the job here
+          # instead of writing a high-risk Probe BLOCK (sandbox-failed) during a live pass.
+          "$PY" - <<'EOF'
+          import os, tempfile
+          import nogrok_probe_tools as PT
+          root = tempfile.mkdtemp(prefix="ngp-pre-")
+          os.mkdir(os.path.join(root, "tip"), 0o755)
+          with open(os.path.join(root, "tip", "README.md"), "w") as f:
+              f.write("preflight\n")
+          for name, data in (("tip.diff", ""), ("HEAD_SHA", "0" * 40 + "\n")):
+              with open(os.path.join(root, name), "w") as f:
+                  f.write(data)
+          ok, fails = PT.preflight(root, os.path.realpath(os.environ["NOGROK_HOME"]), PT.claude_bin(),
+                                   "fg-actions-preflight")
+          assert ok, "Probe sandbox boundary: " + "; ".join(fails[:8])
+          print("Probe sandbox boundary: OK")
+          EOF
+
+      # Every gate job (not only selftest): a stale login must never turn into BLOCK verdicts. One tiny reply per lane,
+      # the gate's own argv (cc_ask / cx_ask build_cmd) and login files; no repo file. Claude failing fails the job
+      # here (nothing gated). Codex failing sets NOGROK_CODEX_LANE=off for the pass (its gates wait) + an ::error.
+      # The watcher reads these annotation titles ("Claude login failed" / "Codex login failed") as auth problems.
+      - name: Login checks (Claude, Codex)
+        working-directory: code/scripts
+        run: |
+          set -euo pipefail
+          "$PY" - <<'EOF'
+          import os, subprocess, sys, tempfile
+          import cc_ask, cx_ask
+          q = "Reply with the single word OK."
+          def ok(cmd, **kw):
+              try:
+                  return subprocess.run(cmd, input=q, text=True, capture_output=True, **kw).returncode == 0
+              except (OSError, subprocess.TimeoutExpired):
+                  return False
+          with tempfile.TemporaryDirectory() as d:
+              if not ok(cc_ask.build_cmd("haiku", "low"), cwd=d, timeout=300,
+                        env=dict(cc_ask.child_env(), HOME=os.environ["NOGROK_HOME"])):
+                  print("::error title=Claude login failed::renew CLAUDE_CODE_OAUTH_TOKEN; nothing gated this run")
+                  sys.exit(1)
+              print("Claude login: OK")
+              if os.environ.get("NOGROK_CODEX_LANE") == "off":
+                  print("Codex lane already off (no CODEX_AUTH_JSON)")
+              elif ok(cx_ask.build_cmd("default", "low", d, os.path.join(d, "last.txt")), cwd=d, timeout=600,
+                      env=cx_ask.child_env()):
+                  print("Codex login: OK")
+              else:
+                  print("::error title=Codex login failed::renew CODEX_AUTH_JSON; Codex lane off for this run "
+                        "(gates that need Codex wait; nothing passes or blocks in its place)")
+                  with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
+                      f.write("NOGROK_CODEX_LANE=off\n")
+          EOF
+
+      - name: Final gate pass
+        id: pass
+        if: needs.tick.outputs.mode == 'pass' || needs.tick.outputs.mode == 'dry-run'
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+          PR: ${{ needs.tick.outputs.pr }}
+          MODE: ${{ needs.tick.outputs.mode }}
+        run: |
+          set -uo pipefail
+          echo "base=$(git -C state rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          live=""; [ "$MODE" = pass ] && live="--live"
+          # The pass's TERM deadline is 335 min after the job's first step (setup, cache misses, preflight and the
+          # login checks all come out of it), at most 330 min of pass, and -k 120 kills 2 min later: always before
+          # the job's 350-min cap, so the pass gets TERM and its own cleanup instead of GitHub cancelling the job.
+          # Under 20 min left = no pass this run (nothing gated; the next tick retries).
+          left=$(( (JOB_T0 + 335 * 60 - $(date +%s)) / 60 ))
+          [ "$left" -le 330 ] || left=330
+          if [ "$left" -lt 20 ]; then
+            echo "::warning title=No pass::only ${left} min of job time left after setup; nothing gated this run"
+            echo "rc=0" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          timeout -s TERM -k 120 "${left}m" "$PY" -u code/scripts/nogrok_final_gate.py $live ${PR:+--pr "$PR"}
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Pack state writes
+        id: pack
+        if: always() && needs.tick.outputs.mode == 'pass' && steps.pass.outputs.base != ''
+        env:
+          BASE: ${{ steps.pass.outputs.base }}
+        run: |
+          set -euo pipefail
+          "$PY" code/scripts/engine_state.py pack --producer gate --root state --base "$BASE" --out "$RUNNER_TEMP/delta"
+          n="$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["entries"]))' "$RUNNER_TEMP/delta/manifest.json")"
+          echo "changed=$([ "$n" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+
+      - name: Pass result
+        if: steps.pass.outcome == 'success'
+        env:
+          RC: ${{ steps.pass.outputs.rc }}
+        run: |
+          echo "final gate exit $RC"
+          [ "$RC" = 0 ]
+
+      - name: Persist to the private data repo (no public artifact)
+        id: persist
+        if: always() && steps.pack.outputs.changed == 'true'
+        env:
+          PRODUCER: gate
+          STATE_BRANCH: engine-state
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Notes and state stay on SkyyPlayz/Mythos-Ops. Nothing is uploaded as a public artifact.
+          git -C state fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD || exit 1
+          /usr/bin/python3 code/scripts/engine_state.py apply --producer "$PRODUCER" --delta "$RUNNER_TEMP/delta" --root state || exit $?
+          /usr/bin/python3 code/scripts/engine_state.py list --producer "$PRODUCER" --root state -z \
+            | (cd state && xargs -0 -r git add --)
+          git -C state -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "engine: $PRODUCER state ($RUN_URL)" || true
+          if git -C state push -q origin "HEAD:$STATE_BRANCH"; then echo "pushed=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          git -C state fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD || exit 1
+          if git -C state log -n 50 --format=%s FETCH_HEAD | grep -qxF "engine: $PRODUCER state ($RUN_URL)"; then
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          exit 1
+      - name: Public result (pass/fail only)
+        if: always()
+        run: echo "result=${{ job.status == 'success' && 'pass' || 'fail' }}"
+  plan:
+  # ENGINE-BUILDS bootstrap PR 2: one plan step for a ready-to-plan Writer issue (scripts/nogrok_engine_plan.py). The write
+  # token sits only in the pass step's env and is popped from it before any child starts; it goes only into gh_auth's
+  # allowlisted gh child (issue comment / label edit on Writer; never plan-approved, never a PLAN OK line). The model
+  # children get a minimal env: Claude with no tools, Codex read-only with exec off. No OPENROUTER_API_KEY here.
+
+
+    needs: [admit, tick]
+    if: >-
+      needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main' &&
+      !cancelled() && needs.tick.result == 'success' && needs.tick.outputs.mode == 'pass' && needs.tick.outputs.ready == 'true' && needs.tick.outputs.plan == 'true' &&
+      needs.tick.outputs.plan_busy != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: lanes
+    concurrency:
+      group: mythos-engine-plan
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.pack.outputs.changed }}
+      pushed: ${{ steps.persist.outputs.pushed }}
+    steps:
+      - name: Confirm the trusted ref before checkout
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$REPO" = "Sky-High-Infinite-Techwork/Mythos-Writer"
+          test "$REF" = "refs/heads/main"
+
+      - name: Job clock (the pass's TERM deadline counts from here)
+        run: echo "JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Code (this commit)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SkyyPlayz/Mythos-Engine
+          ref: main
+          token: ${{ secrets.MYTHOS_ENGINE_READ_TOKEN }}
+          path: code
+          persist-credentials: false
+
+      - name: State (engine-state branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SkyyPlayz/Mythos-Ops
+          ref: engine-state
+          token: ${{ secrets.MYTHOS_DATA_TOKEN }}
+          path: state
+          persist-credentials: true
+
+      # As in the gate job: the tick's writes (the brother seen list it may just have refreshed) go onto this checkout
+      # first, so the ready check and E2 read what the tick's scan read. A local commit, never pushed; the plan's pack
+      # base is taken after it, so the plan delta carries only plan writes.
+
+      - name: Setup (gate kind, Claude + Codex logins)
+        uses: ./code/.github/actions/engine-setup
+        with:
+          kind: gate
+          read-token: ${{ secrets.MYTHOS_READ_TOKEN || github.token }}
+          claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          codex-auth: ${{ secrets.CODEX_AUTH_JSON }}
+
+      # The gate job's "Login checks" step, with one difference: Claude failing does not stop the job here. It sets
+      # PLAN_CLAUDE_LOGIN=failed, the pass then posts due packet notes only (no model call), and "Pass result" fails the
+      # job, so the watcher still raises it. Codex failing sets NOGROK_CODEX_LANE=off: a fresh Claude sonnet grades.
+      - name: Login checks (Claude, Codex)
+        working-directory: code/scripts
+        run: |
+          set -euo pipefail
+          "$PY" - <<'EOF'
+          import os, subprocess, sys, tempfile
+          import cc_ask, cx_ask
+          q = "Reply with the single word OK."
+          def ok(cmd, **kw):
+              try:
+                  return subprocess.run(cmd, input=q, text=True, capture_output=True, **kw).returncode == 0
+              except (OSError, subprocess.TimeoutExpired):
+                  return False
+          with tempfile.TemporaryDirectory() as d:
+              if not ok(cc_ask.build_cmd("haiku", "low"), cwd=d, timeout=300,
+                        env=dict(cc_ask.child_env(), HOME=os.environ["NOGROK_HOME"])):
+                  print("::error title=Claude login failed::renew CLAUDE_CODE_OAUTH_TOKEN; nothing planned this run "
+                        "(packet notes still post)")
+                  with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
+                      f.write("PLAN_CLAUDE_LOGIN=failed\n")
+                  sys.exit(0)
+              print("Claude login: OK")
+              if os.environ.get("NOGROK_CODEX_LANE") == "off":
+                  print("Codex lane already off (no CODEX_AUTH_JSON)")
+              elif ok(cx_ask.build_cmd("default", "low", d, os.path.join(d, "last.txt")), cwd=d, timeout=600,
+                      env=cx_ask.child_env()):
+                  print("Codex login: OK")
+              else:
+                  print("::error title=Codex login failed::renew CODEX_AUTH_JSON; Codex lane off for this run "
+                        "(plan grades go to a fresh Claude sonnet)")
+                  with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
+                      f.write("NOGROK_CODEX_LANE=off\n")
+          EOF
+
+      - name: Plan pass
+        id: pass
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+          MYTHOS_WRITE_TOKEN: ${{ secrets.MYTHOS_WRITE_TOKEN }}
+        run: |
+          set -uo pipefail
+          echo "base=$(git -C state rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          # TERM 55 min after the job's first step (setup and login checks come out of it), KILL 2 min later: always
+          # before the job's 60-min cap, so the pass gets TERM and its own child clean-up. Under 10 min left = no pass.
+          left=$(( (JOB_T0 + 55 * 60 - $(date +%s)) / 60 ))
+          if [ "$left" -lt 10 ]; then
+            echo "::warning title=No plan pass::only ${left} min of job time left after setup; nothing planned this run"
+            echo "rc=0" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          notes=""
+          [ "${PLAN_CLAUDE_LOGIN:-}" != failed ] || notes=--notes-only
+          timeout -s TERM -k 120 "${left}m" "$PY" -u code/scripts/nogrok_engine_plan.py run --live $notes
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Pack plan state writes
+        id: pack
+        if: always() && steps.pass.outputs.base != ''
+        env:
+          BASE: ${{ steps.pass.outputs.base }}
+        run: |
+          set -euo pipefail
+          "$PY" code/scripts/engine_state.py pack --producer plan --root state --base "$BASE" --out "$RUNNER_TEMP/plan-delta"
+          n="$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["entries"]))' "$RUNNER_TEMP/plan-delta/manifest.json")"
+          echo "changed=$([ "$n" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+
+      - name: Pass result
+        if: steps.pass.outcome == 'success'
+        env:
+          RC: ${{ steps.pass.outputs.rc }}
+        run: |
+          echo "plan pass exit $RC"
+          if [ "${PLAN_CLAUDE_LOGIN:-}" = failed ]; then
+            echo "::error title=Claude login failed::packet notes only this run; renew CLAUDE_CODE_OAUTH_TOKEN"; exit 1
+          fi
+          [ "$RC" = 0 ]
+
+      - name: Persist to the private data repo (no public artifact)
+        id: persist
+        if: always() && steps.pack.outputs.changed == 'true'
+        env:
+          PRODUCER: plan
+          STATE_BRANCH: engine-state
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Notes and state stay on SkyyPlayz/Mythos-Ops. Nothing is uploaded as a public artifact.
+          git -C state fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD || exit 1
+          /usr/bin/python3 code/scripts/engine_state.py apply --producer "$PRODUCER" --delta "$RUNNER_TEMP/delta" --root state || exit $?
+          /usr/bin/python3 code/scripts/engine_state.py list --producer "$PRODUCER" --root state -z \
+            | (cd state && xargs -0 -r git add --)
+          git -C state -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "engine: $PRODUCER state ($RUN_URL)" || true
+          if git -C state push -q origin "HEAD:$STATE_BRANCH"; then echo "pushed=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          git -C state fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD || exit 1
+          if git -C state log -n 50 --format=%s FETCH_HEAD | grep -qxF "engine: $PRODUCER state ($RUN_URL)"; then
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          exit 1
+      - name: Public result (pass/fail only)
+        if: always()
+        run: echo "result=${{ job.status == 'success' && 'pass' || 'fail' }}"
+  publish:
+  # The tick's own writes, right after the tick (runs overlap: they must not wait for this run's gate).
+
+
+    needs: [admit, tick, gate]
+    if: >-
+      needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main' &&
+      always() && needs.gate.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: lanes
+    permissions:
+      contents: read
+    steps:
+      - name: Confirm the trusted ref before checkout
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$REPO" = "Sky-High-Infinite-Techwork/Mythos-Writer"
+          test "$REF" = "refs/heads/main"
+
+      - name: Code (this commit)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SkyyPlayz/Mythos-Engine
+          ref: main
+          token: ${{ secrets.MYTHOS_ENGINE_READ_TOKEN }}
+          path: code
+          persist-credentials: false
+
+      - name: State (latest engine-state)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SkyyPlayz/Mythos-Ops
+          ref: engine-state
+          token: ${{ secrets.MYTHOS_DATA_TOKEN }}
+          path: state
+          persist-credentials: true
+
+      - name: Setup (read)
+        uses: ./code/.github/actions/engine-setup
+        with:
+          kind: read
+          read-token: ${{ secrets.MYTHOS_READ_TOKEN || github.token }}
+
+      - name: Gate App key
+        env:
+          MYTHOS_GATE_APP_PRIVATE_KEY: ${{ secrets.MYTHOS_GATE_APP_PRIVATE_KEY }}
+          INSTALLATION_ID: ${{ vars.MYTHOS_GATE_APP_INSTALLATION_ID }}
+        run: |
+          set -euo pipefail
+          "$PY" code/scripts/actions_runtime.py gate-app --dir "$RUNNER_TEMP/gate-app" --app-id "$GATE_APP_ID" \
+            --installation-id "$INSTALLATION_ID"
+          echo "MYTHOS_GATE_APP_DIR=$RUNNER_TEMP/gate-app" >> "$GITHUB_ENV"
+
+      - name: Publish mythos/final-gate
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+        run: $PY -u code/scripts/nogrok_gate_publish.py --live
+
+      - name: WAKE lines (annotations only; the next tick's publish persists its alert record)
+        if: always()
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+        run: /usr/bin/python3 code/scripts/engine_state.py wake --root state --job publish
+
+      - name: Public result (pass/fail only)
+        if: always()
+        run: echo "result=${{ job.status == 'success' && 'pass' || 'fail' }}"
+  act:
+  # The only job that holds MYTHOS_WRITE_TOKEN (optional secret: a PAT that can comment on Writer PRs and run
+  # `gh pr merge --auto --match-head-commit` there). Without it both steps print a ::notice and exit 0: the tick is never
+  # failed for it. contents: read, no model, no other secret, writes nothing to engine-state: GitHub holds the state
+  # (a PROOF comment on the tip; auto_merge on the PR). Runs after persist + publish, so it reads the newest engine-state
+  # and the check run publish just posted. Same host / ready gate as every live step (engine_host).
+
+
+    needs: [admit, tick, gate, publish]
+    if: >-
+      needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main' &&
+      always() && needs.tick.outputs.mode == 'pass' && needs.tick.outputs.ready == 'true' &&
+      (needs.tick.outputs.act == 'true' || needs.publish.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: lanes
+    concurrency:  # overlapping runs: one PROOF / arm pass at a time (never a double PROOF post)
+      group: mythos-engine-act
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Confirm the trusted ref before checkout
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$REPO" = "Sky-High-Infinite-Techwork/Mythos-Writer"
+          test "$REF" = "refs/heads/main"
+
+      - name: Code (this commit)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SkyyPlayz/Mythos-Engine
+          ref: main
+          token: ${{ secrets.MYTHOS_ENGINE_READ_TOKEN }}
+          path: code
+          persist-credentials: false
+
+      - name: State (latest engine-state)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SkyyPlayz/Mythos-Ops
+          ref: engine-state
+          token: ${{ secrets.MYTHOS_DATA_TOKEN }}
+          path: state
+          persist-credentials: true
+
+      - name: Setup (read)
+        uses: ./code/.github/actions/engine-setup
+        with:
+          kind: read
+          read-token: ${{ secrets.MYTHOS_READ_TOKEN || github.token }}
+
+      - name: PROOF @ tip (green Writer PRs without one; scripts/nogrok_engine_proof.py)
+        id: proof
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+          MYTHOS_WRITE_TOKEN: ${{ secrets.MYTHOS_WRITE_TOKEN }}
+        run: $PY -u code/scripts/nogrok_engine_proof.py --post
+
+      - name: Arm auto-merge (gate-green, non-protected Writer PRs; scripts/nogrok_engine_arm.py)
+        if: always()
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+          MYTHOS_WRITE_TOKEN: ${{ secrets.MYTHOS_WRITE_TOKEN }}
+        run: $PY -u code/scripts/nogrok_engine_arm.py --live
+
+      - name: Public result (pass/fail only)
+        if: always()
+        run: echo "result=${{ job.status == 'success' && 'pass' || 'fail' }}"
+  fix:
+  # One engine fix round (scripts/nogrok_autofix.py; ENGINE-BUILDS-ON-ITS-OWN bootstrap PR 5). See the header (fix).
+  # Right after the tick's state lands, never behind this run's gate (Skyy 2026-11-26: a long gate run must not block
+  # fixes); it reads the newest engine-state, so the verdicts it fixes are the persisted ones (the scan read them too). The model and the write token never
+  # share a step: the round step has CLAUDE_CODE_OAUTH_TOKEN's login only (through setup, on a socket inside the
+  # sandbox); MYTHOS_WRITE_TOKEN is in the presence check (no model yet) and the push step (no model) only.
+
+
+    needs: [admit, tick]
+    if: >-
+      needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main' &&
+      always() && needs.tick.outputs.mode == 'pass' && needs.tick.outputs.ready == 'true' &&
+      needs.tick.outputs.fix == 'true' && needs.tick.outputs.fix_busy != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    environment: lanes
+    concurrency:
+      group: mythos-engine-fix
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.pack.outputs.changed }}
+      pushed: ${{ steps.persist.outputs.pushed }}
+    env:
+      NOGROK_SESSION_TIMEOUT_S: "3600"
+    steps:
+      - name: Confirm the trusted ref before checkout
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$REPO" = "Sky-High-Infinite-Techwork/Mythos-Writer"
+          test "$REF" = "refs/heads/main"
+
+      - name: Job clock (the round's TERM deadline counts from here)
+        run: echo "JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Code (this commit)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SkyyPlayz/Mythos-Engine
+          ref: main
+          token: ${{ secrets.MYTHOS_ENGINE_READ_TOKEN }}
+          path: code
+          persist-credentials: false
+
+      - name: State (latest engine-state)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SkyyPlayz/Mythos-Ops
+          ref: engine-state
+          token: ${{ secrets.MYTHOS_DATA_TOKEN }}
+          path: state
+          persist-credentials: true
+
+      # No token = no round: a staged round could never be pushed, so a Claude session would be spent for nothing.
+      - name: Write token present (no model here)
+        id: token
+        env:
+          MYTHOS_WRITE_TOKEN: ${{ secrets.MYTHOS_WRITE_TOKEN }}
+        run: |
+          if [ -n "${MYTHOS_WRITE_TOKEN:-}" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"; else
+            echo "::notice title=Fix lane off::MYTHOS_WRITE_TOKEN is not set: no fix round (nothing recorded)"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup (fix)
+        if: steps.token.outputs.ok == 'true'
+        uses: ./code/.github/actions/engine-setup
+        with:
+          kind: fix
+          read-token: ${{ secrets.MYTHOS_READ_TOKEN || github.token }}
+          claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+      # The round's sandbox must pass its selftest here (recorded for this run's data root, where the round's
+      # launch check reads it); a runner fault fails the job before any round (nothing recorded).
+      - name: Preflight (sandbox selftest)
+        if: steps.token.outputs.ok == 'true'
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+        working-directory: code/scripts
+        run: |
+          set -euo pipefail
+          uname -r
+          "$PY" - <<'EOF'
+          import nogrok_exec as E
+          assert E.launch_ok(run=True), "nogrok_exec sandbox selftest failed; no fix round"
+          print("sandbox selftest: pass")
+          EOF
+
+      - name: Login check (Claude)
+        if: steps.token.outputs.ok == 'true'
+        working-directory: code/scripts
+        run: |
+          set -euo pipefail
+          "$PY" - <<'EOF'
+          import os, subprocess, sys, tempfile
+          import cc_ask
+          with tempfile.TemporaryDirectory() as d:
+              try:
+                  ok = subprocess.run(cc_ask.build_cmd("haiku", "low"), input="Reply with the single word OK.",
+                                      text=True, capture_output=True, cwd=d, timeout=300,
+                                      env=dict(cc_ask.child_env(), HOME=os.environ["NOGROK_HOME"])).returncode == 0
+              except (OSError, subprocess.TimeoutExpired):
+                  ok = False
+          if not ok:
+              print("::error title=Claude login failed::renew CLAUDE_CODE_OAUTH_TOKEN; no fix round this run")
+              sys.exit(1)
+          print("Claude login: OK")
+          EOF
+
+      - name: Fix round (stage only; no write token in this step)
+        id: round
+        if: steps.token.outputs.ok == 'true'
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+        run: |
+          set -uo pipefail
+          echo "base=$(git -C state rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          # TERM 125 min after the job's first step (at most 120 min of round), -k 120 kills 2 min later: the push
+          # step (15 min cap), WAKE and pack still fit inside the job's 150 min. Under 30 min left = no round.
+          left=$(( (JOB_T0 + 125 * 60 - $(date +%s)) / 60 ))
+          [ "$left" -le 120 ] || left=120
+          if [ "$left" -lt 30 ]; then
+            echo "::warning title=No fix round::only ${left} min of job time left after setup; nothing run"
+            echo "rc=0" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          timeout -s TERM -k 120 "${left}m" "$PY" -u code/scripts/nogrok_autofix.py --live --stage "$RUNNER_TEMP/fix-stage"
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Push the staged round (no model; scripts/nogrok_autofix.py --push)
+        id: push
+        if: steps.round.outcome == 'success'
+        timeout-minutes: 15
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+          MYTHOS_WRITE_TOKEN: ${{ secrets.MYTHOS_WRITE_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ ! -f "$RUNNER_TEMP/fix-stage/round.json" ]; then echo "no staged round: nothing to push"; exit 0; fi
+          "$PY" -u code/scripts/nogrok_autofix.py --push "$RUNNER_TEMP/fix-stage"
+
+      - name: WAKE lines (to logs/engine/wake.jsonl + annotations)
+        if: always() && steps.round.outputs.base != ''
+        env:
+          MYTHOS_DATA_ROOT: ${{ github.workspace }}/state
+        run: /usr/bin/python3 code/scripts/engine_state.py wake --root state --job fix
+
+      - name: Pack fix state writes
+        id: pack
+        if: always() && steps.round.outputs.base != ''
+        env:
+          BASE: ${{ steps.round.outputs.base }}
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 code/scripts/engine_state.py pack --producer fix --root state --base "$BASE" \
+            --out "$RUNNER_TEMP/fix-delta"
+          n="$(/usr/bin/python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["entries"]))' "$RUNNER_TEMP/fix-delta/manifest.json")"
+          echo "changed=$([ "$n" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+
+      - name: Round result
+        if: steps.round.outcome == 'success'
+        env:
+          RC: ${{ steps.round.outputs.rc }}
+        run: |
+          echo "fix round exit $RC"
+          [ "$RC" = 0 ]
+
+      - name: Persist to the private data repo (no public artifact)
+        id: persist
+        if: always() && steps.pack.outputs.changed == 'true'
+        env:
+          PRODUCER: fix
+          STATE_BRANCH: engine-state
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Notes and state stay on SkyyPlayz/Mythos-Ops. Nothing is uploaded as a public artifact.
+          git -C state fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD || exit 1
+          /usr/bin/python3 code/scripts/engine_state.py apply --producer "$PRODUCER" --delta "$RUNNER_TEMP/delta" --root state || exit $?
+          /usr/bin/python3 code/scripts/engine_state.py list --producer "$PRODUCER" --root state -z \
+            | (cd state && xargs -0 -r git add --)
+          git -C state -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "engine: $PRODUCER state ($RUN_URL)" || true
+          if git -C state push -q origin "HEAD:$STATE_BRANCH"; then echo "pushed=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          git -C state fetch -q origin "$STATE_BRANCH" && git -C state reset -q --hard FETCH_HEAD || exit 1
+          if git -C state log -n 50 --format=%s FETCH_HEAD | grep -qxF "engine: $PRODUCER state ($RUN_URL)"; then
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          exit 1
+      - name: Public result (pass/fail only)
+        if: always()
+        run: echo "result=${{ job.status == 'success' && 'pass' || 'fail' }}"
+  chain:
+    needs: [admit, tick, gate, publish, act, plan, fix]
+    if: >-
+      needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main' &&
+      !cancelled() && needs.tick.outputs.mode == 'pass' && needs.tick.outputs.ready == 'true' &&
+      github.ref == 'refs/heads/main' &&
+      contains(fromJSON('["success","skipped"]'), needs.publish.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.act.result) &&
+      ((needs.gate.result == 'success' && needs.gate.outputs.changed == 'true') ||
+       (needs.plan.result == 'success' && needs.plan.outputs.changed == 'true') ||
+       (needs.fix.result == 'success' && needs.fix.outputs.changed == 'true'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    environment: lanes
+    permissions:
+      actions: write
+    steps:
+      - name: Confirm the trusted ref before checkout
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$REPO" = "Sky-High-Infinite-Techwork/Mythos-Writer"
+          test "$REF" = "refs/heads/main"
+
+      - name: Queue the next engine run (work was done this run)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: gh workflow run mythos-engine-lanes.yml --repo "$REPO" --ref main -f mode=pass
+
+      - name: Public result (pass/fail only)
+        if: always()
+        run: echo "result=${{ job.status == 'success' && 'pass' || 'fail' }}"
