@@ -2,7 +2,8 @@ name: mythos-engine-lanes
 
 # Phase 3. Heavy engine work on public Writer, behind the "lanes" environment.
 # Main, schedule, and manual only. Never pull_request or pull_request_target, never forks.
-# Public logs print only pass or fail. Prompts, notes and output go to SkyyPlayz/Mythos-Ops.
+# Public logs print only pass or fail. Prompts, notes and output go to the private data repo
+# (vars.MYTHOS_DATA_REPO, default SkyyPlayz/Mythos-Ops). Writer never falls back to Engine.
 # Skyy creates the environment and its secrets; this file only names them.
 # Live only when SkyyPlayz/Mythos-Engine variable MYTHOS_LANES_HOST is "writer" and
 # MYTHOS_ENGINE_SCHEDULE is "on" (schedule). Rollback: set MYTHOS_LANES_HOST to engine.
@@ -37,7 +38,7 @@ env:
   PYTHONUNBUFFERED: "1"
   TZ: America/Denver
   ENGINE_REPO: SkyyPlayz/Mythos-Engine
-  DATA_REPO: SkyyPlayz/Mythos-Ops
+  DATA_REPO: ${{ vars.MYTHOS_DATA_REPO || 'SkyyPlayz/Mythos-Ops' }}
   WRITER_REPO: Sky-High-Infinite-Techwork/Mythos-Writer
 
 jobs:
@@ -197,7 +198,7 @@ jobs:
         if: steps.mode.outputs.mode == 'pass' || steps.mode.outputs.mode == 'dry-run'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: SkyyPlayz/Mythos-Ops
+          repository: ${{ env.DATA_REPO }}
           ref: engine-state
           token: ${{ secrets.MYTHOS_DATA_TOKEN }}
           path: state
@@ -481,12 +482,26 @@ jobs:
         if: needs.tick.outputs.mode != 'selftest'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: SkyyPlayz/Mythos-Ops
+          repository: ${{ env.DATA_REPO }}
           ref: engine-state
           token: ${{ secrets.MYTHOS_DATA_TOKEN }}
           path: state
           persist-credentials: true
 
+
+      - name: Notes (data repo main)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.DATA_REPO }}
+          ref: main
+          path: notes
+          token: ${{ secrets.MYTHOS_DATA_TOKEN }}
+          persist-credentials: false
+
+      - name: Notes root
+        run: |
+          set -euo pipefail
+          echo "MYTHOS_NOTES_ROOT=$GITHUB_WORKSPACE/notes" >> "$GITHUB_ENV"
 
       - name: Setup (gate)
         uses: ./code/.github/actions/engine-setup
@@ -703,7 +718,7 @@ jobs:
       - name: State (engine-state branch)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: SkyyPlayz/Mythos-Ops
+          repository: ${{ env.DATA_REPO }}
           ref: engine-state
           token: ${{ secrets.MYTHOS_DATA_TOKEN }}
           path: state
@@ -712,6 +727,20 @@ jobs:
       # As in the gate job: the tick's writes (the brother seen list it may just have refreshed) go onto this checkout
       # first, so the ready check and E2 read what the tick's scan read. A local commit, never pushed; the plan's pack
       # base is taken after it, so the plan delta carries only plan writes.
+
+      - name: Notes (data repo main)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.DATA_REPO }}
+          ref: main
+          path: notes
+          token: ${{ secrets.MYTHOS_DATA_TOKEN }}
+          persist-credentials: false
+
+      - name: Notes root
+        run: |
+          set -euo pipefail
+          echo "MYTHOS_NOTES_ROOT=$GITHUB_WORKSPACE/notes" >> "$GITHUB_ENV"
 
       - name: Setup (gate kind, Claude + Codex logins)
         uses: ./code/.github/actions/engine-setup
@@ -863,7 +892,7 @@ jobs:
       - name: State (latest engine-state)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: SkyyPlayz/Mythos-Ops
+          repository: ${{ env.DATA_REPO }}
           ref: engine-state
           token: ${{ secrets.MYTHOS_DATA_TOKEN }}
           path: state
@@ -942,7 +971,7 @@ jobs:
       - name: State (latest engine-state)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: SkyyPlayz/Mythos-Ops
+          repository: ${{ env.DATA_REPO }}
           ref: engine-state
           token: ${{ secrets.MYTHOS_DATA_TOKEN }}
           path: state
@@ -1022,13 +1051,27 @@ jobs:
       - name: State (latest engine-state)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: SkyyPlayz/Mythos-Ops
+          repository: ${{ env.DATA_REPO }}
           ref: engine-state
           token: ${{ secrets.MYTHOS_DATA_TOKEN }}
           path: state
           persist-credentials: true
 
       # No token = no round: a staged round could never be pushed, so a Claude session would be spent for nothing.
+      - name: Notes (data repo main)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.DATA_REPO }}
+          ref: main
+          path: notes
+          token: ${{ secrets.MYTHOS_DATA_TOKEN }}
+          persist-credentials: false
+
+      - name: Notes root
+        run: |
+          set -euo pipefail
+          echo "MYTHOS_NOTES_ROOT=$GITHUB_WORKSPACE/notes" >> "$GITHUB_ENV"
+
       - name: Write token present (no model here)
         id: token
         env:

@@ -79,12 +79,13 @@ class LanesWorkflow(unittest.TestCase):
                 with_ = st.get("with") or {}
                 self.assertNotIn("github.event.pull_request", str(with_), (name, st.get("name")))
                 repo = with_.get("repository")
-                self.assertIn(repo, ("SkyyPlayz/Mythos-Engine", "SkyyPlayz/Mythos-Ops"), (name, st.get("name")))
                 if repo == "SkyyPlayz/Mythos-Engine":
                     self.assertEqual(with_.get("token"), "${{ secrets.MYTHOS_ENGINE_READ_TOKEN }}")
                     self.assertEqual(with_.get("persist-credentials"), False)
-                if repo == "SkyyPlayz/Mythos-Ops":
+                elif repo == "${{ env.DATA_REPO }}":
                     self.assertEqual(with_.get("token"), "${{ secrets.MYTHOS_DATA_TOKEN }}")
+                else:
+                    self.fail(f"unexpected checkout repo {repo!r} in {name} {st.get('name')}")
 
     def test_no_public_artifacts_and_each_keyed_job_prints_only_pass_or_fail(self):
         self.assertNotIn("upload-artifact", self.text)
@@ -94,6 +95,22 @@ class LanesWorkflow(unittest.TestCase):
             names = [st.get("name") for st in jobs[name]["steps"]]
             self.assertIn("Public result (pass/fail only)", names, name)
         self.assertIn("Public logs print only pass or fail", self.text)
+
+    def test_data_repo_defaults_to_ops_and_never_falls_back_to_engine(self):
+        self.assertEqual(self.doc["env"]["DATA_REPO"],
+                         "${{ vars.MYTHOS_DATA_REPO || 'SkyyPlayz/Mythos-Ops' }}")
+        self.assertNotIn("github.repository", self.doc["env"]["DATA_REPO"])
+        self.assertNotIn("Mythos-Engine", self.doc["env"]["DATA_REPO"])
+        notes_jobs = set()
+        for name, job in self.doc["jobs"].items():
+            for st in job.get("steps") or []:
+                if (st.get("with") or {}).get("path") == "notes":
+                    notes_jobs.add(name)
+                    self.assertEqual(st["with"]["ref"], "main")
+                    self.assertEqual(st["with"]["persist-credentials"], False)
+                    self.assertEqual(st["with"]["token"], "${{ secrets.MYTHOS_DATA_TOKEN }}")
+        self.assertEqual(notes_jobs, {"gate", "plan", "fix"})
+        self.assertIn("MYTHOS_NOTES_ROOT=$GITHUB_WORKSPACE/notes", self.text)
 
     def test_no_pull_request_target_job_and_no_secret_echo(self):
         # job keys / on: must not include pull_request_target (comments may warn against it)
