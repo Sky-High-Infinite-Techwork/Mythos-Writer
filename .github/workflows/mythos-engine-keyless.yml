@@ -1,7 +1,7 @@
 name: mythos-engine-keyless
 
 # Phase 3. Engine unit tests on public Writer, no model logins.
-# Main, schedule, and manual only. Never pull_request or pull_request_target, never forks.
+# Main, schedule, and manual only. Never a pull-request or pull-request-target event, never forks.
 # Checks out private SkyyPlayz/Mythos-Engine with a read-only token (environment "lanes"
 # so the token is not available to PRs). Public log prints only pass or fail.
 # This workflow does not depend on MYTHOS_LANES_HOST: tests can run even while

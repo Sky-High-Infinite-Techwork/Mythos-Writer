@@ -1,7 +1,7 @@
 name: mythos-engine-lanes
 
 # Phase 3. Heavy engine work on public Writer, behind the "lanes" environment.
-# Main, schedule, and manual only. Never pull_request or pull_request_target, never forks.
+# Main, schedule, and manual only. Never a pull-request or pull-request-target event, never forks.
 # Public logs print only pass or fail. Prompts, notes and output go to the private data repo
 # (vars.MYTHOS_DATA_REPO, default SkyyPlayz/Mythos-Ops). Writer never falls back to Engine.
 # Skyy creates the environment and its secrets; this file only names them.
