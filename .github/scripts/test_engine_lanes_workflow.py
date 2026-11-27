@@ -443,7 +443,7 @@ class Wiring(unittest.TestCase):
         for stage in ("gate", "plan", "fix"):
             self.assertIn(stage, self.jobs)
             self.assertNotIn("name", self.jobs[stage])  # the API job name is the id the check greps
-            self.assertIn(f"grep -qx {stage}", run)
+            self.assertIn(f"grep -x {stage} >/dev/null", run)
         self.assertNotIn("persist-tick", run)
 
     def test_pack_and_persist_share_one_delta_dir_per_job(self):
@@ -709,7 +709,7 @@ class AdmitBehaviour(Sandboxed):
 class BusyBehaviour(Sandboxed):
     def busy(self, **fake):
         st = step(LANES_DOC, "tick", "busy")
-        env = {"REPO": WRITER, "RUN_ID": "100", "GH_TOKEN": "x"}
+        env = {"REPO": WRITER, "RUN_ID": "100", "GH_TOKEN": "x", "MODE": "pass"}
         env.update(fake)
         open(self.box.out, "w").close()
         return self.box.run_step(st, env), self.box.outputs()
@@ -734,6 +734,177 @@ class BusyBehaviour(Sandboxed):
             self.assertIn("::error title=In-flight check::", r.stdout)
             # red AND closed: all three stages read as busy even if a job condition forgets tick success (H8)
             self.assertEqual((out.get("gate"), out.get("plan"), out.get("fix")), ("true", "true", "true"), fake)
+
+
+# ---------------------------------------------------------------- a small evaluator for the jobs' `if:` text
+_TOK = re.compile(r"\s*(?:(\'(?:[^']|'')*\')|(==|!=|&&|\|\||!|\(|\))|([A-Za-z_][A-Za-z0-9_.\-]*)(\(\))?)")
+
+
+def gh_if(expr, ctx):
+    """Evaluate a GitHub `if:` (the subset these workflows use) against ctx (dotted name -> string). A missing name is
+    '' as on GitHub; == and != compare strings case-insensitively; && and || return an operand."""
+    toks, pos, expr = [], 0, expr.strip()
+    while pos < len(expr):
+        m = _TOK.match(expr, pos)
+        if not m or m.end() == pos:
+            raise AssertionError(f"cannot parse {expr[pos:]!r}")
+        pos = m.end()
+        if m.group(1) is not None:
+            toks.append(("s", m.group(1)[1:-1].replace("''", "'")))
+        elif m.group(2):
+            toks.append(("op", m.group(2)))
+        elif m.group(4):
+            fn = m.group(3)
+            if fn not in ("always", "cancelled", "success", "failure"):
+                raise AssertionError(f"unknown function {fn}")
+            toks.append(("s", {"always": True, "cancelled": False, "success": True, "failure": False}[fn]))
+        else:
+            name = m.group(3)
+            if name in ("true", "false"):
+                toks.append(("s", name == "true"))
+            else:
+                toks.append(("s", ctx.get(name, "")))
+    i = 0
+
+    def peek():
+        return toks[i] if i < len(toks) else (None, None)
+
+    def take():
+        nonlocal i
+        i += 1
+        return toks[i - 1]
+
+    def primary():
+        k, v = take()
+        if (k, v) == ("op", "("):
+            r = orx()
+            assert take() == ("op", ")")
+            return r
+        if (k, v) == ("op", "!"):
+            return not primary()
+        assert k == "s", (k, v)
+        return v
+
+    def cmp():
+        a = primary()
+        while peek() in (("op", "=="), ("op", "!=")):
+            op = take()[1]
+            b = primary()
+            eq = str(a).lower() == str(b).lower() if not isinstance(a, bool) and not isinstance(b, bool) else a == b
+            a = eq if op == "==" else not eq
+        return a
+
+    def andx():
+        a = cmp()
+        while peek() == ("op", "&&"):
+            take()
+            b = cmp()
+            a = b if a else a
+        return a
+
+    def orx():
+        a = andx()
+        while peek() == ("op", "||"):
+            take()
+            b = andx()
+            a = a if a else b
+        return a
+
+    r = orx()
+    assert i == len(toks), toks[i:]
+    return bool(r)
+
+
+class StageConditions(Sandboxed):
+    """H9: in every manual mode the tick's outputs must open the gate job; plan and fix only in pass mode; a busy read
+    error closes every stage. The tick's own step conditions and the busy step's real script decide the outputs."""
+
+    def tick_outputs(self, mode, **fake):
+        b = self.box
+        sctx = {"steps.mode.outputs.mode": mode}
+        tick = LANES_DOC["jobs"]["tick"]
+        if gh_if(str(step(LANES_DOC, "tick", "ready")["if"]), sctx):
+            sctx["steps.ready.outputs.ok"] = "true"
+        for sid, key in (("scan", "work"), ("plan", "plan"), ("fix", "fix")):
+            if gh_if(str(step(LANES_DOC, "tick", sid)["if"]), sctx):
+                sctx[f"steps.{sid}.outputs.{key}"] = "true"  # there is work of each kind
+        tick_ok = True
+        st = step(LANES_DOC, "tick", "busy")
+        if gh_if(str(st["if"]), sctx):
+            open(b.out, "w").close()
+            env = {"REPO": WRITER, "RUN_ID": "100", "GH_TOKEN": "x", "MODE": mode}
+            env.update(fake)
+            r = b.run_step(st, env)
+            tick_ok = r.returncode == 0
+            for k, v in b.outputs().items():
+                sctx[f"steps.busy.outputs.{k}"] = v
+        outs = {}
+        for k, v in tick["outputs"].items():
+            m = re.fullmatch(r"\$\{\{\s*(steps\.[\w.\-]+)\s*\}\}", str(v))
+            self.assertIsNotNone(m, (k, v))
+            outs[k] = sctx.get(m.group(1), "")
+        return outs, tick_ok
+
+    def runs(self, job, outs, tick_ok=True):
+        ctx = {"needs.admit.result": "success", "needs.admit.outputs.enabled": "true", "needs.admit.outputs.fix": "on",
+               "github.ref": "refs/heads/main", "needs.tick.result": "success" if tick_ok else "failure"}
+        ctx.update({f"needs.tick.outputs.{k}": v for k, v in outs.items()})
+        return gh_if(str(LANES_DOC["jobs"][job]["if"]), ctx)
+
+    def test_gate_runs_in_every_mode_plan_and_fix_only_in_pass(self):
+        want = {"pass": (True, True, True), "dry-run": (True, False, False), "selftest": (True, False, False)}
+        for mode, exp in want.items():
+            outs, ok = self.tick_outputs(mode)
+            self.assertTrue(ok, mode)
+            got = tuple(self.runs(j, outs, ok) for j in ("gate", "plan", "fix"))
+            self.assertEqual(got, exp, (mode, outs))
+
+    def test_manual_modes_read_nothing(self):
+        for mode in ("dry-run", "selftest"):
+            open(self.box.ghlog, "w").close()
+            outs, ok = self.tick_outputs(mode, FAKE_GH_NONE_RC="1")  # a read would fail: none is made
+            self.assertTrue(ok, mode)
+            self.assertEqual((outs["gate_busy"], outs["plan_busy"], outs["fix_busy"]), ("false",) * 3, mode)
+            self.assertEqual(open(self.box.ghlog).read(), "", mode)
+
+    def test_pass_mode_stays_fail_closed(self):
+        for fake in ({"FAKE_GH_NONE_RC": "1"}, {"FAKE_GH_RUNS": "77\n", "FAKE_GH_JOBS_RC": "1"}):
+            outs, ok = self.tick_outputs("pass", **fake)
+            self.assertFalse(ok, fake)
+            self.assertEqual([self.runs(j, outs, ok) for j in ("gate", "plan", "fix")], [False] * 3, fake)
+        outs, ok = self.tick_outputs("pass", FAKE_GH_RUNS="77\n", FAKE_GH_JOBS="gate\nfix\n")
+        self.assertEqual([self.runs(j, outs, ok) for j in ("gate", "plan", "fix")], [False, True, False])
+        # no busy output at all (the check skipped or lost) never opens a stage in pass mode
+        outs, ok = self.tick_outputs("pass")
+        for j in ("gate", "plan", "fix"):
+            self.assertFalse(self.runs(j, dict(outs, **{f"{j}_busy": ""}), ok), j)
+
+    def test_off_and_a_failed_tick_open_nothing(self):
+        outs, ok = self.tick_outputs("off")
+        self.assertEqual([self.runs(j, outs, ok) for j in ("gate", "plan", "fix")], [False] * 3)
+        for mode in ("pass", "dry-run", "selftest"):
+            outs, _ = self.tick_outputs(mode)
+            self.assertFalse(self.runs("gate", outs, False), mode)
+            self.assertFalse(self.runs("plan", outs, False), mode)
+
+    def test_busy_step_gets_the_mode(self):
+        # run_step drops ${{ }} env, so pin it: without MODE the step dies on `set -u` in every mode
+        self.assertEqual(step(LANES_DOC, "tick", "busy")["env"]["MODE"], "${{ steps.mode.outputs.mode }}")
+
+    def test_plan_and_fix_need_pass_mode_themselves(self):
+        # defence in depth: even if a manual-mode tick reported ready/plan/fix, plan and fix stay closed
+        outs, ok = self.tick_outputs("pass")
+        for mode in ("dry-run", "selftest", "off"):
+            forged = dict(outs, mode=mode)
+            self.assertFalse(self.runs("plan", forged, ok), mode)
+            self.assertFalse(self.runs("fix", forged, ok), mode)
+
+    def test_evaluator_basics(self):
+        c = {"a": "x", "b": ""}
+        self.assertTrue(gh_if("a == 'X' && b == ''", c))
+        self.assertFalse(gh_if("a != 'x' || !always()", c))
+        self.assertTrue(gh_if("!cancelled() && (b == 'y' || a == 'x')", c))
+        self.assertFalse(gh_if("missing == 'false'", c))
 
 
 # ================================================================ behaviour: pack -> persist round trip (H2, H3, F1)
@@ -874,6 +1045,70 @@ class PersistBehaviour(Sandboxed):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertTrue(self.origin_has("data/gate/new.json"))
 
+    def test_a_landed_push_is_found_under_a_long_history(self):
+        # git log writes one subject at a time; the check must read past the match. An early-exit `grep -q` under
+        # pipefail makes the writer die of SIGPIPE, so a landed push reads as "not landed" and is applied again.
+        for n in range(60):
+            self.box.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", f"old {n}",
+                         cwd=self.seed)
+        self.box.git("push", "-q", "origin", "HEAD:engine-state", cwd=self.seed)
+        real = shutil.which("git")
+        flag = os.path.join(self.box.root, "push-lied")
+        wrapper = os.path.join(self.box.bin, "git")
+        with open(wrapper, "w") as f:
+            f.write(f'#!/bin/bash\nfor a in "$@"; do\n  if [ "$a" = push ] && [ ! -e {flag} ]; then\n'
+                    f'    : > {flag}; {real} "$@"; echo "timed out" >&2; exit 1\n  fi\n'
+                    f'  if [ "$a" = log ]; then\n    set -o pipefail\n'
+                    f'    {real} "$@" | while IFS= read -r l; do printf "%s\\n" "$l" || exit 141; /bin/sleep 0.02; done\n'
+                    f'    exit $?\n  fi\ndone\nexec {real} "$@"\n')
+        os.chmod(wrapper, 0o755)
+        self.write("fix")
+        r, out = self.pack_and_persist("fix")
+        os.unlink(wrapper)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(os.path.exists(flag))
+        self.assertEqual(out.get("pushed"), "true", r.stdout + r.stderr)
+        msgs = subprocess.run(["git", "--git-dir", self.bare, "log", "--format=%s", "engine-state"],
+                              capture_output=True, text=True, env=self.box.env({})).stdout.splitlines()
+        self.assertEqual(msgs.count("engine: fix state (https://example.invalid/run/1)"), 1)
+
+    def clean_fails(self, on_call):
+        """A git wrapper whose `clean` fails on call number on_call (1 = the first fetch, 2 = the re-fetch)."""
+        real = shutil.which("git")
+        cnt = os.path.join(self.box.root, "clean-count")
+        wrapper = os.path.join(self.box.bin, "git")
+        with open(wrapper, "w") as f:
+            f.write(f'#!/bin/bash\nfor a in "$@"; do\n  if [ "$a" = clean ]; then\n'
+                    f'    n=$(cat {cnt} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {cnt}\n'
+                    f'    if [ $n -eq {on_call} ]; then echo "clean failed" >&2; exit 1; fi\n  fi\ndone\n'
+                    f'exec {real} "$@"\n')
+        os.chmod(wrapper, 0o755)
+        self.addCleanup(lambda: os.path.exists(wrapper) and os.unlink(wrapper))
+
+    def test_a_failed_clean_fails_the_step_before_anything_is_pushed(self):
+        self.clean_fails(1)
+        self.write("gate")
+        r, out = self.pack_and_persist("gate")
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("::error title=Persist::cannot fetch", r.stdout)
+        self.assertFalse(self.origin_has("data/gate/new.json"))
+        self.assertNotEqual(out.get("pushed"), "true")
+
+    def test_a_failed_clean_after_a_rejected_push_fails_the_step(self):
+        self.hook(reject=1)
+        self.clean_fails(2)
+        self.write("plan")
+        r, out = self.pack_and_persist("plan")
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("::error title=Persist::cannot re-fetch", r.stdout)
+        self.assertFalse(self.origin_has("data/plan/new.json"))
+
+    def test_no_early_exit_grep_in_a_pipeline(self):
+        for doc in (LANES_DOC, KEYLESS_DOC):
+            for name, _, st in all_steps(doc):
+                for line in logical_lines(str(st.get("run") or "")):
+                    self.assertNotRegex(line, r"\|\s*grep\s+-[A-Za-z]*q", (name, st.get("name"), line))
+
     def test_a_push_that_landed_but_reported_failure_is_not_applied_twice(self):
         real = shutil.which("git")
         flag = os.path.join(self.box.root, "push-lied")
@@ -958,12 +1193,41 @@ class PrivateLogBehaviour(Sandboxed):
         return self.box.run_step(st, env)
 
     def logged(self, rel):
-        """rel is runs/<key>/<job>/<file>; the branch keeps it under runs/<YYYY-MM-DD>/<key>/<job>/<file>."""
-        day = subprocess.run(["date", "+%F"], env={"TZ": "America/Denver"}, capture_output=True, text=True).stdout.strip()
-        rel = rel.replace("runs/", f"runs/{day}/", 1)
-        r = subprocess.run(["git", "--git-dir", self.bare, "show", f"lanes-logs:{rel}"], capture_output=True,
+        """rel is runs/<key>/<job>/<file>; the branch keeps it under runs/<YYYY-MM-DD>/<key>/<job>/<file>.
+        The day dir is matched by shape, not recomputed here, so a run across local midnight cannot flake (S15)."""
+        r = subprocess.run(["git", "--git-dir", self.bare, "ls-tree", "-r", "--name-only", "lanes-logs"],
+                           capture_output=True, text=True, env=self.box.env({}))
+        if r.returncode != 0:
+            return None
+        want = re.compile(r"runs/\d{4}-\d{2}-\d{2}/" + re.escape(rel[len("runs/"):]))
+        hits = [p for p in r.stdout.splitlines() if want.fullmatch(p)]
+        if not hits:
+            return None
+        self.assertEqual(len(hits), 1, hits)
+        r = subprocess.run(["git", "--git-dir", self.bare, "show", f"lanes-logs:{hits[0]}"], capture_output=True,
                            text=True, env=self.box.env({}))
         return r.stdout if r.returncode == 0 else None
+
+    def test_every_private_log_is_keyed_by_run_and_attempt(self):
+        # a re-run attempt must never overwrite attempt 1's logs (HARD-G)
+        n = 0
+        for doc in (LANES_DOC, KEYLESS_DOC):
+            for name, _, st in all_steps(doc):
+                if st.get("id") == "privlog":
+                    n += 1
+                    self.assertEqual(st["env"]["RUN_KEY"], "${{ github.run_id }}-${{ github.run_attempt }}", name)
+                    self.assertIn('dest="runs/$(TZ=America/Denver date +%F)/$RUN_KEY/$JOB"', st["run"], name)
+        self.assertEqual(n, 7)
+
+    def test_a_second_attempt_keeps_the_first_attempts_logs(self):
+        with open(os.path.join(self.box.log, "scan.log"), "w") as f:
+            f.write("attempt one\n")
+        self.assertEqual(self.privlog("tick", key="5-1").returncode, 0)
+        with open(os.path.join(self.box.log, "scan.log"), "w") as f:
+            f.write("attempt two\n")
+        self.assertEqual(self.privlog("tick", key="5-2").returncode, 0)
+        self.assertEqual(self.logged("runs/5-1/tick/scan.log"), "attempt one\n")
+        self.assertEqual(self.logged("runs/5-2/tick/scan.log"), "attempt two\n")
 
     def test_empty_logs_commit_nothing(self):
         open(os.path.join(self.box.log, "mode.log"), "w").close()

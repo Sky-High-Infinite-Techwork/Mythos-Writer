@@ -4,7 +4,7 @@ name: mythos-engine-lanes
 # Main, schedule, and manual only. Never a pull-request or pull-request-target event, never forks.
 # Public logs print only pass or fail. Every step that runs an engine script sends its full output to
 # $LANES_LOG (runner temp); each job's last step pushes those files to the private data repo branch
-# lanes-logs (runs/<run id>-<attempt>/<job>/) and prints only a short summary (exit codes, counts, and the
+# lanes-logs (runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/, day in MT) and prints only a short summary (exit codes, counts, and the
 # titles of the scripts' own error/warning lines). Prompts, notes, state and output go to the private data repo
 # (vars.MYTHOS_DATA_REPO, default SkyyPlayz/Mythos-Ops). Writer never falls back to Engine.
 # Skyy creates the environment and its secrets; this file only names them.
@@ -17,7 +17,10 @@ name: mythos-engine-lanes
 # Rollback: set MYTHOS_LANES_HOST to engine. Engine jobs then run again; this workflow's admit exits green.
 # Runs may overlap: there is no workflow-level concurrency group (a 350-min gate must never queue the next tick
 # or a fix). Per-job groups (tick, gate, plan, act, fix) keep each stage one at a time, and the tick's in-flight
-# check (this file's own runs) skips a stage another run still holds.
+# check (this file's own runs) skips a stage another run still holds. gate, plan and fix start only on a positive
+# not-busy from that check, so a tick that fails before it (Gate App key, publish, scan, or the check itself) also
+# keeps fix closed this run (fail-closed; Engine's fix used to run then). The gate is never in the tick, so a long
+# gate still never blocks a fix.
 
 on:
   schedule:
@@ -401,17 +404,27 @@ jobs:
 
       # Runs may overlap (see the header). Another run of THIS workflow with a queued or running gate / plan / fix job
       # (each job persists its own state, so the job itself is the hold) means this run skips that stage; the next
-      # tick or chained run picks it up. A read that fails is an error (the tick fails, loud): it never counts as busy,
-      # which would skip every stage forever without a sign. actions: read is for this step only.
+      # tick or chained run picks it up. A read that fails is an error (the tick fails, loud) and marks every stage busy.
+      # gate, plan and fix start only on a positive busy=false, so this step also runs in selftest and dry-run: those
+      # modes hold no stage state, so it writes all false without any read and the gate job runs its preflight, logins
+      # and (dry-run) final-gate pass (H9). plan and fix still need pass mode. actions: read is for this step only.
       - name: In-flight check (stages another engine run still holds)
         id: busy
-        if: steps.mode.outputs.mode == 'pass' && steps.ready.outputs.ok == 'true'
+        if: >-
+          steps.mode.outputs.mode == 'selftest' || steps.mode.outputs.mode == 'dry-run' ||
+          (steps.mode.outputs.mode == 'pass' && steps.ready.outputs.ok == 'true')
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
+          MODE: ${{ steps.mode.outputs.mode }}
         run: |
           set -uo pipefail
+          if [ "$MODE" != pass ]; then
+            echo "in flight elsewhere: not checked (mode $MODE writes no state)"
+            { echo "gate=false"; echo "plan=false"; echo "fix=false"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           gate=false; plan=false; fix=false
           live='select(.status=="queued" or .status=="in_progress" or .status=="waiting" or .status=="pending" or .status=="requested")'
           # Every live run, by status (not the newest page of all runs: a long gate run must never fall off it).
@@ -434,9 +447,9 @@ jobs:
               { echo "gate=true"; echo "plan=true"; echo "fix=true"; } >> "$GITHUB_OUTPUT"
               exit 1
             fi
-            if printf '%s\n' "$names" | grep -qx gate; then gate=true; fi
-            if printf '%s\n' "$names" | grep -qx plan; then plan=true; fi
-            if printf '%s\n' "$names" | grep -qx fix; then fix=true; fi
+            if printf '%s\n' "$names" | grep -x gate >/dev/null; then gate=true; fi
+            if printf '%s\n' "$names" | grep -x plan >/dev/null; then plan=true; fi
+            if printf '%s\n' "$names" | grep -x fix >/dev/null; then fix=true; fi
           done
           echo "in flight elsewhere: gate=$gate plan=$plan fix=$fix"
           { echo "gate=$gate"; echo "plan=$plan"; echo "fix=$fix"; } >> "$GITHUB_OUTPUT"
@@ -519,7 +532,8 @@ jobs:
               echo "::error title=Persist::cannot re-fetch $STATE_BRANCH after a rejected push"; exit 1
             fi
             # a push that landed but reported failure (timeout) is not applied twice
-            if git -C state log -n 50 --format=%s FETCH_HEAD | grep -qxF "$msg"; then
+            # grep reads to the end (no -q): under pipefail an early-exit grep can SIGPIPE git log and read as "not landed"
+            if git -C state log -n 50 --format=%s FETCH_HEAD | grep -xF -- "$msg" >/dev/null; then
               echo "pushed=true" >> "$GITHUB_OUTPUT"; echo "persist: pushed (apply exit $rc)"; exit "$rc"
             fi
           done
@@ -538,7 +552,7 @@ jobs:
           # PRIVLOG-BEGIN (the same text in every job that runs engine scripts; only JOB differs)
           # Public: the titles of the scripts' own ::error / ::warning lines (short fixed names, nothing else) and
           # pass or fail. Private: every $LANES_LOG file, at most 5 MiB each (the tail), on the data repo branch
-          # LOG_BRANCH under runs/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
+          # LOG_BRANCH under runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
           # Growth bound: only non-empty logs are saved (a no-work run commits nothing); each file is capped at 5 MiB.
           # Dirs are runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/ so an owner-approved prune can drop old days whole.
           # Nothing here deletes or rewrites the branch (deletes are an owner call).
@@ -859,7 +873,8 @@ jobs:
               echo "::error title=Persist::cannot re-fetch $STATE_BRANCH after a rejected push"; exit 1
             fi
             # a push that landed but reported failure (timeout) is not applied twice
-            if git -C state log -n 50 --format=%s FETCH_HEAD | grep -qxF "$msg"; then
+            # grep reads to the end (no -q): under pipefail an early-exit grep can SIGPIPE git log and read as "not landed"
+            if git -C state log -n 50 --format=%s FETCH_HEAD | grep -xF -- "$msg" >/dev/null; then
               echo "pushed=true" >> "$GITHUB_OUTPUT"; echo "persist: pushed (apply exit $rc)"; exit "$rc"
             fi
           done
@@ -878,7 +893,7 @@ jobs:
           # PRIVLOG-BEGIN (the same text in every job that runs engine scripts; only JOB differs)
           # Public: the titles of the scripts' own ::error / ::warning lines (short fixed names, nothing else) and
           # pass or fail. Private: every $LANES_LOG file, at most 5 MiB each (the tail), on the data repo branch
-          # LOG_BRANCH under runs/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
+          # LOG_BRANCH under runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
           # Growth bound: only non-empty logs are saved (a no-work run commits nothing); each file is capped at 5 MiB.
           # Dirs are runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/ so an owner-approved prune can drop old days whole.
           # Nothing here deletes or rewrites the branch (deletes are an owner call).
@@ -1147,7 +1162,8 @@ jobs:
               echo "::error title=Persist::cannot re-fetch $STATE_BRANCH after a rejected push"; exit 1
             fi
             # a push that landed but reported failure (timeout) is not applied twice
-            if git -C state log -n 50 --format=%s FETCH_HEAD | grep -qxF "$msg"; then
+            # grep reads to the end (no -q): under pipefail an early-exit grep can SIGPIPE git log and read as "not landed"
+            if git -C state log -n 50 --format=%s FETCH_HEAD | grep -xF -- "$msg" >/dev/null; then
               echo "pushed=true" >> "$GITHUB_OUTPUT"; echo "persist: pushed (apply exit $rc)"; exit "$rc"
             fi
           done
@@ -1166,7 +1182,7 @@ jobs:
           # PRIVLOG-BEGIN (the same text in every job that runs engine scripts; only JOB differs)
           # Public: the titles of the scripts' own ::error / ::warning lines (short fixed names, nothing else) and
           # pass or fail. Private: every $LANES_LOG file, at most 5 MiB each (the tail), on the data repo branch
-          # LOG_BRANCH under runs/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
+          # LOG_BRANCH under runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
           # Growth bound: only non-empty logs are saved (a no-work run commits nothing); each file is capped at 5 MiB.
           # Dirs are runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/ so an owner-approved prune can drop old days whole.
           # Nothing here deletes or rewrites the branch (deletes are an owner call).
@@ -1309,7 +1325,7 @@ jobs:
           # PRIVLOG-BEGIN (the same text in every job that runs engine scripts; only JOB differs)
           # Public: the titles of the scripts' own ::error / ::warning lines (short fixed names, nothing else) and
           # pass or fail. Private: every $LANES_LOG file, at most 5 MiB each (the tail), on the data repo branch
-          # LOG_BRANCH under runs/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
+          # LOG_BRANCH under runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
           # Growth bound: only non-empty logs are saved (a no-work run commits nothing); each file is capped at 5 MiB.
           # Dirs are runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/ so an owner-approved prune can drop old days whole.
           # Nothing here deletes or rewrites the branch (deletes are an owner call).
@@ -1453,7 +1469,7 @@ jobs:
           # PRIVLOG-BEGIN (the same text in every job that runs engine scripts; only JOB differs)
           # Public: the titles of the scripts' own ::error / ::warning lines (short fixed names, nothing else) and
           # pass or fail. Private: every $LANES_LOG file, at most 5 MiB each (the tail), on the data repo branch
-          # LOG_BRANCH under runs/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
+          # LOG_BRANCH under runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
           # Growth bound: only non-empty logs are saved (a no-work run commits nothing); each file is capped at 5 MiB.
           # Dirs are runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/ so an owner-approved prune can drop old days whole.
           # Nothing here deletes or rewrites the branch (deletes are an owner call).
@@ -1759,7 +1775,8 @@ jobs:
               echo "::error title=Persist::cannot re-fetch $STATE_BRANCH after a rejected push"; exit 1
             fi
             # a push that landed but reported failure (timeout) is not applied twice
-            if git -C state log -n 50 --format=%s FETCH_HEAD | grep -qxF "$msg"; then
+            # grep reads to the end (no -q): under pipefail an early-exit grep can SIGPIPE git log and read as "not landed"
+            if git -C state log -n 50 --format=%s FETCH_HEAD | grep -xF -- "$msg" >/dev/null; then
               echo "pushed=true" >> "$GITHUB_OUTPUT"; echo "persist: pushed (apply exit $rc)"; exit "$rc"
             fi
           done
@@ -1778,7 +1795,7 @@ jobs:
           # PRIVLOG-BEGIN (the same text in every job that runs engine scripts; only JOB differs)
           # Public: the titles of the scripts' own ::error / ::warning lines (short fixed names, nothing else) and
           # pass or fail. Private: every $LANES_LOG file, at most 5 MiB each (the tail), on the data repo branch
-          # LOG_BRANCH under runs/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
+          # LOG_BRANCH under runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
           # Growth bound: only non-empty logs are saved (a no-work run commits nothing); each file is capped at 5 MiB.
           # Dirs are runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/ so an owner-approved prune can drop old days whole.
           # Nothing here deletes or rewrites the branch (deletes are an owner call).

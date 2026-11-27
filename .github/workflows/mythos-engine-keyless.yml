@@ -4,7 +4,7 @@ name: mythos-engine-keyless
 # Main, schedule, and manual only. Never a pull-request or pull-request-target event, never forks.
 # Checks out private SkyyPlayz/Mythos-Engine with a read-only token (environment "lanes"
 # so the token is not available to PRs). Public log prints only pass or fail: the suite's full output goes
-# to $LANES_LOG and then the private data repo branch lanes-logs (runs/<run id>-<attempt>/keyless/), as in
+# to $LANES_LOG and then the private data repo branch lanes-logs (runs/<YYYY-MM-DD>/<run id>-<attempt>/keyless/), as in
 # mythos-engine-lanes.yml. A missing secret or a failing suite fails the run (red), never a silent skip.
 # This workflow does not depend on MYTHOS_LANES_HOST: tests can run even while
 # the live engine is still on Engine.
@@ -125,7 +125,7 @@ jobs:
           # PRIVLOG-BEGIN (the same text in every job that runs engine scripts; only JOB differs)
           # Public: the titles of the scripts' own ::error / ::warning lines (short fixed names, nothing else) and
           # pass or fail. Private: every $LANES_LOG file, at most 5 MiB each (the tail), on the data repo branch
-          # LOG_BRANCH under runs/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
+          # LOG_BRANCH under runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
           # Growth bound: only non-empty logs are saved (a no-work run commits nothing); each file is capped at 5 MiB.
           # Dirs are runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/ so an owner-approved prune can drop old days whole.
           # Nothing here deletes or rewrites the branch (deletes are an owner call).
