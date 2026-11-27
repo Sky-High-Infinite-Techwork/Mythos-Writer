@@ -249,6 +249,9 @@ jobs:
       - name: Test (workflow rules)
         run: node .github/scripts/workflow-rules.test.js
 
+      - name: Test (oracle-sweeps shard planner)
+        run: node .github/scripts/oracle-shard.test.js
+
       - name: Test (ops-guards hygiene last-success selection)
         run: bash scripts/mythos-ops/ops-guards.test.sh
       - name: Test (mythos-pr-hygiene auto-rebase gate)
@@ -267,9 +270,11 @@ jobs:
 
   # PLAN-058 L8 Ivy carve-out: 12k oracle-class survivor walks, equivalence-strength
   # shards, and the HARD-2 nested-Downloads region-map walks run here in parallel
-  # with `unit`. Two vitest shards, each with its own 40-minute cap and its own
-  # temp dir. The required `ci` aggregator needs both shards and fails unless
-  # each one succeeded (a failed, skipped, or missing shard fails `ci`).
+  # with `unit`. Two shards, each with its own 40-minute cap and its own temp dir.
+  # Files are assigned to shards by measured cost (.github/scripts/oracle-shard.js),
+  # not by vitest's path hash, because a hash split left one shard ~2x slower.
+  # The required `ci` aggregator needs both shards and fails unless each one
+  # succeeded (a failed, skipped, or missing shard fails `ci`).
   # Unit excludes this nested-Downloads file and the oracle-class / equivalence shards.
   oracle-sweeps:
     name: oracle-sweeps (${{ matrix.shard }}/2)
@@ -309,6 +314,13 @@ jobs:
         if: steps.nm-cache.outputs.cache-hit != 'true'
         run: source scripts/ci-retry.sh && retry npm ci
 
+      - name: Verify the shard plan covers every oracle-sweep file
+        run: |
+          cd electron-main
+          mapfile -t FILTERS < <(node ../.github/scripts/oracle-shard.js --filters)
+          npx vitest list --filesOnly --json="$RUNNER_TEMP/oracle-files.json" "${FILTERS[@]}" > /dev/null
+          node ../.github/scripts/oracle-shard.js --verify --vitest-list "$RUNNER_TEMP/oracle-files.json"
+
       - name: Oracle-class and equivalence-strength sweeps
         env:
           # Per-shard temp only. os.tmpdir() and any nsh copies follow TMPDIR,
@@ -318,7 +330,16 @@ jobs:
           TMP: ${{ runner.temp }}/oracle-sweeps-shard-${{ matrix.shard }}
         run: |
           mkdir -p "$TMPDIR"
-          npm run test:oracle-sweeps -w electron-main -- --shard=${{ matrix.shard }}/2
+          cd electron-main
+          mapfile -t FLAGS < <(node ../.github/scripts/oracle-shard.js --flags)
+          mapfile -t FILES < <(node ../.github/scripts/oracle-shard.js --shard "${{ matrix.shard }}/2")
+          echo "Shard ${{ matrix.shard }}/2 runs ${#FILES[@]} files"
+          SECONDS=0
+          npx vitest run "${FLAGS[@]}" --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/oracle-run.json" "${FILES[@]}"
+          echo "oracle-sweeps shard ${{ matrix.shard }}/2 test run: ${SECONDS}s" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check this shard ran exactly its files
+        run: node .github/scripts/oracle-shard.js --check-run "$RUNNER_TEMP/oracle-run.json" --shard "${{ matrix.shard }}/2" | tee -a "$GITHUB_STEP_SUMMARY"
 
   build-electron:
     # SKY-2425: fuzz steps removed from this job — they were causing OOM-induced
