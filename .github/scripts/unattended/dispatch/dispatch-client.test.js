@@ -587,3 +587,32 @@ test('issueComments keeps plan comment IDs as strings above Number.MAX_SAFE_INTE
   const parsed = JSON.parse(JSON.stringify(lease));
   assert.equal(parsed.planCommentId, HUGE);
 });
+
+test('getRef, createRef, renewRef and deleteRef reject look-alike refs before any gh call', async () => {
+  const calls = [];
+  const gh = (args) => {
+    calls.push(args);
+    return { status: 0, stdout: '{}' };
+  };
+  const { read, combined } = writeClient(gh);
+  const root = 'refs/mythos/dispatch';
+  const lookalikes = [
+    `evil/${root}/lane-00`,
+    `${root}/lane-000`,
+    `${root}/lane-00/extra`,
+    `${root}/claim/.+`,
+    `${root}/claim/12-0/extra`,
+    `${root}/attempts/x`,
+    `${root}/done/12-0\n`,
+    `${root}/canary/scratch-1-1/x`,
+    'refs/heads/main',
+  ];
+  for (const ref of lookalikes) {
+    await assert.rejects(() => read.getRef({ ref }), /outside dispatch namespace/, ref);
+    await assert.rejects(() => combined.getRef({ ref }), /outside dispatch namespace/, ref);
+    await assert.rejects(() => combined.createRef({ ref, sha: 'a'.repeat(40) }), undefined, ref);
+    await assert.rejects(() => combined.deleteRef({ ref, sha: 'a'.repeat(40) }), undefined, ref);
+    await assert.rejects(() => combined.renewRef({ ref, beforeOid: 'a'.repeat(40), newOid: 'b'.repeat(40) }), undefined, ref);
+  }
+  assert.deepEqual(calls, []);
+});

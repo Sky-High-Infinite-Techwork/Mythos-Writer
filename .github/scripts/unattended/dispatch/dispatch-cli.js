@@ -28,10 +28,20 @@ const STABLE_WRITE_REASONS = new Set([
   'repo_node_id',
 ]);
 
+const CANARY_OUTCOME_VALUE_MAX = 200;
+
+// Allowlisted values are short strings or finite numbers only: a nested object,
+// array or long string under an allowlisted key must not carry raw text out.
+function allowlistedCanaryValue(value) {
+  if (typeof value === 'string') return value.length <= CANARY_OUTCOME_VALUE_MAX;
+  if (typeof value === 'number') return Number.isFinite(value);
+  return false;
+}
+
 function allowlistedCanaryOutcome(payload) {
   const out = {};
   for (const key of CANARY_OUTCOME_KEYS) {
-    if (payload[key] !== undefined && payload[key] !== null) out[key] = payload[key];
+    if (allowlistedCanaryValue(payload[key])) out[key] = payload[key];
   }
   return out;
 }

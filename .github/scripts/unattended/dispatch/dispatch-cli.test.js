@@ -387,6 +387,7 @@ test('dispatch-cli canary-ref lose log is allowlisted and omits the raw client r
             ok: false,
             refExists: true,
             error: leak,
+            errors: [{ message: leak }],
             result: { error: leak, errors: [{ message: leak }] },
           }),
         }),
@@ -407,11 +408,73 @@ test('dispatch-cli canary-ref lose log is allowlisted and omits the raw client r
         assert.equal(row.result, undefined);
         assert.equal(row.error, undefined);
         assert.equal(row.errors, undefined);
+        assert.deepEqual(Object.keys(row).sort(), ['index', 'kind']);
       }
     });
   } finally {
     process.argv = origArgv;
     console.log = origLog;
     console.error = origErr;
+  }
+});
+
+test('allowlistedCanaryOutcome keeps only short strings and finite numbers under allowlisted keys', () => {
+  const { allowlistedCanaryOutcome } = require('./dispatch-cli');
+  const leak = 'ghp_SECRETTOKEN GraphQL boom';
+  const cleaned = allowlistedCanaryOutcome({
+    kind: { nested: leak },
+    index: [leak],
+    runId: Number.NaN,
+    runAttempt: Number.POSITIVE_INFINITY,
+    scratchRef: 'x'.repeat(201),
+    reason: true,
+  });
+  assert.deepEqual(cleaned, {});
+  assert.equal(JSON.stringify(cleaned).includes('ghp_SECRETTOKEN'), false);
+
+  assert.deepEqual(allowlistedCanaryOutcome({
+    kind: 'canary_fatal',
+    index: '2',
+    runId: 4242,
+    runAttempt: 1,
+    scratchRef: SCRATCH,
+    reason: 'x'.repeat(200),
+  }), {
+    kind: 'canary_fatal',
+    index: '2',
+    runId: 4242,
+    runAttempt: 1,
+    scratchRef: SCRATCH,
+    reason: 'x'.repeat(200),
+  });
+  assert.deepEqual(allowlistedCanaryOutcome({ kind: 'canary_lose', index: 0 }), { kind: 'canary_lose', index: 0 });
+  assert.deepEqual(allowlistedCanaryOutcome({ kind: 'canary_lose', index: null, reason: undefined }), { kind: 'canary_lose' });
+});
+
+test('dispatch-cli top-level catch prints only the fixed unhandled row, never raw error text', () => {
+  const { spawnSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-catch-'));
+  try {
+    const switchModule = require.resolve('./switch');
+    const preload = path.join(dir, 'preload.js');
+    fs.writeFileSync(preload, [
+      `const sw = require(${JSON.stringify(switchModule)});`,
+      "sw.readDispatchSwitches = async () => { throw new Error('HTTP 500 ghp_SECRETTOKEN GraphQL stderr boom'); };",
+      '',
+    ].join('\n'));
+    const env = { ...process.env };
+    for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'READ_TOKEN', 'WRITE_TOKEN', 'CONTROL_TOKEN', 'IVY_GITHUB_PROJECT_PAT']) delete env[key];
+    const run = spawnSync(process.execPath, ['-r', preload, require.resolve('./dispatch-cli'), 'sweep'], {
+      env,
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+    assert.equal(run.status, 1);
+    const combined = `${run.stdout}\n${run.stderr}`;
+    assert.doesNotMatch(combined, /SECRETTOKEN|GraphQL|boom|HTTP 500|Error:|\n\s+at /);
+    assert.equal(run.stderr.trim(), JSON.stringify({ kind: 'dispatch_cli_fail', reason: 'unhandled' }));
+    assert.equal(run.stdout, '');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

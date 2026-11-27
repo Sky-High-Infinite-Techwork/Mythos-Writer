@@ -1084,3 +1084,395 @@ test('verifyPlanCommentEditors holds when edit history is not marked complete', 
   assert.equal(hold.hold, true);
   assert.equal(hold.reason, 'editor_history_incomplete');
 });
+
+// ---------------------------------------------------------------------------
+// No raw error text on the claim / release / attempts / sweep paths (Shield F2,
+// Critic H3, Probe HARD-2). Every logged and returned reason must be a fixed code.
+// ---------------------------------------------------------------------------
+const RAW_LEAK = 'ghp_SECRETTOKEN GraphQL: Resource not accessible stderr=boom HTTP 500';
+const RAW_LEAK_RE = /SECRETTOKEN|GraphQL|Resource not accessible|stderr|boom|HTTP 500/;
+
+async function captureAllOutput(fn, { stdout = false } = {}) {
+  const lines = [];
+  const origLog = console.log;
+  const origErr = console.error;
+  const origWrite = process.stdout.write;
+  console.log = (...a) => lines.push(a.join(' '));
+  console.error = (...a) => lines.push(a.join(' '));
+  if (stdout) {
+    process.stdout.write = (chunk) => { lines.push(String(chunk)); return true; };
+  }
+  try {
+    const result = await fn();
+    return { result, lines };
+  } finally {
+    console.log = origLog;
+    console.error = origErr;
+    process.stdout.write = origWrite;
+  }
+}
+
+function jsonRows(lines) {
+  const rows = [];
+  for (const line of lines) {
+    try { rows.push(JSON.parse(line)); } catch { /* not a JSON log line */ }
+  }
+  return rows;
+}
+
+function jsonRow(lines, kind) {
+  return jsonRows(lines).find((row) => row && row.kind === kind);
+}
+
+function planClient() {
+  const client = createMockRefClient();
+  client.issueComments = async () => planComments();
+  client.getIssue = async () => ({ ok: true, issue: { state: 'open' } });
+  return client;
+}
+
+test('claim fatal write with a raw error: rollback log, claim reason and dispatch_fail carry fixed codes only', async () => {
+  const client = planClient();
+  client.createRefPair = async ({ laneRef, afterOid }) => {
+    await client.createRef({ ref: laneRef, sha: afterOid });
+    return { ok: false, fatal: true, error: RAW_LEAK, stderr: RAW_LEAK, errors: [{ message: RAW_LEAK }] };
+  };
+  const { result, lines } = await captureAllOutput(() => runDispatchPlan(actEnv(client)));
+  assert.equal(result, 1);
+  assert.doesNotMatch(lines.join('\n'), RAW_LEAK_RE);
+  const rollback = jsonRow(lines, 'dispatch_ref_pair_rollback');
+  assert.ok(rollback, 'rollback log row expected');
+  assert.equal(rollback.reason, 'update_refs_failed');
+  assert.equal(rollback.error, undefined);
+  const fail = jsonRow(lines, 'dispatch_fail');
+  assert.ok(fail, 'dispatch_fail row expected');
+  assert.equal(fail.reason, 'update_refs_failed');
+});
+
+test('claim fatal write and delete both failing with a raw token string leaks nothing', async () => {
+  const client = planClient();
+  client.createRefPair = async ({ laneRef, afterOid }) => {
+    await client.createRef({ ref: laneRef, sha: afterOid });
+    return { ok: false, fatal: true, error: RAW_LEAK, stderr: RAW_LEAK };
+  };
+  client.deleteRef = async () => ({ ok: false, error: RAW_LEAK, stderr: RAW_LEAK, errors: [{ message: RAW_LEAK }] });
+  const { result, lines } = await captureAllOutput(() => runDispatchPlan(actEnv(client)));
+  assert.equal(result, 1);
+  assert.doesNotMatch(lines.join('\n'), RAW_LEAK_RE);
+  assert.equal(jsonRow(lines, 'dispatch_fail').reason, 'update_refs_failed');
+  assert.equal(jsonRow(lines, 'dispatch_ref_pair_rollback'), undefined);
+});
+
+test('claim ambiguous non-fatal write with a raw error becomes dispatch_skip create_failed', async () => {
+  const client = planClient();
+  client.createRefPair = async () => ({ ok: false, error: RAW_LEAK, stderr: RAW_LEAK });
+  const { result, lines } = await captureAllOutput(() => runDispatchPlan(actEnv(client)));
+  assert.equal(result, 0);
+  assert.doesNotMatch(lines.join('\n'), RAW_LEAK_RE);
+  assert.equal(jsonRow(lines, 'dispatch_skip').reason, 'create_failed');
+});
+
+test('releaseRefCas maps raw delete errors to fixed codes', async () => {
+  const claim = require('./claim');
+  const client = createMockRefClient();
+  const lane = 'refs/mythos/dispatch/lane-00';
+  const cases = [
+    [{ ok: false, error: RAW_LEAK }, 'delete_failed'],
+    [{ ok: false, error: `HTTP 404 not found ${RAW_LEAK}` }, 'not_found'],
+    [{ ok: false, error: `GraphQL conflict ${RAW_LEAK}` }, 'ref_changed'],
+    [{ ok: false, error: 'ref_changed' }, 'ref_changed'],
+    [{ ok: false }, 'delete_failed'],
+    [{ ok: false, error: { nested: RAW_LEAK } }, 'delete_failed'],
+  ];
+  for (const [deleteResult, want] of cases) {
+    client.deleteRef = async () => deleteResult;
+    const rel = await claim.releaseRefCas(client, lane, MAIN);
+    assert.equal(rel.ok, false);
+    assert.equal(rel.reason, want, JSON.stringify(deleteResult));
+    assert.doesNotMatch(JSON.stringify(rel), RAW_LEAK_RE);
+  }
+});
+
+test('attempt record failure and release failure logs carry fixed codes only', async () => {
+  const client = planClient();
+  const origCreate = client.createRef.bind(client);
+  client.createRef = async (args) => (String(args.ref).includes('/attempts/')
+    ? { ok: false, fatal: true, error: RAW_LEAK, stderr: RAW_LEAK }
+    : origCreate(args));
+  client.deleteRef = async () => ({ ok: false, error: RAW_LEAK, stderr: RAW_LEAK });
+  const { result, lines } = await captureAllOutput(() => runDispatchPlan(actEnv(client)));
+  assert.equal(result, 1);
+  const text = lines.join('\n');
+  assert.doesNotMatch(text, RAW_LEAK_RE);
+  assert.match(text, /dispatch: attempt record failed: attempts_write_failed$/m);
+  const released = jsonRow(lines, 'dispatch_release_failed');
+  assert.ok(released, 'dispatch_release_failed row expected');
+  assert.ok(released.results.length > 0);
+  for (const row of released.results) {
+    assert.equal(row.ok, false);
+    assert.equal(row.reason, 'delete_failed');
+  }
+});
+
+test('recordDispatchAttempt maps a raw create and a raw renew failure to attempts_write_failed', async () => {
+  const mint = async () => 'c'.repeat(40);
+  const created = createMockRefClient();
+  created.createRef = async () => ({ ok: false, error: RAW_LEAK });
+  const first = await recordDispatchAttempt(created, 8, 0, { mintLeaseSha: mint });
+  assert.deepEqual(first, { ok: false, reason: 'attempts_write_failed' });
+
+  const renewed = createMockRefClient();
+  await renewed.createRef({ ref: attemptsRef(8, 0), sha: 'd'.repeat(40) });
+  renewed.setRefMessage(attemptsRef(8, 0), attemptsMessage({ count: 1, lastAttemptAt: '2020-01-01T00:00:00Z' }));
+  renewed.renewRef = async () => ({ ok: false, error: RAW_LEAK });
+  const second = await recordDispatchAttempt(renewed, 8, 0, { mintLeaseSha: mint });
+  assert.deepEqual(second, { ok: false, reason: 'attempts_write_failed' });
+});
+
+test('sweep with raw delete errors returns ref names only', async () => {
+  const lane = 'refs/mythos/dispatch/lane-00';
+  const swept = await sweepDispatchRefs({
+    listRefs: async () => ({ ok: true, refs: [{ ref: lane, sha: MAIN, message: 'junk' }] }),
+    deleteRef: async () => ({ ok: false, error: RAW_LEAK, stderr: RAW_LEAK }),
+  });
+  assert.equal(swept.ok, false);
+  assert.deepEqual(swept.errors, [lane]);
+  assert.doesNotMatch(JSON.stringify(swept), RAW_LEAK_RE);
+});
+
+test('stableDispatchMutationReason never returns raw text and keeps each fixed code', () => {
+  const R = require('./refs-graphql');
+  const unknowns = [
+    RAW_LEAK,
+    'ghp_SECRETTOKEN',
+    'HTTP 500 ghp_x boom',
+    'x'.repeat(3000),
+    'denied',
+    'transport_timeout',
+    '',
+    null,
+    undefined,
+    5,
+    {},
+    ['ref_changed'],
+  ];
+  for (const raw of unknowns) {
+    assert.equal(R.stableDispatchMutationReason(raw, 'update_refs_failed'), 'update_refs_failed', String(raw));
+    assert.equal(R.stableDispatchMutationReason(raw, 'create_failed'), 'create_failed', String(raw));
+    assert.equal(R.stableDispatchMutationReason(raw, 'delete_failed'), 'delete_failed', String(raw));
+    assert.equal(R.stableDispatchMutationReason(raw, 'attempts_write_failed'), 'attempts_write_failed', String(raw));
+    assert.equal(R.stableDispatchMutationReason(raw), 'write_failed', String(raw));
+    assert.equal(R.stableDispatchMutationReason(raw, 'ghp_SECRET_fallback'), 'write_failed', String(raw));
+    assert.equal(R.stableDispatchMutationReason(raw, undefined), 'write_failed', String(raw));
+  }
+  const fixedCodes = [
+    'ref_changed', 'not_found', 'write_failed', 'ref_exists', 'lane_full', 'files_overlap',
+    'slice_already_claimed', 'switch_off', 'switch_read', 'list_failed', 'invalid_lane_cap',
+    'no_write_token', 'repo_node_id', 'missing_before_oid', 'missing_oid', 'graphql_no_update_refs',
+    'create_failed', 'update_refs_failed', 'delete_failed', 'lease_mismatch', 'parent_tree',
+    'commit_parse', 'invalid_parent_sha', 'attempts_write_failed',
+  ];
+  for (const code of fixedCodes) {
+    assert.equal(R.stableDispatchMutationReason(code, 'write_failed'), code);
+    assert.equal(R.stableDispatchMutationReason(code, 'update_refs_failed'), code);
+  }
+  assert.equal(R.stableDispatchMutationReason('HTTP 409 conflict'), 'ref_changed');
+  assert.equal(R.stableDispatchMutationReason('GraphQL: Reference does not exist'), 'not_found');
+  assert.equal(R.stableDispatchMutationReason('HTTP 404 ghp_x', 'create_failed'), 'not_found');
+});
+
+test('stableDispatchDeleteReason maps to ref_changed, not_found or write_failed and never returns raw text', () => {
+  const R = require('./refs-graphql');
+  const keywordFree = 'HTTP 500 ghp_x boom';
+  const cases = [
+    [{ ok: false, error: keywordFree, status: 500 }, 'write_failed'],
+    [{ ok: false, error: keywordFree }, 'write_failed'],
+    [{ ok: false, error: keywordFree, stderr: keywordFree, errors: [{ message: keywordFree }] }, 'write_failed'],
+    [{ ok: false, error: RAW_LEAK, reason: RAW_LEAK }, 'write_failed'],
+    [{ ok: false, error: keywordFree, status: 404 }, 'not_found'],
+    [{ ok: false, error: keywordFree, ghStatus: 404 }, 'not_found'],
+    [{ ok: false, error: 'HTTP 404 ghp_x' }, 'not_found'],
+    [{ ok: false, error: 'GraphQL: Reference does not exist ghp_x' }, 'not_found'],
+    [{ ok: false, error: keywordFree, status: 409 }, 'ref_changed'],
+    [{ ok: false, error: 'conflict ghp_x' }, 'ref_changed'],
+    [{ ok: false, error: 'expected OID mismatch ghp_x' }, 'ref_changed'],
+    [{ ok: false, error: 'ref_changed' }, 'ref_changed'],
+    [{ ok: false, error: 'not_found' }, 'not_found'],
+    [{ ok: false, error: 'write_failed' }, 'write_failed'],
+    [{ ok: false, reason: 'not_found', error: keywordFree }, 'not_found'],
+    [{ ok: false, reason: 'ref_changed' }, 'ref_changed'],
+    [{ ok: false, error: { nested: keywordFree } }, 'write_failed'],
+    [{ ok: false }, 'write_failed'],
+    [null, 'write_failed'],
+    [undefined, 'write_failed'],
+  ];
+  for (const [input, want] of cases) {
+    const got = R.stableDispatchDeleteReason(input);
+    assert.equal(got, want, JSON.stringify(input));
+    assert.equal(R.STABLE_DELETE_REASONS.has(got), true);
+  }
+});
+
+test('assertDispatchRef pins every allowed shape against look-alikes for lane, claim, attempts, done and canary', () => {
+  const R = require('./refs-graphql');
+  const C = require('./constants');
+  for (let i = 0; i < 100; i += 1) assert.equal(R.assertDispatchRef(C.slotRef(i)), C.slotRef(i));
+  for (const build of [C.claimRef, C.attemptsRef, C.doneRef]) {
+    assert.equal(R.assertDispatchRef(build(12345, 7)), build(12345, 7));
+  }
+  const canary = C.canaryScratchRef(123456789012, 3);
+  assert.equal(R.assertDispatchRef(canary), canary);
+  const root = 'refs/mythos/dispatch';
+  const lookalikes = [
+    `evil/${root}/lane-00`,
+    `x${root}/lane-00`,
+    `refs/heads/main\n${root}/lane-00`,
+    `${root}/lane-00/../heads/x`,
+    `${root}/lane-00/`,
+    `${root}/lane-00/extra`,
+    `${root}/lane-000`,
+    `${root}/lane-1`,
+    `${root}/lane-0a`,
+    `${root}/LANE-00`,
+    `${root}/lane-00\n`,
+    `\n${root}/lane-00`,
+    `${root}/claim/../x`,
+    `${root}/claim/x`,
+    `${root}/claim/12`,
+    `${root}/claim/12-`,
+    `${root}/claim/-1`,
+    `${root}/claim/12-0/extra`,
+    `${root}/claim/12-0/`,
+    `${root}/claim/12-0\n`,
+    `evil/${root}/claim/12-0`,
+    `${root}/claim%2F12-0`,
+    `${root}/attempts/../x`,
+    `${root}/attempts/x`,
+    `${root}/attempts/12-0/extra`,
+    `evil/${root}/attempts/12-0`,
+    `${root}/done/../x`,
+    `${root}/done/x`,
+    `${root}/done/12-0/extra`,
+    `evil/${root}/done/12-0`,
+    `${root}/canary/..`,
+    `${root}/canary/scratch-1`,
+    `${root}/canary/scratch-a-1`,
+    `${root}/canary/scratch-1-1/x`,
+    `${root}/canary/other-1-1`,
+    `evil/${root}/canary/scratch-1-1`,
+    `${root}//lane-00`,
+    `${root}/./lane-00`,
+    `${root}/lane-\u0660\u0660`,
+    `${root}X/lane-00`,
+    root,
+    `${root}/`,
+    'refs/heads/main',
+    '',
+    null,
+    undefined,
+    12,
+    {},
+  ];
+  for (const ref of lookalikes) {
+    assert.throws(() => R.assertDispatchRef(ref), /outside dispatch namespace/, JSON.stringify(ref));
+    assert.throws(() => R.refUpdateCreate(ref, MAIN), undefined, JSON.stringify(ref));
+    assert.throws(() => R.refUpdateDelete(ref, MAIN), undefined, JSON.stringify(ref));
+    assert.throws(() => R.refUpdateRenew(ref, MAIN, MAIN), undefined, JSON.stringify(ref));
+  }
+  try {
+    R.assertDispatchRef(`${root}/../SECRETREF`);
+    assert.fail('expected throw');
+  } catch (err) {
+    assert.doesNotMatch(String(err.message), /SECRETREF/);
+  }
+});
+
+test('unset build-order variable is idle while an empty value holds as invalid_build_order', async () => {
+  const { readRepoVariable } = require('./switch');
+  async function runWithGh(ghResult) {
+    const client = createMockRefClient();
+    let touched = 0;
+    for (const name of ['listRefs', 'getIssue', 'issueComments']) {
+      const original = client[name].bind(client);
+      client[name] = async (...args) => { touched += 1; return original(...args); };
+    }
+    const outcome = await captureAllOutput(() => runDispatchPlan(actEnv(client, {
+      CONTROL_TOKEN: 'ctl',
+      readRepoVariableFn: (repo, token, name) => (name === 'MYTHOS_BUILD_ORDER_ISSUES'
+        ? readRepoVariable(repo, token, name, () => ghResult)
+        : { ok: true, value: name === 'MYTHOS_DISPATCH_LANE_CAP' ? '5' : null }),
+    })));
+    return { ...outcome, touched };
+  }
+
+  const unset = await runWithGh({ status: 1, stderr: 'gh: Not Found (HTTP 404)', stdout: '' });
+  assert.equal(unset.result, 0);
+  assert.equal(jsonRow(unset.lines, 'dispatch_idle').reason, 'no_eligible_issue');
+  assert.equal(jsonRow(unset.lines, 'dispatch_hold'), undefined);
+
+  const empty = await runWithGh({ status: 0, stdout: '\n' });
+  assert.equal(empty.result, 1);
+  assert.equal(empty.touched, 0);
+  const hold = jsonRow(empty.lines, 'dispatch_hold');
+  assert.equal(hold.reason, 'invalid_build_order');
+  assert.equal(hold.entry, '');
+  assert.equal(jsonRow(empty.lines, 'dispatch_idle'), undefined);
+
+  const spaced = await runWithGh({ status: 0, stdout: '11, 12\n' });
+  assert.equal(spaced.result, 1);
+  assert.equal(spaced.touched, 0);
+  assert.equal(jsonRow(spaced.lines, 'dispatch_hold').entry, ' 12');
+
+  const stubUnset = await captureAllOutput(() => runDispatchPlan(actEnv(createMockRefClient(), {
+    readRepoVariableFn: async (_r, _t, name) => (name === 'MYTHOS_BUILD_ORDER_ISSUES'
+      ? { ok: true, value: null, unset: true }
+      : { ok: true, value: name === 'MYTHOS_DISPATCH_LANE_CAP' ? '5' : null }),
+  })));
+  assert.equal(stubUnset.result, 0);
+  assert.ok(jsonRow(stubUnset.lines, 'dispatch_idle'));
+
+  const stubEmpty = await captureAllOutput(() => runDispatchPlan(actEnv(createMockRefClient(), {
+    readRepoVariableFn: async (_r, _t, name) => (name === 'MYTHOS_BUILD_ORDER_ISSUES'
+      ? { ok: true, value: '', unset: false }
+      : { ok: true, value: name === 'MYTHOS_DISPATCH_LANE_CAP' ? '5' : null }),
+  })));
+  assert.equal(stubEmpty.result, 1);
+  assert.equal(jsonRow(stubEmpty.lines, 'dispatch_hold').reason, 'invalid_build_order');
+});
+
+test('plan comment ID above 2^53 stays an exact string through dry-run, claim log and lease message', async () => {
+  const HUGE = '9007199254740993';
+  assert.notEqual(String(Number(HUGE)), HUGE);
+  const hugeClient = () => {
+    const client = createMockRefClient();
+    client.issueComments = async () => {
+      const plan = planComments();
+      plan.comments[0].id = HUGE;
+      plan.comments[0].databaseId = HUGE;
+      return plan;
+    };
+    client.getIssue = async () => ({ ok: true, issue: { state: 'open' } });
+    return client;
+  };
+
+  const dry = await captureAllOutput(() => runDispatchPlan(actEnv(hugeClient(), {
+    MODE: 'dry-run',
+    readDispatchSwitchesFn: async () => ({ ok: true, enabled: false }),
+  })), { stdout: true });
+  assert.equal(dry.result, 0);
+  const would = jsonRow(dry.lines, 'would_claim');
+  assert.ok(would, 'would_claim row expected');
+  assert.equal(would.planCommentId, HUGE);
+
+  const client = hugeClient();
+  const act = await captureAllOutput(() => runDispatchPlan(actEnv(client)));
+  assert.equal(act.result, 0);
+  const claimed = jsonRow(act.lines, 'dispatch_claimed');
+  assert.ok(claimed, 'dispatch_claimed row expected');
+  assert.equal(claimed.planCommentId, HUGE);
+  const lane = await client.getRef({ ref: 'refs/mythos/dispatch/lane-00' });
+  assert.equal(lane.ok, true);
+  const lease = JSON.parse(lane.message);
+  assert.equal(lease.planCommentId, HUGE);
+  assert.equal(typeof lease.planCommentId, 'string');
+});

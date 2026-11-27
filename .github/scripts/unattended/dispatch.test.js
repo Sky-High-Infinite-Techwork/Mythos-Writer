@@ -1307,3 +1307,91 @@ test('canary verify reports retry_requires_all_six_legs when a retry downloads f
     fs.rmSync(firstAttemptDir, { recursive: true, force: true });
   }
 });
+
+async function runCanaryVerifyPinned({ attempt, files = 6, deleteResult = null, kinds = null }) {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { runCanaryVerify } = require('./dispatch/canary-verify');
+  const main = 'a'.repeat(40);
+  const scratch = canaryScratchRef(CANARY_RUN_ID, attempt);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-pin-'));
+  for (let i = 0; i < files; i += 1) {
+    const kind = kinds ? kinds[i] : (i === 0 ? 'canary_win' : 'canary_lose');
+    fs.writeFileSync(
+      path.join(dir, `canary-outcome-${i}.json`),
+      JSON.stringify({ runId: CANARY_RUN_ID, runAttempt: attempt, scratchRef: scratch, kind, index: i }),
+    );
+  }
+  const client = createMockRefClient();
+  await client.createRef({ ref: scratch, sha: main });
+  if (deleteResult) client.deleteRef = async () => deleteResult;
+  const logs = [];
+  const origErr = console.error;
+  const origLog = console.log;
+  console.error = (...a) => logs.push(a.join(' '));
+  console.log = (...a) => logs.push(a.join(' '));
+  let code;
+  try {
+    code = await runCanaryVerify(client, canaryVerifyOpts(client, {
+      mainSha: main,
+      artifactsDir: dir,
+      runAttempt: attempt,
+    }));
+  } finally {
+    console.error = origErr;
+    console.log = origLog;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  const rows = logs.map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
+  return { code, logs, rows, scratch, exists: client.exists(scratch) };
+}
+
+test('canary verify with all six legs passes on attempts 1, 2 and 3 and deletes that attempt scratch ref', async () => {
+  for (const attempt of [1, 2, 3]) {
+    const out = await runCanaryVerifyPinned({ attempt });
+    assert.equal(out.code, 0, `attempt ${attempt}`);
+    assert.equal(out.exists, false);
+    const ok = out.rows.find((r) => r.kind === 'canary_verify_ok');
+    assert.ok(ok);
+    assert.equal(ok.deleted, out.scratch);
+    assert.equal(ok.runAttempt, attempt);
+    assert.equal(out.rows.some((r) => r.kind === 'canary_verify_fail'), false);
+  }
+});
+
+test('canary verify retry with fewer than six legs fails closed as retry_requires_all_six_legs, a first attempt does not', async () => {
+  for (const attempt of [2, 3]) {
+    for (const files of [0, 1, 5]) {
+      const out = await runCanaryVerifyPinned({ attempt, files });
+      assert.equal(out.code, 1, `attempt ${attempt} files ${files}`);
+      assert.equal(out.rows.find((r) => r.kind === 'canary_verify_fail').reason, 'retry_requires_all_six_legs');
+      assert.equal(out.exists, true);
+    }
+  }
+  const first = await runCanaryVerifyPinned({ attempt: 1, files: 5 });
+  assert.equal(first.code, 1);
+  assert.notEqual(first.rows.find((r) => r.kind === 'canary_verify_fail').reason, 'retry_requires_all_six_legs');
+});
+
+test('canary verify delete failure logs a fixed reason: keyword-free leak is write_failed, 404 is not_found, 409 is ref_changed', async () => {
+  const leak = 'HTTP 500 ghp_x boom';
+  const cases = [
+    [{ ok: false, error: leak }, 'write_failed'],
+    [{ ok: false, error: leak, status: 500, stderr: leak, errors: [{ message: leak }] }, 'write_failed'],
+    [{ ok: false, error: 'ghp_SECRETTOKEN GraphQL: Resource not accessible stderr' }, 'write_failed'],
+    [{ ok: false }, 'write_failed'],
+    [{ ok: false, error: leak, status: 404 }, 'not_found'],
+    [{ ok: false, error: 'HTTP 404 ghp_x boom' }, 'not_found'],
+    [{ ok: false, error: leak, status: 409 }, 'ref_changed'],
+    [{ ok: false, error: 'conflict ghp_x boom' }, 'ref_changed'],
+  ];
+  for (const [deleteResult, reason] of cases) {
+    const out = await runCanaryVerifyPinned({ attempt: 1, deleteResult });
+    assert.equal(out.code, 1, JSON.stringify(deleteResult));
+    assert.equal(out.exists, true);
+    const fail = out.rows.find((r) => r.kind === 'canary_verify_fail');
+    assert.deepEqual(fail, { kind: 'canary_verify_fail', reason, ref: out.scratch }, JSON.stringify(deleteResult));
+    assert.doesNotMatch(out.logs.join('\n'), /ghp_|boom|HTTP 500|GraphQL|stderr|Resource not accessible/);
+  }
+});
