@@ -910,6 +910,47 @@ describe('useMiniAgentChat — failed-exchange tracking (SKY-1923 gate)', () => 
     expect(agentTurns[0]?.text).not.toContain('also late');
   });
 
+  it('early chunks that arrive before stream-start are kept when they match the request id', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('cut off')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('early pin'); });
+    await act(async () => { await Promise.resolve(); });
+    // Chunks can land before stream-start: they share no IPC channel.
+    act(() => { api.fireChunk('Prefix', 'req-early'); });
+    act(() => { api.fireChunk('FOREIGN', 'req-other'); });
+    act(() => { api.fireStreamStart('req-early'); });
+    act(() => { api.fireChunk(' and rest', 'req-early'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    const agentTurns = result.current.messages.filter((m) => m.role === 'agent');
+    expect(agentTurns).toHaveLength(1);
+    expect(agentTurns[0]?.text).toBe(`Prefix and rest ${RESPONSE_INCOMPLETE_SUFFIX}`);
+    expect(agentTurns[0]?.text).not.toContain('FOREIGN');
+  });
+
+  it('early chunks are dropped when stream-start never arrives for that request id', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('cut off')); }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('no start'); });
+    await act(async () => { await Promise.resolve(); });
+    act(() => { api.fireChunk('orphan early', 'req-never'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(result.current.messages.filter((m) => m.role === 'agent')).toHaveLength(0);
+    expect(api.appendTurns.mock.calls.flatMap((c) => c[1] as AgentSessionTurn[])
+      .some((t) => t.text.includes('orphan early'))).toBe(false);
+  });
+
   it('Cancel after a mid-flight session switch does not show a cancel error in the new chat', async () => {
     const vault = installTwoSessionApi();
     const invoke = vi.fn().mockImplementationOnce(() => new Promise<string>(() => { /* hang */ }));

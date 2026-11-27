@@ -244,7 +244,7 @@ export function parseSessionFile(raw: string, relPath = ''): AgentSessionFile | 
         while (buf.length > 0 && buf[buf.length - 1].trim() === '') buf.pop();
         const turn: SessionTurn = { role: current.role, at: current.at, text: buf.join('\n') };
         if (current.cardKind) turn.cardKind = current.cardKind;
-        if (current.incomplete && current.role === 'agent') turn.incomplete = true;
+        if (current.role === 'agent' && current.incomplete === true) turn.incomplete = true;
         if (current.cardTitle) {
           turn.cardTitle = current.cardTitle;
           if (current.cardFoot) turn.cardFoot = current.cardFoot;

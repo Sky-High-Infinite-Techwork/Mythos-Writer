@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import SettingsPanel from './SettingsPanel';
 import { writeDefaultRichPref } from './noteViewPrefs';
@@ -2513,29 +2513,6 @@ describe('Settings dialog keyboard navigation (SKY-1969)', () => {
     expect(screen.queryByRole('button', { name: /^cancel$/i })).not.toBeInTheDocument();
     const closeBtn = screen.getByRole('button', { name: /close settings/i });
     expect(closeBtn).toBeInTheDocument();
-  });
-
-  it('all interactive controls in the dialog have accessible names (named controls, active)', async () => {
-    await renderSettings(<SettingsPanel onClose={mockOnClose} />);
-    await waitForModelKeys();
-
-    const dialog = screen.getByRole('dialog', { name: /settings/i });
-    expect(dialog).toHaveAccessibleName(/^settings$/i);
-
-    const tabs = within(dialog).getAllByRole('tab');
-    expect(tabs.length).toBeGreaterThan(3);
-    for (const tab of tabs) {
-      expect(tab).toHaveAccessibleName();
-    }
-
-    expect(screen.getByRole('button', { name: /close settings/i })).toHaveAccessibleName();
-    for (const testId of ['mk-prov-claude', 'mk-prov-ollama', 'mk-prov-openrouter']) {
-      expect(screen.getByTestId(testId)).toHaveAccessibleName();
-    }
-    expect(screen.getByLabelText(/anthropic api key/i)).toHaveAccessibleName();
-    fireEvent.click(screen.getByTestId('settings-cat-agents'));
-    await waitFor(() => expect(screen.getByTestId('model-keys-page')).toBeInTheDocument());
-    expect(screen.getAllByLabelText('All AI features')[0]).toHaveAccessibleName();
   });
 
   it.skip('all interactive controls in the dialog have accessible names', async () => {

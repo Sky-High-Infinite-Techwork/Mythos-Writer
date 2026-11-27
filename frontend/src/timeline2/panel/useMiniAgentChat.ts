@@ -151,6 +151,8 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
   const hardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const streamStartUnsubRef = useRef<(() => void) | null>(null);
   const chunkUnsubRef = useRef<(() => void) | null>(null);
+  /** Chunks that arrived before stream-start pinned this send's requestId. */
+  const earlyChunksRef = useRef<{ requestId: string; chunk: string }[]>([]);
   const prevActiveSessionIdRef = useRef<string | null | undefined>(undefined);
 
   const canonicalSessionId = useCallback((id: string | undefined): string | undefined => {
@@ -253,6 +255,7 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
     clearStreamStartSub();
     clearChunkSub();
     mainRequestIdRef.current = null;
+    earlyChunksRef.current = [];
     inFlightRef.current = null;
     setPendingPrompt(null);
     setPendingPromptInFeed(false);
@@ -304,6 +307,7 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
     setCanRetry(false);
     setStalled(false);
     streamAccumRef.current = '';
+    earlyChunksRef.current = [];
 
     generationGenRef.current += 1;
     const gen = generationGenRef.current;
@@ -319,8 +323,21 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
         : window.api?.onWritingAssistantStreamStart;
     if (typeof onStart === 'function') {
       streamStartUnsubRef.current = onStart((requestId: string) => {
-        if (generationGenRef.current === gen) {
-          mainRequestIdRef.current = requestId;
+        if (generationGenRef.current !== gen) return;
+        mainRequestIdRef.current = requestId;
+        // Stream-start and chunk travel on different IPC channels, so a
+        // chunk can land first. Keep matching early tokens; drop the rest.
+        const early = earlyChunksRef.current;
+        earlyChunksRef.current = [];
+        let flushed = false;
+        for (const c of early) {
+          if (c.requestId !== requestId) continue;
+          if (c.chunk) streamAccumRef.current += c.chunk;
+          flushed = true;
+        }
+        if (flushed) {
+          setStalled(false);
+          scheduleStallTimers(gen);
         }
       });
     }
@@ -335,8 +352,13 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
         if (generationGenRef.current !== gen) return;
         // Only buffer chunks that name THIS request. A late or overlapping
         // stream on the shared channel must not land in this chat's vault.
+        if (!requestId) return;
         const mine = mainRequestIdRef.current;
-        if (!requestId || !mine || requestId !== mine) return;
+        if (!mine) {
+          earlyChunksRef.current.push({ requestId, chunk });
+          return;
+        }
+        if (requestId !== mine) return;
         if (chunk) streamAccumRef.current += chunk;
         setStalled(false);
         scheduleStallTimers(gen);

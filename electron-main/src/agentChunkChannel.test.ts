@@ -23,7 +23,21 @@ const HANDLERS = [
     prefix: 'agent:writing-assistant',
     requireChunkRequestId: true,
   },
+  {
+    fn: 'registerArchiveChatHandler',
+    prefix: 'agent:archive',
+    // Pre-existing: archive chunks are not tagged with requestId.
+    requireChunkRequestId: false,
+  },
+  {
+    fn: 'registerVaultAgentHandlers',
+    prefix: 'agent:vault-check',
+    // Pre-existing: vault-check chunks are not tagged with requestId.
+    requireChunkRequestId: false,
+  },
 ] as const;
+
+const AGENT_SEND_RE = /event\.sender\.send\(\s*'(agent:[^']+)'/g;
 
 const SEND_RE = /event\.sender\.send\(\s*'([^']+)'\s*,\s*\{([^}]*)\}/g;
 
@@ -98,8 +112,24 @@ function swapChunkChannel(src: string, fnName: string, from: string, to: string)
 describe('main.ts agent chunk channels (1923 Shield F1)', () => {
   const src = fs.readFileSync(MAIN_PATH, 'utf8');
 
-  it('brainstorm and writing-assistant send chunks on their own channel with the stream-start requestId', () => {
+  it('all four agent handlers send stream-start, chunk, and error on their own channel', () => {
     expect(channelMismatches(src)).toEqual([]);
+  });
+
+  it('those four handlers account for every agent:* send in main.ts (12 events)', () => {
+    const listed = new Set<string>();
+    for (const { fn, prefix } of HANDLERS) {
+      const body = sliceFunction(src, fn);
+      expect(body, `${fn} missing`).not.toBe('');
+      for (const m of body.matchAll(AGENT_SEND_RE)) listed.add(m[1]!);
+      // Each family has stream-start, chunk, and error.
+      for (const suffix of ['stream-start', 'chunk', 'error']) {
+        expect(listed.has(`${prefix}:${suffix}`), `${prefix}:${suffix}`).toBe(true);
+      }
+    }
+    expect(listed.size).toBe(12);
+    const all = new Set([...src.matchAll(AGENT_SEND_RE)].map((m) => m[1]!));
+    expect([...all].sort()).toEqual([...listed].sort());
   });
 
   it('swapping writing-assistant chunks onto the brainstorm channel is rejected (mutant)', () => {
@@ -124,6 +154,30 @@ describe('main.ts agent chunk channels (1923 Shield F1)', () => {
     );
     const failures = channelMismatches(mutant);
     expect(failures.some((f) => f.includes('registerBrainstormHandler') && f.includes('agent:writing-assistant:chunk'))).toBe(true);
+    expect(channelMismatches(src)).toEqual([]);
+  });
+
+  it('swapping archive chunks onto the brainstorm channel is rejected (mutant)', () => {
+    const mutant = swapChunkChannel(
+      src,
+      'registerArchiveChatHandler',
+      'agent:archive:chunk',
+      'agent:brainstorm:chunk',
+    );
+    const failures = channelMismatches(mutant);
+    expect(failures.some((f) => f.includes('registerArchiveChatHandler') && f.includes('agent:brainstorm:chunk'))).toBe(true);
+    expect(channelMismatches(src)).toEqual([]);
+  });
+
+  it('swapping vault-check chunks onto the writing-assistant channel is rejected (mutant)', () => {
+    const mutant = swapChunkChannel(
+      src,
+      'registerVaultAgentHandlers',
+      'agent:vault-check:chunk',
+      'agent:writing-assistant:chunk',
+    );
+    const failures = channelMismatches(mutant);
+    expect(failures.some((f) => f.includes('registerVaultAgentHandlers') && f.includes('agent:writing-assistant:chunk'))).toBe(true);
     expect(channelMismatches(src)).toEqual([]);
   });
 });

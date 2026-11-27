@@ -23,6 +23,8 @@ import {
 import {
   createSession,
   readSession,
+  parseSessionFile,
+  sanitizeSessionTurn,
   sessionsDir,
   SESSIONS_DIRNAME,
 } from './mythosFormat/agentSessions.js';
@@ -391,5 +393,64 @@ describe('handleAgentSessionAppendTurns', () => {
     const t = readSession(notesRoot, A_ID)!.turns[0]!;
     expect(t.incomplete).toBeUndefined();
     expect(t.text).toContain('real reply');
+  });
+
+  it('parse accepts incomplete only as === true on an agent-role turn (I6, I8)', () => {
+    const raw = [
+      '---',
+      'mythosSession: 1',
+      `id: ${A_ID}`,
+      'agent: brainstorm',
+      'startedAt: 2026-07-01T10:00:00.000Z',
+      'updatedAt: 2026-07-01T10:00:00.000Z',
+      'turns: 3',
+      '---',
+      '# brainstorm session',
+      '',
+      '<!-- mythos:turn user 2026-07-01T10:00:00.000Z -->',
+      '<!-- mythos:card-meta {"incomplete":true} -->',
+      '**You:**',
+      '',
+      'hello',
+      '<!-- /mythos:turn -->',
+      '',
+      '<!-- mythos:turn agent 2026-07-01T10:00:01.000Z -->',
+      '<!-- mythos:card-meta {"incomplete":"yes"} -->',
+      '**Agent:**',
+      '',
+      'truthy but not true',
+      '<!-- /mythos:turn -->',
+      '',
+      '<!-- mythos:turn agent 2026-07-01T10:00:02.000Z -->',
+      '<!-- mythos:card-meta {"incomplete":true} -->',
+      '**Agent:**',
+      '',
+      'real partial',
+      '<!-- /mythos:turn -->',
+      '',
+    ].join('\n');
+    const parsed = parseSessionFile(raw);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.turns).toHaveLength(3);
+    // I8: a user-turn flag must not survive parse.
+    expect(parsed!.turns[0]!.role).toBe('user');
+    expect(parsed!.turns[0]!.incomplete).toBeUndefined();
+    expect(parsed!.turns[0]!.text).toBe('hello');
+    // I6: a truthy non-true value must not set the flag.
+    expect(parsed!.turns[1]!.role).toBe('agent');
+    expect(parsed!.turns[1]!.incomplete).toBeUndefined();
+    expect(parsed!.turns[1]!.text).toBe('truthy but not true');
+    // Positive control: a real agent flag still parses.
+    expect(parsed!.turns[2]!.incomplete).toBe(true);
+    expect(parsed!.turns[2]!.text).toBe('real partial');
+  });
+
+  it('sanitizeSessionTurn keeps incomplete only as === true on an agent turn', () => {
+    expect(sanitizeSessionTurn({ ...turn('user', 'u'), incomplete: true }).incomplete).toBeUndefined();
+    expect(sanitizeSessionTurn({
+      ...turn('agent', 'a'),
+      incomplete: 'yes' as unknown as true,
+    }).incomplete).toBeUndefined();
+    expect(sanitizeSessionTurn({ ...turn('agent', 'a'), incomplete: true }).incomplete).toBe(true);
   });
 });
