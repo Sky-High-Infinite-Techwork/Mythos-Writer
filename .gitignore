@@ -17,7 +17,7 @@ pr-screenshots/
 # Paperclip / Claude Code agent worktrees — never commit nested git repos
 .claude/
 .paperclip/
-# Generated scratch output (legacy bug-hunt daily reports; BugHunt-Fisher.sh moved to the private Mythos-Ops repo) — never source
+# Generated scratch output (legacy bug-hunt daily reports; BugHunt-Fisher.sh moved to the private Mythos-Engine repo) — never source
 .tmp/
 daily_bug_hunt_*.md
 daily_bug_hunt_*.json
@@ -36,7 +36,7 @@ electron-main/resources/kokoro/wasm/
 __pycache__/
 *.py[cod]
 
-# Manual capture-spec output (ticket evidence lives in the private Mythos-Ops repo, not here)
+# Manual capture-spec output (ticket evidence lives in the private Mythos-Engine repo, not here)
 docs/screenshots/boards-052-leftovers/
 docs/screenshots/boards-1592/
 docs/screenshots/overlay-pop-1600/

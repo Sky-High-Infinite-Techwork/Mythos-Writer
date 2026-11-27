@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
-    # Literal false: Mythos-Ops Actions is the only unattended publisher. Do not switch this
+    # Literal false: Mythos-Engine Actions is the only unattended publisher. Do not switch this
     # back to a repository variable; the Ops ready check requires a literal false in this file.
     env:
       UNATTENDED_ENABLED: false
