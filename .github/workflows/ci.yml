@@ -122,6 +122,11 @@ jobs:
       - name: Guard — all .github/workflows/*.yml files must parse as valid YAML (SKY-11200)
         run: python3 .github/scripts/check-workflow-yaml.py
 
+      # Engine lanes (mythos-engine-lanes.yml, mythos-engine-keyless.yml): static guards + behaviour tests of their
+      # step scripts (stub gh, local git remotes; no network, no token). PyYAML is required: missing = red, never skipped.
+      - name: Guard — engine lanes workflows (admit, in-flight, persist, private logs)
+        run: python3 .github/scripts/test_engine_lanes_workflow.py
+
       - name: Deinit stale git submodule registrations
         run: git submodule deinit --all -f 2>/dev/null || true
 
