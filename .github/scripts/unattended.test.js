@@ -241,8 +241,8 @@ test('admit exits 0 with no enabled output when the switch is unset or not true'
   const base = {
     REPO, REF: 'refs/heads/main', EVENT: 'schedule', MODE: 'act', PR: '',
   };
-  for (const SWITCH of ['', 'false', 'TRUE', 'yes', '1']) {
-    const result = runAdmit(block, { ...base, SWITCH });
+  for (const UNATTENDED_ENABLED of ['', 'false', 'TRUE', 'yes', '1']) {
+    const result = runAdmit(block, { ...base, UNATTENDED_ENABLED });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.outputs, /enabled=false/);
     assert.match(result.stdout, /without writes/);
@@ -251,7 +251,7 @@ test('admit exits 0 with no enabled output when the switch is unset or not true'
 
 test('admit rejects a ref, repository, event, mode, or pull request outside the contract', () => {
   const block = admitBlock('mythos-flow-step.yml');
-  const ok = { REPO, REF: 'refs/heads/main', EVENT: 'workflow_dispatch', SWITCH: 'true', MODE: 'dry-run', PR: '' };
+  const ok = { REPO, REF: 'refs/heads/main', EVENT: 'workflow_dispatch', UNATTENDED_ENABLED: 'true', MODE: 'dry-run', PR: '' };
   assert.match(runAdmit(block, ok).outputs, /enabled=true/);
   assert.match(runAdmit(block, ok).outputs, /mode=dry-run/);
   assert.equal(runAdmit(block, { ...ok, REF: 'refs/heads/feature' }).status, 1);
@@ -959,6 +959,10 @@ test('privileged workflows are inert controllers with pinned actions and split c
   const flow = loadWorkflow('mythos-flow-step.yml');
   const gateText = fs.readFileSync(path.join(WORKFLOWS, 'mythos-final-gate.yml'), 'utf8');
   const flowText = fs.readFileSync(path.join(WORKFLOWS, 'mythos-flow-step.yml'), 'utf8');
+  for (const text of [gateText, flowText]) {
+    assert.match(text, /^    env:\n      UNATTENDED_ENABLED: false$/m);
+    assert.equal(text.includes('vars.UNATTENDED_ENABLED'), false);
+  }
   assert.equal(gateText.includes('MYTHOS_WRITE_APP_PRIVATE_KEY'), false);
   assert.equal(flowText.includes('MYTHOS_GATE_APP_PRIVATE_KEY'), false);
   assert.equal(flowText.includes('CLAUDE_CODE_OAUTH_TOKEN'), false);

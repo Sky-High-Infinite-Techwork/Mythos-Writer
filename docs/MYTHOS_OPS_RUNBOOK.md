@@ -3,7 +3,7 @@
 Creed: **cut waste, don't weaken quality.**
 
 In-repo SoT for dependency map, badges, and rollback one-liners. Ivy may mirror
-to mythos-ops/specs after merge.
+to mythos-engine/specs after merge.
 
 ## Workflow badges
 
@@ -25,9 +25,9 @@ to mythos-ops/specs after merge.
 | Self-improvement loop | `MYTHOS_LOOP_ENABLED`, `MYTHOS_LOOP_STATE` | Retired with the weekly audit. `rollback.sh` `loop-*` actions are inert. |
 | **PR hygiene** `mythos-pr-hygiene.yml` | Labels `tip-freeze` (logged, not rebased); draft-CI sticky | No `gh` update-branch (#1703). Draft-CI comment remains. Undraft is `mythos-flow-step` only. Main-push `workflow_run` with no PRs soft-skips (404 is not a red job) |
 | Tip-freeze docs | [FORGE_TIP_FREEZE.md](./FORGE_TIP_FREEZE.md), [FORGE_E2E_KEEPALIVE.md](./FORGE_E2E_KEEPALIVE.md) | Inventory → one batch; soft cap window var |
-| Standing agents | Forge / Critic / Shield / Probe / Sentinel / `bc-fb92daf9` | [STANDING_AGENT_CONTEXT_COMPRESSION.md](./STANDING_AGENT_CONTEXT_COMPRESSION.md) |
+| Standing agents | Forge / Critic / Shield / Probe / no-Grok engine (merge) / Ivy (escalation) / `bc-fb92daf9`. Sentinel retired 2026-11-23. | [STANDING_AGENT_CONTEXT_COMPRESSION.md](./STANDING_AGENT_CONTEXT_COMPRESSION.md) |
 | Branch protection | [BRANCH_PROTECTION_MAIN.md](./BRANCH_PROTECTION_MAIN.md) + `scripts/branch-protection/apply-main-ruleset.mjs` | Manual admin apply after merge |
-| Merge gate | [MERGE_GATE.md](./MERGE_GATE.md) | `mythos/final-gate` from gate App 5736520, then the merge queue. `.github/**` stays owner-merged. Auto-merge workflow `mythos-gate-auto-merge.yml` was removed. |
+| Merge gate | [MERGE_GATE.md](./MERGE_GATE.md) | no-Grok engine owns unattended merge (`mythos-flow-step` into the merge queue; `mythos/final-gate` from gate App 5736520). Ivy is escalation/admin only. `.github/**` stays owner-merged. Auto-merge workflow `mythos-gate-auto-merge.yml` was removed. Sentinel retired 2026-11-23. |
 | Ops health | `mythos-ops-health.yml` | secrets-rotation (quarterly) only |
 | Secrets rotation | `vars.MYTHOS_PAT_SET_AT`, `vars.MYTHOS_SECRET_ROTATION_DAYS` (default 90) | Reminder only — never prints secrets. The auto-merge workflow was removed; do not confirm that it still merges. Deleting the repo bot PAT is owner-only. Copy any existing rotation date into `MYTHOS_PAT_SET_AT`; an unset date is treated as due. |
 

@@ -1,14 +1,14 @@
-# Files moved to Mythos-Ops (2026-10-18)
+# Files moved to Mythos-Engine (2026-10-18)
 
-These team-ops notes, plans, reports, ticket-evidence screenshots and one-off scripts moved to the **private** repo `SkyyPlayz/Mythos-Ops` with their full git history.
+These team-ops notes, plans, reports, ticket-evidence screenshots and one-off scripts moved to the **private** repo `SkyyPlayz/Mythos-Engine` with their full git history.
 
 - Source: `SkyyPlayz/Mythos-Writer` `main` @ `ad87e0967fc9ebc6ce4f2d2a248e6087dc2265e3`
-- Destination: `SkyyPlayz/Mythos-Ops` `main` @ `6a4902141e03cc5b8525873f1ed6a57af990d5e3`
-- **Paths are unchanged** in Mythos-Ops. Every file was sha256-verified against this repo before deletion (96/96 match).
+- Destination: `SkyyPlayz/Mythos-Engine` `main` @ `6a4902141e03cc5b8525873f1ed6a57af990d5e3`
+- **Paths are unchanged** in Mythos-Engine. Every file was sha256-verified against this repo before deletion (96/96 match).
 - `design-handoff/prototype/MOVED.md` was copied but **kept here** as a redirect stub, because source comments still name `design-handoff/prototype`.
 - These files remain readable in this repo's git history (no history rewrite).
 
-## Moved paths (old path = new path in Mythos-Ops)
+## Moved paths (old path = new path in Mythos-Engine)
 
 - `BugHunt-Fisher.sh`
 - `FABLE-PICKUP.md`

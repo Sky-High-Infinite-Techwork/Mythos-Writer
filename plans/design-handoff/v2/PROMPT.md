@@ -1,6 +1,6 @@
 # Paste this into the "Mythos Writer" Claude Code chat
 
-> **Note (2026-10-18):** the root `design-handoff/` v1 package this prompt names moved to the private `SkyyPlayz/Mythos-Ops` repo. The current package is `plans/design-handoff/v2/` (README.md, PROCESS.md, DESIGN-SPEC.md, FULL-SPEC.md, `prototype/`).
+> **Note (2026-10-18):** the root `design-handoff/` v1 package this prompt names moved to the private `SkyyPlayz/Mythos-Engine` repo. The current package is `plans/design-handoff/v2/` (README.md, PROCESS.md, DESIGN-SPEC.md, FULL-SPEC.md, `prototype/`).
 
 ---
 

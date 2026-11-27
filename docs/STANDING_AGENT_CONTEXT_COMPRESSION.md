@@ -5,10 +5,11 @@ of the current source of truth. No product UI change.
 
 ## Goal
 
-Monthly (or every ~4 weeks), compress Forge / Sentinel / Critic / Shield / Probe
+Monthly (or every ~4 weeks), compress Forge / Critic / Shield / Probe
 accumulated brief history into **one standing summary** each (or one Mythos
 standing summary). Old detail moves to an archive path so REPLY prompts do not
-paste full history.
+paste full history. Sentinel was retired 2026-11-23; the no-Grok engine now owns
+unattended merge, and Ivy is escalation/admin only.
 
 ## Repo paths
 
@@ -24,7 +25,7 @@ Repo docs only unless Ivy owns Grok Bot memory separately.
 ## Compression recipe (Ivy / standing agent)
 
 1. Collect the last ~4 weeks of standing REPLY briefs / ops notes for each role
-   (Forge, Sentinel, Critic, Shield, Probe) — or one Mythos standing rollup.
+   (Forge, Critic, Shield, Probe) — or one Mythos standing rollup.
 2. Write a **compressed summary** (≤ ~1–2 pages): current SoT pointers, open
    carve-outs, tip-freeze / autofix vars, known traps, creed.
 3. Append or move the verbose history to
@@ -36,7 +37,7 @@ Repo docs only unless Ivy owns Grok Bot memory separately.
 Standing cloud agent `bc-fb92daf9` REPLY prompts should **start from the
 compressed summary path** (`docs/archive/standing-briefs/CURRENT.md` or the
 latest `YYYY-MM` summary header), not full history paste. Compress agent briefs
-in mythos-ops separately if that store is outside this repo.
+in mythos-engine separately if that store is outside this repo.
 
 ## What not to do
 
