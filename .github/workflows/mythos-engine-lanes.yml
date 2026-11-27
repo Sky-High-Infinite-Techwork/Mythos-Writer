@@ -532,8 +532,13 @@ jobs:
               echo "::error title=Persist::cannot re-fetch $STATE_BRANCH after a rejected push"; exit 1
             fi
             # a push that landed but reported failure (timeout) is not applied twice
-            # grep reads to the end (no -q): under pipefail an early-exit grep can SIGPIPE git log and read as "not landed"
-            if git -C state log -n 50 --format=%s FETCH_HEAD | grep -xF -- "$msg" >/dev/null; then
+            # A git log failure must fail loud: treating it as "not landed" would re-apply.
+            # Subjects are captured first, then matched (no pipe into grep): under pipefail an
+            # early-exit grep can SIGPIPE git log and read as "not landed".
+            if ! subjects=$(git -C state log -n 50 --format=%s FETCH_HEAD); then
+              echo "::error title=Persist::cannot read landed-push subjects from $STATE_BRANCH"; exit 1
+            fi
+            if printf '%s\n' "$subjects" | grep -xF -- "$msg" >/dev/null; then
               echo "pushed=true" >> "$GITHUB_OUTPUT"; echo "persist: pushed (apply exit $rc)"; exit "$rc"
             fi
           done
@@ -873,8 +878,13 @@ jobs:
               echo "::error title=Persist::cannot re-fetch $STATE_BRANCH after a rejected push"; exit 1
             fi
             # a push that landed but reported failure (timeout) is not applied twice
-            # grep reads to the end (no -q): under pipefail an early-exit grep can SIGPIPE git log and read as "not landed"
-            if git -C state log -n 50 --format=%s FETCH_HEAD | grep -xF -- "$msg" >/dev/null; then
+            # A git log failure must fail loud: treating it as "not landed" would re-apply.
+            # Subjects are captured first, then matched (no pipe into grep): under pipefail an
+            # early-exit grep can SIGPIPE git log and read as "not landed".
+            if ! subjects=$(git -C state log -n 50 --format=%s FETCH_HEAD); then
+              echo "::error title=Persist::cannot read landed-push subjects from $STATE_BRANCH"; exit 1
+            fi
+            if printf '%s\n' "$subjects" | grep -xF -- "$msg" >/dev/null; then
               echo "pushed=true" >> "$GITHUB_OUTPUT"; echo "persist: pushed (apply exit $rc)"; exit "$rc"
             fi
           done
@@ -1162,8 +1172,13 @@ jobs:
               echo "::error title=Persist::cannot re-fetch $STATE_BRANCH after a rejected push"; exit 1
             fi
             # a push that landed but reported failure (timeout) is not applied twice
-            # grep reads to the end (no -q): under pipefail an early-exit grep can SIGPIPE git log and read as "not landed"
-            if git -C state log -n 50 --format=%s FETCH_HEAD | grep -xF -- "$msg" >/dev/null; then
+            # A git log failure must fail loud: treating it as "not landed" would re-apply.
+            # Subjects are captured first, then matched (no pipe into grep): under pipefail an
+            # early-exit grep can SIGPIPE git log and read as "not landed".
+            if ! subjects=$(git -C state log -n 50 --format=%s FETCH_HEAD); then
+              echo "::error title=Persist::cannot read landed-push subjects from $STATE_BRANCH"; exit 1
+            fi
+            if printf '%s\n' "$subjects" | grep -xF -- "$msg" >/dev/null; then
               echo "pushed=true" >> "$GITHUB_OUTPUT"; echo "persist: pushed (apply exit $rc)"; exit "$rc"
             fi
           done
@@ -1775,8 +1790,13 @@ jobs:
               echo "::error title=Persist::cannot re-fetch $STATE_BRANCH after a rejected push"; exit 1
             fi
             # a push that landed but reported failure (timeout) is not applied twice
-            # grep reads to the end (no -q): under pipefail an early-exit grep can SIGPIPE git log and read as "not landed"
-            if git -C state log -n 50 --format=%s FETCH_HEAD | grep -xF -- "$msg" >/dev/null; then
+            # A git log failure must fail loud: treating it as "not landed" would re-apply.
+            # Subjects are captured first, then matched (no pipe into grep): under pipefail an
+            # early-exit grep can SIGPIPE git log and read as "not landed".
+            if ! subjects=$(git -C state log -n 50 --format=%s FETCH_HEAD); then
+              echo "::error title=Persist::cannot read landed-push subjects from $STATE_BRANCH"; exit 1
+            fi
+            if printf '%s\n' "$subjects" | grep -xF -- "$msg" >/dev/null; then
               echo "pushed=true" >> "$GITHUB_OUTPUT"; echo "persist: pushed (apply exit $rc)"; exit "$rc"
             fi
           done

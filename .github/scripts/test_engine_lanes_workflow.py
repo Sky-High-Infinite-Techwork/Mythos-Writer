@@ -29,6 +29,9 @@ WF = os.path.join(os.path.dirname(HERE), "workflows")
 LANES = os.path.join(WF, "mythos-engine-lanes.yml")
 KEYLESS = os.path.join(WF, "mythos-engine-keyless.yml")
 CI = os.path.join(WF, "ci.yml")
+# Workflows this file guards. ci.yml is out of the pipe-into-grep rule (see
+# test_no_early_exit_grep_in_a_pipeline); it is still checked by test_ci_runs_this_file.
+GUARDED_WORKFLOWS = (LANES, KEYLESS)
 WRITER = "Sky-High-Infinite-Techwork/Mythos-Writer"
 ENGINE = "SkyyPlayz/Mythos-Engine"
 OPS = "SkyyPlayz/Mythos-Ops"
@@ -82,6 +85,39 @@ def logical_lines(run):
     if cur:
         out.append(cur)
     return out
+
+def _grep_early_exit_flag(argv_text):
+    """Return the early-exit flag if grep argv uses -q/--quiet/-m/--max-count before operands."""
+    tokens = argv_text.split()
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if t == "--" or not t.startswith("-") or t == "-":
+            return None
+        if t == "--quiet" or t.startswith("--quiet="):
+            return t
+        if t == "--max-count" or t.startswith("--max-count="):
+            return t
+        if t.startswith("--"):
+            i += 1
+            continue
+        # Short cluster: -q, -qxF, -x -q, -Fq, -m, -m1, -im
+        body = t[1:]
+        if "q" in body or "m" in body:
+            return t
+        i += 1
+    return None
+
+
+def early_exit_pipe_grep(line):
+    """If a pipeline stage is grep with an early-exit flag, return (flag, stage), else None."""
+    for m in re.finditer(r"\|\s*grep(?:\s+|$)", line):
+        rest = line[m.end():]
+        stage = re.split(r"\s*\|\s*", rest, maxsplit=1)[0]
+        flag = _grep_early_exit_flag(stage)
+        if flag:
+            return flag, "grep " + stage
+    return None
 
 
 def between(text, begin, end):
@@ -488,6 +524,10 @@ class Wiring(unittest.TestCase):
         self.assertIn('sleep "$(( try * 3 + RANDOM % 5 ))"', t)
         self.assertIn("MYTHOS_DATA_ROOT", str(step(LANES_DOC, "gate", "persist")["env"]))
         self.assertNotRegex(t, r"engine_state\.py apply [^\n]*--root")  # Engine's apply has no --root
+        # S17: git log is captured (a failure is an explicit error), then matched off the text
+        self.assertIn("if ! subjects=$(git -C state log -n 50 --format=%s FETCH_HEAD); then", t)
+        self.assertIn("::error title=Persist::cannot read landed-push subjects from $STATE_BRANCH", t)
+        self.assertNotRegex(t, r"git -C state log[^\n]*\|\s*grep")
 
     def test_publish_and_chain_wait_for_pushed_state(self):
         self.assertIn("needs.gate.outputs.pushed == 'true'", cond(self.jobs["publish"]))
@@ -1104,10 +1144,48 @@ class PersistBehaviour(Sandboxed):
         self.assertFalse(self.origin_has("data/plan/new.json"))
 
     def test_no_early_exit_grep_in_a_pipeline(self):
-        for doc in (LANES_DOC, KEYLESS_DOC):
-            for name, _, st in all_steps(doc):
+        # Widened: -q in any short cluster, -q as its own token, --quiet, -m / --max-count.
+        self.assertIsNotNone(early_exit_pipe_grep('git log | grep -qxF -- "$msg"'))
+        self.assertIsNotNone(early_exit_pipe_grep('git log | grep -x -q -- "$msg"'))
+        self.assertIsNotNone(early_exit_pipe_grep('git log | grep --quiet -xF -- "$msg"'))
+        self.assertIsNotNone(early_exit_pipe_grep('git log | grep -m1 -xF -- "$msg"'))
+        self.assertIsNotNone(early_exit_pipe_grep('git log | grep --max-count=1 -xF -- "$msg"'))
+        self.assertIsNone(early_exit_pipe_grep('git log | grep -xF -- "$msg" >/dev/null'))
+        self.assertIsNone(early_exit_pipe_grep(r"""printf '%s\n' "$names" | grep -x gate >/dev/null"""))
+        # Scope: every workflow this file guards (lanes and keyless). ci.yml stays out of this
+        # rule: the only pipe-into-grep there (`git ls-files | grep -Pq` in the illegal-filename
+        # check) is preexisting, runs in a default bash -e step with no pipefail (a SIGPIPE cannot
+        # fail the step), and rewriting it would be a drive-by on a protected path beyond this
+        # PR's +1 lint-step carve-out. ci.yml is still in this file's scope for test_ci_runs_this_file.
+        docs = {LANES: LANES_DOC, KEYLESS: KEYLESS_DOC}
+        self.assertEqual(
+            [os.path.basename(p) for p in GUARDED_WORKFLOWS],
+            ["mythos-engine-lanes.yml", "mythos-engine-keyless.yml"],
+        )
+        for path in GUARDED_WORKFLOWS:
+            for name, _, st in all_steps(docs[path]):
                 for line in logical_lines(str(st.get("run") or "")):
-                    self.assertNotRegex(line, r"\|\s*grep\s+-[A-Za-z]*q", (name, st.get("name"), line))
+                    hit = early_exit_pipe_grep(line)
+                    self.assertIsNone(hit, (os.path.basename(path), name, st.get("name"), hit, line))
+
+    def test_a_git_log_failure_in_the_landed_check_fails_loud(self):
+        # A git log failure must not read as "not landed": that would re-apply and (with one
+        # rejection already used) push on the next try. Fail the step with an explicit error.
+        self.hook(reject=1)
+        real = shutil.which("git")
+        wrapper = os.path.join(self.box.bin, "git")
+        with open(wrapper, "w") as f:
+            f.write(f'#!/bin/bash\nfor a in "$@"; do\n'
+                    f'  if [ "$a" = log ]; then echo "fatal: bad FETCH_HEAD" >&2; exit 128; fi\n'
+                    f'done\nexec {real} "$@"\n')
+        os.chmod(wrapper, 0o755)
+        self.addCleanup(lambda: os.path.exists(wrapper) and os.unlink(wrapper))
+        self.write("fix")
+        r, out = self.pack_and_persist("fix")
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("::error title=Persist::cannot read landed-push subjects", r.stdout)
+        self.assertFalse(self.origin_has("data/fix/new.json"))
+        self.assertNotEqual(out.get("pushed"), "true")
 
     def test_a_push_that_landed_but_reported_failure_is_not_applied_twice(self):
         real = shutil.which("git")
