@@ -1413,6 +1413,7 @@ contextBridge.exposeInMainWorld('api', {
       cardTitle?: string;
       cardFoot?: string;
       cardKind?: 'analysis' | 'lesson' | 'action';
+      incomplete?: true;
     }>) =>
       ipcRenderer.invoke('agentSession:appendTurns', { sessionId, turns }),
   },

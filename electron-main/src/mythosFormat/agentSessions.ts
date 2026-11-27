@@ -47,6 +47,13 @@ export interface SessionTurn {
    * set this — MiniAgentChat renders cards only when cardKind is present.
    */
   cardKind?: 'analysis' | 'lesson' | 'action';
+  /**
+   * Structural flag: this agent turn is a kept partial of a reply that was cut
+   * off (failure path). Persisted in the card-meta line, never in the body, so
+   * reply text can neither forge it nor lose it to a trailing newline. Model
+   * history drops flagged turns; the feed still shows them.
+   */
+  incomplete?: true;
 }
 
 export interface AgentSessionFile {
@@ -116,6 +123,8 @@ export function sanitizeSessionTurn(turn: SessionTurn): SessionTurn {
     next.cardTitle = turn.cardTitle;
     if (turn.cardFoot) next.cardFoot = turn.cardFoot;
   }
+  // Only a strict `true` on an agent turn counts; anything else is dropped.
+  if (turn.role === 'agent' && (turn.incomplete as unknown) === true) next.incomplete = true;
   return next;
 }
 
@@ -158,11 +167,12 @@ export function serializeSessionFile(session: AgentSessionFile): string {
   for (const turn of session.turns) {
     const safe = sanitizeSessionTurn(turn);
     body.push(`<!-- mythos:turn ${safe.role} ${safe.at} -->`);
-    if (safe.cardTitle || safe.cardKind) {
-      const meta: Record<string, string> = {};
+    if (safe.cardTitle || safe.cardKind || safe.incomplete) {
+      const meta: Record<string, string | boolean> = {};
       if (safe.cardTitle) meta.cardTitle = safe.cardTitle;
       if (safe.cardFoot) meta.cardFoot = safe.cardFoot;
       if (safe.cardKind) meta.cardKind = safe.cardKind;
+      if (safe.incomplete) meta.incomplete = true;
       body.push(`<!-- mythos:card-meta ${JSON.stringify(meta)} -->`);
     }
     body.push(safe.role === 'user' ? '**You:**' : '**Agent:**', '');
@@ -187,6 +197,7 @@ export function parseSessionFile(raw: string, relPath = ''): AgentSessionFile | 
     cardTitle?: string;
     cardFoot?: string;
     cardKind?: SessionTurn['cardKind'];
+    incomplete?: true;
     /** True once any non-meta body line has been accepted — blocks late card-meta. */
     bodyStarted: boolean;
   } | null = null;
@@ -216,6 +227,7 @@ export function parseSessionFile(raw: string, relPath = ''): AgentSessionFile | 
           if (typeof parsed.cardFoot === 'string') current.cardFoot = parsed.cardFoot;
           const kind = sanitizeCardKind(parsed.cardKind);
           if (kind) current.cardKind = kind;
+          if (parsed.incomplete === true) current.incomplete = true;
         } catch {
           // malformed card-meta line — ignore, degrade to plain bubble
         }
@@ -232,6 +244,7 @@ export function parseSessionFile(raw: string, relPath = ''): AgentSessionFile | 
         while (buf.length > 0 && buf[buf.length - 1].trim() === '') buf.pop();
         const turn: SessionTurn = { role: current.role, at: current.at, text: buf.join('\n') };
         if (current.cardKind) turn.cardKind = current.cardKind;
+        if (current.incomplete && current.role === 'agent') turn.incomplete = true;
         if (current.cardTitle) {
           turn.cardTitle = current.cardTitle;
           if (current.cardFoot) turn.cardFoot = current.cardFoot;

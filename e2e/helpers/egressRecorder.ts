@@ -202,6 +202,52 @@ export async function patchMainProcessEgress(app: ElectronApplication): Promise<
 }
 
 /**
+ * Socket-level half of `patchMainProcessEgress` for specs that DO talk to a
+ * loopback fake provider through the real main-process fetch/http stack
+ * (partner-real-provider.spec.ts). It leaves fetch / http(s) / electron.net
+ * alone — the full patch would refuse the very provider call under test — and
+ * patches only `net.Socket.prototype.connect`: every connect is recorded to
+ * the same `__sky10604MainEgress` list (`socket host:port`), and any
+ * non-loopback, non-pipe target is refused. A fetch reference captured before
+ * this patch still has to open a socket, so a cloud-bound request cannot slip
+ * past it.
+ */
+export async function patchMainProcessSocketEgress(app: ElectronApplication): Promise<void> {
+  await app.evaluate(async () => {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const g = globalThis as any;
+    if (g.__sky10604MainEgress) return; // a full or socket patch is already live
+    const attempts: string[] = [];
+    g.__sky10604MainEgress = attempts;
+    const netModule = (process as any).getBuiltinModule('net');
+    const origConnect = netModule.Socket.prototype.connect;
+    netModule.Socket.prototype.connect = function connectPatched(this: any, ...args: any[]) {
+      const a = Array.isArray(args[0]) ? args[0] : args;
+      let host = 'localhost';
+      let port: unknown = '?';
+      let isPipe = false;
+      if (typeof a[0] === 'object' && a[0] !== null) {
+        if (a[0].path) isPipe = true;
+        host = a[0].host ?? 'localhost';
+        port = a[0].port ?? a[0].path ?? '?';
+      } else if (typeof a[0] === 'number' || typeof a[0] === 'string') {
+        port = a[0];
+        if (typeof a[1] === 'string') host = a[1];
+        if (typeof a[0] === 'string' && Number.isNaN(Number(a[0]))) isPipe = true;
+      }
+      const loopback = isPipe || host === 'localhost' || host === '127.0.0.1' || host === '::1';
+      attempts.push(`socket ${host}:${String(port)}`);
+      if (!loopback) {
+        this.destroy(new Error(`egress blocked by e2e harness: ${host}:${String(port)}`));
+        return this;
+      }
+      return origConnect.apply(this, args);
+    };
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+  });
+}
+
+/**
  * Targets that identify an AI provider — cloud hosts and the default local
  * model endpoints (provider.ts DEFAULT_BASE_URLS: Ollama 11434, LM Studio
  * 1234, llama.cpp 8080).

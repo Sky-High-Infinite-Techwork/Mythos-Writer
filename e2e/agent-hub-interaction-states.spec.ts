@@ -229,15 +229,22 @@ test('error state: failed provider response keeps the user message; resend recov
   await expect(page.getByTestId('ahp-partner-chat-error')).toContainText(/network error/i);
   await expect(page.locator('.trp-bubble--user', { hasText: prompt })).toBeVisible();
 
-  fake.setMode({ kind: 'stream', chunks: ['Coach reply after retry.'], chunkDelayMs: 900 });
+  // Hold the retry's stream open so it is in flight for exactly as long as the
+  // assertions below need: no wall-clock race against a chunk delay.
+  fake.setMode({ kind: 'stream', chunks: ['Coach reply after retry.'], holdOpen: true });
+  const hitsBeforeRetry = fake.hits();
   await page.getByTestId('ahp-partner-chat-retry').click();
 
   // While the retry is in flight the saved user turn must not be drawn twice
   // (once from the feed, once as the optimistic pending bubble).
+  await expect.poll(() => fake.hits(), { timeout: 8_000 }).toBe(hitsBeforeRetry + 1);
   await expect(page.getByTestId('ahp-partner-typing')).toBeVisible({ timeout: 3_000 });
   // One-shot count (not a retrying matcher): the duplicate would otherwise
-  // "heal" once the delayed stream finishes and mask the bug.
+  // "heal" once the stream finishes and mask the bug. The typing indicator
+  // renders in the same commit as the optimistic bubble, and the held stream
+  // cannot finish before release(), so this count is taken mid-flight.
   expect(await page.locator('.trp-bubble--user', { hasText: prompt }).count()).toBe(1);
+  fake.release();
 
   await expect(page.locator('.trp-bubble--agent', { hasText: 'Coach reply after retry.' })).toBeVisible({ timeout: 15_000 });
   await expect(page.locator('.trp-bubble--user', { hasText: prompt })).toHaveCount(1);

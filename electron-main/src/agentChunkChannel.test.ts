@@ -77,11 +77,11 @@ function channelMismatches(src: string): string[] {
     } else if (requireChunkRequestId && !/\brequestId\b/.test(chunks[0]!.payload)) {
       failures.push(`${fn}: chunk payload is missing requestId`);
     }
-    const foreign = sends.filter(
-      (s) => s.channel.endsWith(':chunk') && !s.channel.startsWith(`${prefix}:`),
-    );
+    // Any event this handler sends (chunk, stream-start, error) must stay in
+    // its own channel family.
+    const foreign = sends.filter((s) => !s.channel.startsWith(`${prefix}:`));
     for (const s of foreign) {
-      failures.push(`${fn}: sent ${s.channel} (must stay on ${prefix}:chunk)`);
+      failures.push(`${fn}: sent ${s.channel} (must stay on ${prefix}:*)`);
     }
   }
   return failures;

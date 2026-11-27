@@ -21,6 +21,16 @@ import {
   customProviderSeed,
   type FakeAiProvider,
 } from '../helpers/fakeAiProvider';
+import {
+  startEgressProxy,
+  proxyLaunchArgs,
+  patchMainProcessEgress,
+  patchMainProcessSocketEgress,
+  readMainProcessEgress,
+  AI_PROVIDER_PATTERN,
+  CHROMIUM_ENGINE_PATTERN,
+  type EgressProxy,
+} from '../helpers/egressRecorder';
 
 const MAIN_JS = path.resolve(__dirname, '../../out/main/main.js');
 
@@ -117,10 +127,12 @@ function writeSettings(userData: string, vaultDir: string, notesDir: string, fak
   );
 }
 
-async function launchApp(userData: string): Promise<ElectronApplication> {
+async function launchApp(userData: string, proxy: EgressProxy): Promise<ElectronApplication> {
   const extraArgs = process.platform !== 'darwin' && !process.env.DISPLAY ? ['--headless'] : [];
   return electron.launch({
-    args: [MAIN_JS, `--user-data-dir=${userData}`, '--no-sandbox', ...extraArgs],
+    // Every Chromium-stack request is forced through the blocking egress
+    // proxy (loopback included), so nothing can leave unobserved.
+    args: [MAIN_JS, `--user-data-dir=${userData}`, '--no-sandbox', ...proxyLaunchArgs(proxy), ...extraArgs],
     timeout: 60_000,
   });
 }
@@ -150,9 +162,39 @@ function assertLoopbackOnly(fake: FakeAiProvider): void {
   }
 }
 
+/**
+ * The fake's request log only shows hosts that REACHED the fake, so it cannot
+ * see a second request to a cloud host. These assertions read the egress
+ * recorders instead: nothing through the Chromium stack (proxy) and no socket
+ * in electron-main to anything but loopback.
+ */
+async function assertNoEgressBeyondLoopback(
+  proxy: EgressProxy,
+  target: ElectronApplication,
+  allowedPorts: number[],
+): Promise<string[]> {
+  const chromium = proxy.records.map((r) => `${r.method} ${r.target}`);
+  expect(chromium.filter((a) => AI_PROVIDER_PATTERN.test(a))).toEqual([]);
+  expect(chromium.filter((a) => !CHROMIUM_ENGINE_PATTERN.test(a))).toEqual([]);
+  const main = await readMainProcessEgress(target);
+  const sockets = main.filter((a) => a.startsWith('socket '));
+  // Not a socket: fetch / http(s) / electron.net attempts (full patch only).
+  expect(main.filter((a) => !a.startsWith('socket '))).toEqual([]);
+  // Every socket is loopback or a pipe...
+  expect(sockets.filter((a) => !/^socket (localhost|127\.0\.0\.1|::1):/.test(a))).toEqual([]);
+  // ...and any TCP loopback port is one the spec expects (the fake provider).
+  const unexpectedPorts = sockets.filter((a) => {
+    const m = /:(\d+)$/.exec(a);
+    return m !== null && !allowedPorts.includes(Number(m[1]));
+  });
+  expect(unexpectedPorts).toEqual([]);
+  return main;
+}
+
 test.describe.configure({ mode: 'serial' });
 
 let fake: FakeAiProvider;
+let proxy: EgressProxy;
 let userData: string;
 let vaultDir: string;
 let notesDir: string;
@@ -166,7 +208,9 @@ test.beforeAll(async () => {
   notesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-prp-notes-'));
   seedVault(vaultDir, notesDir);
   writeSettings(userData, vaultDir, notesDir, fake, true);
-  app = await launchApp(userData);
+  proxy = await startEgressProxy();
+  app = await launchApp(userData, proxy);
+  await patchMainProcessSocketEgress(app);
   page = await app.firstWindow();
   page.on('dialog', (d) => void d.accept().catch(() => undefined));
   await page.waitForLoadState('domcontentloaded');
@@ -176,6 +220,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await app?.close().catch(() => undefined);
   await fake?.close().catch(() => undefined);
+  await proxy?.close().catch(() => undefined);
   fs.rmSync(userData, { recursive: true, force: true });
   fs.rmSync(vaultDir, { recursive: true, force: true });
   fs.rmSync(notesDir, { recursive: true, force: true });
@@ -261,6 +306,22 @@ test('Cancel mid-stream closes the provider socket', async () => {
   expect(fake.sentDone()).toBe(false);
 });
 
+test('the whole partner session made no egress beyond the loopback fake provider', async () => {
+  await assertNoEgressBeyondLoopback(proxy, app, [fake.port]);
+  // The recorder is live: a deliberate non-loopback connect from main is
+  // recorded and refused, so the empty result above is not vacuous.
+  const refused = await app.evaluate(async () => {
+    const net = (process as unknown as { getBuiltinModule: (n: string) => typeof import('net') }).getBuiltinModule('net');
+    return new Promise<string>((resolve) => {
+      const sock = new net.Socket();
+      sock.on('error', (err) => resolve(String(err.message)));
+      sock.connect({ host: '203.0.113.9', port: 9 });
+    });
+  });
+  expect(refused).toContain('egress blocked by e2e harness: 203.0.113.9:9');
+  expect(await readMainProcessEgress(app)).toContain('socket 203.0.113.9:9');
+});
+
 test.describe('AI master off — isolated profile', () => {
   test('master AI off sends zero provider HTTP requests (real agentBrainstorm IPC)', async () => {
     const offFake = await startFakeAiProvider({ kind: 'stream', chunks: ['nope'] });
@@ -269,7 +330,9 @@ test.describe('AI master off — isolated profile', () => {
     const notes = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-prp-off-n-'));
     seedVault(vault, notes);
     writeSettings(ud, vault, notes, offFake, false);
-    const offApp = await launchApp(ud);
+    const offProxy = await startEgressProxy();
+    const offApp = await launchApp(ud, offProxy);
+    await patchMainProcessEgress(offApp);
     try {
       const pg = await offApp.firstWindow();
       await pg.waitForLoadState('domcontentloaded');
@@ -288,8 +351,15 @@ test.describe('AI master off — isolated profile', () => {
       for (const host of offFake.requestHosts()) {
         expect(host).toMatch(/^127\.0\.0\.1:\d+$/);
       }
+      // Beyond the fake's own log: no request to ANY host, and not a single
+      // provider-shaped target on either network layer (Chromium + Node).
+      // The full patch also refuses fetch / http(s), so those must be empty.
+      const main = await assertNoEgressBeyondLoopback(offProxy, offApp, []);
+      expect(main.filter((a) => AI_PROVIDER_PATTERN.test(a))).toEqual([]);
+      expect(main.filter((a) => a.includes(`:${offFake.port}`))).toEqual([]);
     } finally {
       await offApp.close();
+      await offProxy.close();
       await offFake.close();
       fs.rmSync(ud, { recursive: true, force: true });
       fs.rmSync(vault, { recursive: true, force: true });

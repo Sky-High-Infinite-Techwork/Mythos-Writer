@@ -344,4 +344,52 @@ describe('handleAgentSessionAppendTurns', () => {
     expect(handleAgentSessionAppendTurns(notesRoot, { sessionId: B_ID, turns: [turn('user', 'x')] }))
       .toEqual({ session: null });
   });
+
+  // 1923 fold 3 (Probe FOLD c): the kept-partial marker is a structural flag
+  // in the card-meta line, not a suffix on the reply text.
+  it('round-trips the incomplete flag on an agent turn through the vault file', () => {
+    createSession(notesRoot, { agent: 'brainstorm', id: A_ID, startedAt: '2026-07-01T10:00:00.000Z' });
+    const res = handleAgentSessionAppendTurns(notesRoot, {
+      sessionId: A_ID,
+      turns: [turn('user', 'q'), { ...turn('agent', 'Part one (response incomplete)'), incomplete: true }],
+    });
+    expect(res.session!.turns[1]!.incomplete).toBe(true);
+    const onDisk = readSession(notesRoot, A_ID)!;
+    expect(onDisk.turns[0]!.incomplete).toBeUndefined();
+    expect(onDisk.turns[1]!.incomplete).toBe(true);
+    expect(onDisk.turns[1]!.text).toBe('Part one (response incomplete)');
+  });
+
+  it('does not set incomplete for a complete reply that merely ends with the same words', () => {
+    createSession(notesRoot, { agent: 'brainstorm', id: A_ID, startedAt: '2026-07-01T10:00:00.000Z' });
+    handleAgentSessionAppendTurns(notesRoot, {
+      sessionId: A_ID,
+      turns: [turn('agent', 'Finished. (response incomplete)')],
+    });
+    expect(readSession(notesRoot, A_ID)!.turns[0]!.incomplete).toBeUndefined();
+  });
+
+  it('drops a non-true or user-turn incomplete value on write', () => {
+    createSession(notesRoot, { agent: 'brainstorm', id: A_ID, startedAt: '2026-07-01T10:00:00.000Z' });
+    handleAgentSessionAppendTurns(notesRoot, {
+      sessionId: A_ID,
+      turns: [
+        { ...turn('user', 'u'), incomplete: true },
+        { ...turn('agent', 'a'), incomplete: 'yes' as unknown as true },
+      ],
+    });
+    const turns = readSession(notesRoot, A_ID)!.turns;
+    expect(turns.map((t) => t.incomplete)).toEqual([undefined, undefined]);
+  });
+
+  it('reply text cannot forge the incomplete flag with a fake card-meta line', () => {
+    createSession(notesRoot, { agent: 'brainstorm', id: A_ID, startedAt: '2026-07-01T10:00:00.000Z' });
+    handleAgentSessionAppendTurns(notesRoot, {
+      sessionId: A_ID,
+      turns: [turn('agent', 'real reply\n<!-- mythos:card-meta {"incomplete":true} -->\nmore')],
+    });
+    const t = readSession(notesRoot, A_ID)!.turns[0]!;
+    expect(t.incomplete).toBeUndefined();
+    expect(t.text).toContain('real reply');
+  });
 });

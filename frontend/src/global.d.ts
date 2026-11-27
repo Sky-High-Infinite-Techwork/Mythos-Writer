@@ -75,6 +75,8 @@ interface AgentSessionTurn {
    * set this — renderers show cards only when cardKind is present.
    */
   cardKind?: 'analysis' | 'lesson' | 'action';
+  /** Kept partial of a cut-off reply (set only by the failure path). */
+  incomplete?: true;
 }
 interface AgentSessionFile {
   id: string;

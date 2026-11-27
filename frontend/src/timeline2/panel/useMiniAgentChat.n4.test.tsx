@@ -12,6 +12,7 @@ import {
   STALL_WARNING_MS,
   RESPONSE_INCOMPLETE_SUFFIX,
   turnsForModelHistory,
+  feedEndsWithUserPrompt,
 } from './useMiniAgentChat';
 import { encodeCoachCard } from '../../coach/coachMessages';
 
@@ -380,11 +381,71 @@ describe('useMiniAgentChat N4 cancel/stall main abort', () => {
     const turns: AgentSessionTurn[] = [
       { role: 'user', text: 'a', at: '1' },
       { role: 'user', text: 'b', at: '2' },
-      { role: 'agent', text: `partial ${RESPONSE_INCOMPLETE_SUFFIX}`, at: '3' },
+      { role: 'agent', text: `partial ${RESPONSE_INCOMPLETE_SUFFIX}`, at: '3', incomplete: true },
       { role: 'agent', text: 'final', at: '4' },
     ];
     const history = turnsForModelHistory(turns, null);
     expect(history.map((t) => t.text)).toEqual(['b', 'final']);
+  });
+
+  // Probe FOLD (c): detection keys on the structural flag, not on prose.
+  it('turnsForModelHistory keeps a finished reply that ends with the incomplete wording (no false positive)', () => {
+    const turns: AgentSessionTurn[] = [
+      { role: 'user', text: 'q', at: '1' },
+      { role: 'agent', text: `Here is the summary you asked for ${RESPONSE_INCOMPLETE_SUFFIX}`, at: '2' },
+      { role: 'user', text: 'thanks', at: '3' },
+    ];
+    expect(turnsForModelHistory(turns, null).map((t) => t.text)).toEqual([
+      'q',
+      `Here is the summary you asked for ${RESPONSE_INCOMPLETE_SUFFIX}`,
+    ]);
+  });
+
+  it('turnsForModelHistory drops a flagged partial whose text no longer ends with the suffix (no false negative)', () => {
+    const turns: AgentSessionTurn[] = [
+      { role: 'user', text: 'q', at: '1' },
+      { role: 'agent', text: `cut off ${RESPONSE_INCOMPLETE_SUFFIX}\n`, at: '2', incomplete: true },
+      { role: 'agent', text: 'reflowed partial', at: '3', incomplete: true },
+      { role: 'agent', text: 'final', at: '4' },
+      { role: 'user', text: 'next', at: '5' },
+    ];
+    expect(turnsForModelHistory(turns, null).map((t) => t.text)).toEqual(['q', 'final']);
+  });
+
+  it('feedEndsWithUserPrompt skips a flagged partial but not a look-alike finished reply', () => {
+    const flagged: AgentSessionTurn[] = [
+      { role: 'user', text: 'ask', at: '1' },
+      { role: 'agent', text: `bit ${RESPONSE_INCOMPLETE_SUFFIX}\n`, at: '2', incomplete: true },
+    ];
+    expect(feedEndsWithUserPrompt(flagged, 'ask')).toBe(true);
+    const lookAlike: AgentSessionTurn[] = [
+      { role: 'user', text: 'ask', at: '1' },
+      { role: 'agent', text: `done ${RESPONSE_INCOMPLETE_SUFFIX}`, at: '2' },
+    ];
+    expect(feedEndsWithUserPrompt(lookAlike, 'ask')).toBe(false);
+  });
+
+  it('the failure path writes the partial with the incomplete flag, and Retry history drops it', async () => {
+    const api = installApi();
+    let fail: () => void = () => {};
+    const invoke = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = () => reject(new Error('cut off')); }))
+      .mockResolvedValueOnce('full answer');
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+    act(() => { void result.current.send('flag me'); });
+    await act(async () => { await Promise.resolve(); });
+    act(() => { api.fireStreamStart('req-flag'); });
+    act(() => { api.fireChunk('Part one', 'req-flag'); });
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    const written = api.appendTurns.mock.calls.flatMap((c) => c[1] as AgentSessionTurn[]);
+    expect(written.filter((t) => t.incomplete === true).map((t) => t.text)).toEqual([`Part one ${RESPONSE_INCOMPLETE_SUFFIX}`]);
+    expect(written.filter((t) => t.role === 'user' && t.incomplete)).toHaveLength(0);
+
+    await act(async () => { result.current.retryLast(); await Promise.resolve(); await Promise.resolve(); });
+    const retryHistory = invoke.mock.calls[1]?.[1] as { role: string; content: string }[];
+    expect(retryHistory.some((h) => h.content.includes('Part one'))).toBe(false);
   });
 
   it('fail then send a different prompt does not duplicate users in invoke history', async () => {
@@ -901,5 +962,82 @@ describe('useMiniAgentChat — failed-exchange tracking (SKY-1923 gate)', () => 
     await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
 
     expect(String(result.current.error)).toMatch(/partial reply kept above/i);
+  });
+  // Shield F2 / Critic M4: an exchange whose origin could not be verified
+  // (no active chat when it was sent) must never be treated as belonging to
+  // the chat that is open now.
+  it('M4: a failure with an undefined origin never arms Retry and retryLast never resends it', async () => {
+    // No agentSessions API → the store never gets an active session id.
+    const api = installApi();
+    delete (window.api as unknown as Record<string, unknown>).agentSessions;
+    const invoke = vi.fn().mockRejectedValue(new Error('provider down'));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.store.activeSessionId).toBeNull();
+
+    await act(async () => { await result.current.send('who owns me'); await Promise.resolve(); await Promise.resolve(); });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(result.current.canRetry).toBe(false);
+    expect(result.current.error).toBeNull();
+
+    // Even called directly (not via the hidden button) it must not resend.
+    await act(async () => { result.current.retryLast(); await Promise.resolve(); await Promise.resolve(); });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(api.appendTurns).not.toHaveBeenCalled();
+  });
+
+  it('M4: Cancel with an undefined origin does not arm Retry or show a cancel error', async () => {
+    installApi();
+    delete (window.api as unknown as Record<string, unknown>).agentSessions;
+    const invoke = vi.fn(() => new Promise<string>(() => { /* hang */ }));
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { void result.current.send('hang unverified'); });
+    await act(async () => { await Promise.resolve(); });
+    act(() => { result.current.cancel(); });
+    expect(result.current.canRetry).toBe(false);
+    expect(result.current.error).toBeNull();
+    await act(async () => { result.current.retryLast(); await Promise.resolve(); });
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  // Critic M8: Cancel's fallback exchange (no in-flight record) must carry the
+  // active session id, not undefined, so Retry arms for this chat.
+  it('M8: Cancel with an empty inFlightRef records the active session id as origin', async () => {
+    const api = installApi();
+    const invoke = vi.fn()
+      .mockResolvedValueOnce('first reply')
+      .mockResolvedValueOnce('second reply');
+    const { result } = renderHook(() => useMiniAgentChat('brainstorm', invoke));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    const activeId = result.current.store.activeSessionId;
+    expect(activeId).toBeTruthy();
+
+    // Capture Cancel from a render where a prompt is pending, then let the
+    // exchange finish: inFlightRef is now empty but this Cancel still runs.
+    let finish: (v: string) => void = () => {};
+    invoke.mockReset();
+    invoke.mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
+    invoke.mockResolvedValueOnce('retried reply');
+    act(() => { void result.current.send('late cancel'); });
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.busy).toBe(true);
+    const staleCancel = result.current.cancel;
+    await act(async () => { finish('done'); await Promise.resolve(); await Promise.resolve(); });
+    expect(result.current.busy).toBe(false);
+
+    act(() => { staleCancel(); });
+    expect(result.current.canRetry).toBe(true);
+    expect(result.current.error).toMatch(/cancelled/i);
+
+    api.appendTurns.mockClear();
+    await act(async () => { result.current.retryLast(); await Promise.resolve(); await Promise.resolve(); });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke.mock.calls[1]?.[0]).toBe('late cancel');
+    // Retry's write is pinned to the session the exchange belongs to.
+    const ownerId = result.current.store.resolveSessionId(activeId!);
+    expect(api.appendTurns.mock.calls.length).toBeGreaterThan(0);
+    expect(api.appendTurns.mock.calls.every((c) => c[0] === ownerId)).toBe(true);
   });
 });

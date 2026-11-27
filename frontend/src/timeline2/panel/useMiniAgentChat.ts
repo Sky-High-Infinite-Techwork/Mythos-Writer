@@ -70,9 +70,14 @@ type FailedExchange = {
   userPersisted: boolean;
 };
 
-/** A kept partial reply (failure path) — never sent back to the model. */
+/**
+ * A kept partial reply (failure path) — never sent back to the model. Keyed on
+ * the structural `incomplete` flag, not on the user-visible suffix: a finished
+ * reply that happens to end with the same words is kept, and a partial whose
+ * text was reflowed (trailing newline, edited tail) is still dropped.
+ */
 function isIncompleteAgentTurn(turn: AgentSessionTurn): boolean {
-  return turn.role === 'agent' && turn.text.endsWith(RESPONSE_INCOMPLETE_SUFFIX);
+  return turn.role === 'agent' && turn.incomplete === true;
 }
 
 /**
@@ -420,8 +425,12 @@ export function useMiniAgentChat(agent: 'brainstorm' | 'archive', invoke: MiniCh
           role: 'agent',
           text: `${partialSafe} ${RESPONSE_INCOMPLETE_SUFFIX}`,
           at: new Date().toISOString(),
+          incomplete: true,
         });
       }
+      // Vault rollback note: nothing is rolled back on failure. The user turn
+      // and the kept partial (flagged `incomplete`) stay in the feed; only
+      // model history drops the partial (turnsForModelHistory).
       // Mark the user turn saved only once the write actually resolved — a
       // rejected save leaves it unsaved so Retry/resend appends it again.
       let userPersisted = userAlreadyInFeed;

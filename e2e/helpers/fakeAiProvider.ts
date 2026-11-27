@@ -11,6 +11,12 @@ export type FakeAiStreamMode = {
   chunks: string[];
   /** Delay between SSE chunks (ms). */
   chunkDelayMs?: number;
+  /**
+   * Keep the response open after the last chunk until `release()` is called
+   * (or the client aborts). Lets a spec assert while a stream is guaranteed
+   * to still be in flight, with no wall-clock race against `chunkDelayMs`.
+   */
+  holdOpen?: boolean;
 };
 
 export type FakeAiHttpMode = {
@@ -38,6 +44,8 @@ export interface FakeAiProvider {
   sawAbortClose: () => boolean;
   /** Whether a terminal `[DONE]` SSE line was written. */
   sentDone: () => boolean;
+  /** Finish every stream parked by `holdOpen` (sends `[DONE]`). */
+  release: () => void;
   setMode: (mode: FakeAiMode) => void;
   close: () => Promise<void>;
 }
@@ -73,6 +81,8 @@ export function startFakeAiProvider(initialMode: FakeAiMode = {
   const hosts: string[] = [];
   let abortClose = false;
   let doneSent = false;
+  let released = false;
+  const parked = new Set<() => void>();
 
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
@@ -118,6 +128,14 @@ export function startFakeAiProvider(initialMode: FakeAiMode = {
                 await delay(mode.chunkDelayMs);
               }
             }
+            if (mode.holdOpen && !released) {
+              await new Promise<void>((resume) => {
+                parked.add(resume);
+                res.on('close', resume);
+              });
+              parked.clear();
+              if (requestAborted) return;
+            }
             if (!res.writableEnded) {
               res.write('data: [DONE]\n\n');
               doneSent = true;
@@ -157,10 +175,15 @@ export function startFakeAiProvider(initialMode: FakeAiMode = {
         requestHosts: () => [...hosts],
         sawAbortClose: () => abortClose,
         sentDone: () => doneSent,
+        release: () => {
+          released = true;
+          for (const resume of [...parked]) resume();
+        },
         setMode: (next) => {
           mode = next;
           abortClose = false;
           doneSent = false;
+          released = false;
         },
         close: () => new Promise<void>((r) => server.close(() => r())),
       });
