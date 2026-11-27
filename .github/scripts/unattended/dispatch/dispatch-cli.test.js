@@ -290,3 +290,36 @@ test('dispatch-cli canary-ref fatal logs and artifacts use only allowlisted fiel
     console.error = origErr;
   }
 });
+
+test('dispatch-cli canary-ref second switch read failure is canary_fatal exit 1, not abort', async () => {
+  const origArgv = process.argv;
+  process.argv = ['node', 'dispatch-cli.js', 'canary-ref'];
+  const origErr = console.error;
+  console.error = () => {};
+  let reads = 0;
+  let created = 0;
+  try {
+    await withCanaryCliEnv({}, async (outcomePath) => {
+      const code = await main({
+        readDispatchSwitchesFn: async () => {
+          reads += 1;
+          return reads === 1 ? { ok: true, enabled: true } : { ok: false, enabled: false };
+        },
+        createDispatchClientsFn: () => mockCombinedClient({
+          createRefImpl: async () => {
+            created += 1;
+            return { ok: true };
+          },
+        }),
+      });
+      assert.equal(code, 1);
+      assert.equal(created, 0);
+      const outcome = readOutcome(outcomePath);
+      assert.equal(outcome.kind, 'canary_fatal');
+      assert.equal(outcome.reason, 'switch_read');
+    });
+  } finally {
+    process.argv = origArgv;
+    console.error = origErr;
+  }
+});

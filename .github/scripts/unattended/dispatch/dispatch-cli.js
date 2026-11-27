@@ -121,6 +121,11 @@ async function main(options = {}) {
       return 0;
     }
     const sw2 = await reReadSwitch();
+    if (!sw2 || !sw2.ok) {
+      console.error('canary: switch re-read failed');
+      writeCanaryOutcome({ kind: 'canary_fatal', index, reason: 'switch_read' });
+      return 1;
+    }
     if (!actWritesEnabledFn(sw2)) {
       console.log(JSON.stringify({ kind: 'canary_abort', index, reason: 'switch_flipped' }));
       writeCanaryOutcome({ kind: 'canary_abort', index, reason: 'switch_flipped' });
