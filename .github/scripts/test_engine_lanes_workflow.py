@@ -87,14 +87,30 @@ def logical_lines(run):
         out.append(cur)
     return out
 
-_GREPS = ("grep", "egrep", "fgrep")
+_GREPS = ("grep", "egrep", "fgrep", "rg")
 _GREP_ARG_OPTS = ("-e", "-f", "-A", "-B", "-C", "-d", "-D", "--regexp", "--file", "--context", "--after-context",
                   "--before-context", "--directories", "--devices", "--label", "--include", "--exclude",
                   "--exclude-dir", "--color", "--colour", "--binary-files")
 _GREP_EXIT_LONG = ("--quiet", "--silent", "--max-count", "--files-with-matches", "--files-without-match")
+# every GNU grep long option: getopt takes any unambiguous prefix (--qui, --max=1), so a prefix is read as the option
+_GREP_LONG = _GREP_EXIT_LONG + (
+    "--after-context", "--basic-regexp", "--before-context", "--binary", "--binary-files", "--byte-offset", "--color",
+    "--colour", "--context", "--count", "--dereference-recursive", "--devices", "--directories", "--exclude",
+    "--exclude-dir", "--exclude-from", "--extended-regexp", "--file", "--fixed-strings", "--help", "--ignore-case",
+    "--include", "--initial-tab", "--invert-match", "--label", "--line-buffered", "--line-number", "--line-regexp",
+    "--no-filename", "--no-ignore-case", "--no-messages", "--null", "--null-data", "--only-matching",
+    "--perl-regexp", "--recursive", "--regexp", "--text", "--version", "--with-filename", "--word-regexp")
+# rg options that take the next word (on top of the grep ones it shares)
+_RG_ARG_OPTS = ("-g", "--glob", "-t", "--type", "-T", "--type-not", "-r", "--replace", "-M", "--max-columns",
+                "-j", "--threads", "-E", "--encoding", "--iglob", "--pre", "--sort", "--sortr")
 
 
-def _grep_early_exit_flag(argv_text):
+def _long_option(name):
+    """The GNU grep long option a --word names: itself, or the options it is a prefix of."""
+    return (name,) if name in _GREP_LONG else tuple(o for o in _GREP_LONG if o.startswith(name))
+
+
+def _grep_early_exit_flag(argv_text, prog="grep"):
     """The early-exit option in a grep argv, else None. GNU grep takes options anywhere before `--` (also after the
     pattern), so every word is read: -q, -m, -l or -L in any short cluster, and the long forms."""
     tokens = argv_text.split()
@@ -103,11 +119,12 @@ def _grep_early_exit_flag(argv_text):
         t = tokens[i]
         if t == "--":
             return None
-        if t in _GREP_ARG_OPTS:
+        if t in _GREP_ARG_OPTS or (prog == "rg" and t in _RG_ARG_OPTS):
             i += 2  # an option that takes the next word (that word is never an option)
             continue
         if t.startswith("--"):
-            if t.split("=", 1)[0] in _GREP_EXIT_LONG:
+            names = _long_option(t.split("=", 1)[0])
+            if names and all(n in _GREP_EXIT_LONG for n in names):
                 return t
         elif t.startswith("-") and len(t) > 1:
             # Short cluster: -q, -qxF, -Fq, -m, -m1, -l, -lF, -L. An arg option (e, f, A, B, C, d, D) ends the cluster.
@@ -121,7 +138,7 @@ def _grep_early_exit_flag(argv_text):
 
 
 def _substitutions(line):
-    """The bodies of the outermost $( ... ) in line."""
+    """The bodies of every $( ... ) in line, nested ones too (outermost first)."""
     out, depth, start, i = [], 0, 0, 0
     while i < len(line):
         if line.startswith("$(", i):
@@ -135,7 +152,9 @@ def _substitutions(line):
         elif depth and line[i] == ")":
             depth -= 1
             if depth == 0:
-                out.append(line[start:i])
+                body = line[start:i]
+                out.append(body)
+                out.extend(_substitutions(body))
         i += 1
     return out
 
@@ -159,7 +178,10 @@ def _strip_substitutions(line):
     return re.sub(r"`[^`]*`", "", "".join(out))
 
 
-_ASSIGN_CONDITION = re.compile(r"""(?:^|[;\s])(?:if|elif|while|until)\s+(?:!\s*)?[A-Za-z_][A-Za-z0-9_]*=["']?\$\(""")
+_ASSIGN_CONDITION = re.compile(
+    r"""(?:^|[;\s])(?:if|elif|while|until)\s+(?:!\s*)?(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*[A-Za-z_][A-Za-z0-9_]*=["']?\$\(""")
+# bash / sh -c '<script>' (with -o pipefail or not): the script is a step's code too
+_SHELL_C = re.compile(r"""(?:^|[\s|;&(])(?:bash|sh|dash|zsh)(?:\s+-[A-Za-z]+(?:\s+[a-z]+)?)*?\s+-[A-Za-z]*c\s+(?:'([^']*)'|"((?:[^"\\]|\\.)*)")""")
 _CONDITION = re.compile(r"(?:^|[;\s])(?:if|elif|while|until)\s|&&|\|\||^\s*!\s")
 # a sed q / Q command: bare or after a line address (5q, $q), or after a /re/ address (then it must end the command)
 _SED_Q = re.compile(r"""(?:^|[;{}'"\s$\d])[qQ]\d*(?=[\s;}'">]|$)|/[qQ]\d*(?=[;}'"]|$)""")
@@ -207,11 +229,14 @@ _ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=\S*$")
 # wrappers that run the next word as the program: name -> options that take a value
 _WRAPPERS = {"command": (), "builtin": (), "exec": ("-a",), "env": ("-u", "--unset", "-C", "--chdir", "-S"),
              "timeout": ("-k", "--kill-after", "-s", "--signal"), "nice": ("-n", "--adjustment"),
-             "stdbuf": ("-i", "-o", "-e", "--input", "--output", "--error"), "nohup": (), "time": ()}
+             "stdbuf": ("-i", "-o", "-e", "--input", "--output", "--error"), "nohup": (), "time": (),
+             "sudo": ("-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-h", "--host", "-p",
+                      "--prompt", "-r", "--role", "-t", "--type", "-U", "--other-user", "-T", "--command-timeout"),
+             "busybox": ()}
 
 
 def _stage_program(stage):
-    """(program, rest) of a pipeline stage. Leading VAR=val words and wrappers (command, builtin, exec, env, timeout
+    r"""(program, rest) of a pipeline stage. Leading VAR=val words and wrappers (command, builtin, exec, env, timeout
     with its duration, nice, stdbuf, nohup, time) and their options are skipped; the program word loses a leading
     backslash, quotes and its directory (\grep, "grep", /usr/bin/grep -> grep)."""
     words = stage.split()
@@ -248,8 +273,14 @@ def _stage_program(stage):
 
 
 def _awk_code(rest):
-    """awk / perl argv with "..." string literals inside '...' programs blanked (print "exit" is not an exit)."""
-    return re.sub(r"'[^']*'", lambda m: re.sub(r'"(?:[^"\\]|\\.)*"', '""', m.group(0)), rest)
+    """awk / perl argv with -v / --assign values dropped and "..." string and /regex/ literals inside '...' programs
+    blanked (-v e=exit, print "exit" and /exit/ are not an exit)."""
+    rest = re.sub(r"(?:^|(?<=\s))(?:-v\s*|--assign[=\s])\S+", " ", rest)  # -v name=value is data, not code
+    def blank(m):
+        prog = re.sub(r'"(?:[^"\\]|\\.)*"', '""', m.group(0))
+        # a /regex/ where a pattern can start ('/x/', $1 ~ /x/, (/x/), print if /x/): its text is not an exit
+        return re.sub(r"((?:^'|[~(,{;!&|]|\b(?:if|unless))\s*)/(?:\\.|[^/\\\n])*/", r"\1//", prog)
+    return re.sub(r"'[^']*'", blank, rest)
 
 
 def _sed_code(rest):
@@ -266,9 +297,15 @@ def _is_grep(prog):
 
 
 def _strip_comment(line):
-    """line without an unquoted # comment (a # at the start or after a blank; $#, ${#x} and quoted # stay)."""
-    q, prev = None, " "
-    for i, c in enumerate(line):
+    r"""line without an unquoted # comment (a # at the start or after a blank; $#, ${#x}, \# and quoted # stay).
+    A backslash escapes the next char outside quotes and inside "..." (so "a\" # " is still one string)."""
+    q, prev, i = None, " ", 0
+    while i < len(line):
+        c = line[i]
+        if c == "\\" and q != "'":
+            prev = line[i + 1:i + 2] or c
+            i += 2
+            continue
         if q:
             if c == q:
                 q = None
@@ -277,6 +314,7 @@ def _strip_comment(line):
         elif c == "#" and prev in " \t":
             return line[:i].rstrip()
         prev = c
+        i += 1
     return line
 
 
@@ -286,7 +324,7 @@ def early_exit_hits(run):
 
 
 def pipeline_lines(run):
-    """The logical lines the no-early-exit-pipe rule reads: comments dropped, then a line ending in \ (continued),
+    r"""The logical lines the no-early-exit-pipe rule reads: comments dropped, then a line ending in \ (continued),
     |, |&, && or || is joined with the next one (a pipe or list continued over lines)."""
     out, cur = [], ""
     for raw in run.splitlines():
@@ -304,25 +342,71 @@ def pipeline_lines(run):
     return out
 
 
+def _groups_after_pipes(line):
+    """Each command of a { ... } or ( ... ) group that reads a pipe, as a synthetic "x | cmd" line: every command of
+    the group reads the pipe, not only the first (`| { cat; grep -q x; }`)."""
+    out = []
+    for m in re.finditer(r"(?:\|&|(?<!\|)\|(?!\|))\s*([({])", line):
+        opener = m.group(1)
+        closer = "}" if opener == "{" else ")"
+        depth, q, k = 0, None, m.start(1)
+        while k < len(line):
+            c = line[k]
+            if c == "\\" and q != "'":
+                k += 2
+                continue
+            if q:
+                if c == q:
+                    q = None
+            elif c in "'\"":
+                q = c
+            elif c == opener:
+                depth += 1
+            elif c == closer:
+                depth -= 1
+                if depth == 0:
+                    break
+            k += 1
+        body = line[m.start(1) + 1:k]
+        for cmd in re.split(r";|&&|\|\||\n", body):
+            if cmd.strip():
+                out.append("x | " + cmd.strip())
+    return out
+
+
 def early_exit_pipe_grep(line):
-    """An early-exit reader in a pipeline, else None. Under pipefail it can SIGPIPE the writer, and a condition on the
+    r"""An early-exit reader in a pipeline, else None. Under pipefail it can SIGPIPE the writer, and a condition on the
     pipeline then reads false.
-    - grep / egrep / fgrep (also `command grep`, /usr/bin/grep) after `|` or `|&` with -q, --quiet, --silent, -m,
-      --max-count, -l, -L or the long forms, anywhere in its argv: (flag, stage).
-    - head, `awk ... exit` or `sed ... q` in a pipeline that is a condition (if / elif / while / until, ! , && / ||)
-      outside $( ): (program, line)."""
-    for pipeline in _pipelines(line):
+    - grep / egrep / fgrep (also wrapped, \grep, "grep", /usr/bin/grep, $GREP) after `|` or `|&` with -q, --quiet,
+      --silent, -m, --max-count, -l, -L or the long forms, anywhere in its argv; also inside any $( ) (quoted or
+      nested) and as any command of a { } / ( ) group the pipe feeds: (flag, stage). rg too; sudo / busybox are
+      wrappers; a GNU long-option prefix (--qui, --max=1) counts; a bash/sh -c '...' script is read the same way.
+    - a `| while` / `| until` loop on a line with a break.
+    - head, read, `awk`/`perl ... exit` or `sed ... q` in a pipeline that is a condition (if / elif / while / until,
+      !, && / ||), outside $( ) or inside one (nested too) assigned in the condition: (program, line)."""
+    for m in _SHELL_C.finditer(line):
+        body = m.group(1) if m.group(1) is not None else re.sub(r"\\(.)", r"\1", m.group(2))
+        hit = early_exit_pipe_grep(body)
+        if hit:
+            return hit
+    subs = _substitutions(line)
+    texts = [line] + subs
+    texts += [g for t in texts for g in _groups_after_pipes(t)]
+    for pipeline in [p for text in texts for p in _pipelines(text)]:
         for stage in pipeline[1:]:
             prog, rest = _stage_program(stage)
             if _is_grep(prog):
-                flag = _grep_early_exit_flag(rest)
+                flag = _grep_early_exit_flag(rest, prog)
                 if flag:
                     return flag, f"{prog} {rest}"
+            if prog in ("while", "until") and re.search(r"\bbreak\b", line):
+                return "loop break", line  # `| while read -r l; do ...; break; done` stops reading early
     bare = _strip_substitutions(line)
     if not _CONDITION.search(bare):
         return None
     # `if v="$(a | head -1)"`: the assignment's status is the substitution's, so its pipeline is the condition too
-    scans = [bare] + (_substitutions(line) if _ASSIGN_CONDITION.search(line) else [])
+    scans = [bare] + (subs if _ASSIGN_CONDITION.search(line) else [])
+    scans += [g for t in scans for g in _groups_after_pipes(t)]
     for pipeline in [p for text in scans for p in _pipelines(text)]:
         for stage in pipeline[1:]:
             prog, rest = _stage_program(stage)
@@ -1515,6 +1599,51 @@ class PersistBehaviour(Sandboxed):
                      "if ls | sed -e 's/q;/x/' >/dev/null; then :; fi", "if ls | sed 's|q|x|g' >/dev/null; then :; fi",
                      "if ls | sed -n 's/a/q/p' >/dev/null; then :; fi", "if ls | awk '{print \"exit\"}'; then :; fi",
                      "if ls | perl -ne 'print \"exit\"'; then :; fi", 'if ls | grep -x "a q" >/dev/null; then :; fi'):
+            self.assertFalse(hits(form), form)
+        # S25-S27 (Critic @6a3c0261): grep inside a quoted or nested $( ), an escaped quote before a #, any
+        # command of a { } / ( ) group the pipe feeds; awk -v values are data
+        for form in ('if v="$(git log | grep -m1 x)"; then :; fi', 'if v="$(git log | grep -q x)"; then :; fi',
+                     'if v="$(echo "$(git log | head -1)")"; then :; fi',
+                     'if v="$(echo "$(git log | grep -q x)")"; then :; fi',
+                     'echo "a\\" # " | grep -q x && echo y',
+                     'if git log | { cat; grep -q x; }; then :; fi', 'if git log | ( read -r a; grep -q x ); then :; fi',
+                     'if git log | { cat; head -n 1; } >/dev/null; then :; fi',
+                     'if git log | { grep -x "}" >/dev/null; grep -q x; }; then :; fi',
+                     'git log | { cat; (grep -q x); }',
+                     'if git log | { cat; { grep -q x; }; }; then :; fi'):
+            self.assertTrue(hits(form), form)
+        # S27-S29 (Probe @6a3c0261): long-option prefixes, rg, sudo / busybox, bash -c, loop break, a later
+        # assignment; one pinned form per wrapper (builtin, nohup, time, exec)
+        for form in ('if ls | grep --qui x; then :; fi', 'if ls | grep --max=1 x >/dev/null; then :; fi',
+                     'if ls | grep --files-with-match x; then :; fi', 'ls | grep --sil x && echo y',
+                     'if ls | sudo grep -q x; then :; fi', 'if ls | sudo -u root grep -q x; then :; fi',
+                     'if ls | busybox grep -q x; then :; fi', 'if ls | rg -q x; then :; fi',
+                     'if ls | rg -g "*.md" -m1 x >/dev/null; then :; fi',
+                     "bash -o pipefail -c 'git log | grep -q x'", 'sh -c "git log | grep -q \\"x\\""',
+                     "bash -euo pipefail -c 'if git log | head -1 >/dev/null; then :; fi'",
+                     'git log | while read -r l; do [ "$l" = x ] && break; done',
+                     'if x=1 v="$(git log | head -1)"; then :; fi', 'if ls | grep -E -q x; then :; fi',
+                     'sh -c "if v=\\"\\$(git log | head -1)\\"; then :; fi"',
+                     'if ls | builtin read -r v; then :; fi', 'if ls | nohup grep -q x; then :; fi',
+                     'if ls | time -p grep -q x; then :; fi', 'if ls | time grep -q x; then :; fi',
+                     'if ls | exec grep -q x; then :; fi'):
+            self.assertTrue(hits(form), form)
+        for form in ("if ls | awk '/exit/' >/dev/null; then :; fi", "if ls | awk '$1 ~ /exit/' >/dev/null; then :; fi",
+                     "if ls | perl -ne 'print if /exit/' >/dev/null; then :; fi",
+                     "if ls | awk '!/exit|q/ {print}' >/dev/null; then :; fi",
+                     'if ls | grep --fi=p x >/dev/null; then :; fi', 'if ls | grep --line x >/dev/null; then :; fi',
+                     'if ls | rg -E utf8 x >/dev/null; then :; fi', 'if ls | rg -g -q x >/dev/null; then :; fi', 'git log | while read -r l; do echo "$l"; done',
+                     'for x in a b; do ls | grep -x "$x" >/dev/null || break; done',
+                     "bash -c 'git log | grep -x a >/dev/null'", 'if x=1 v="$(git log | grep -c a)"; then :; fi'):
+            self.assertFalse(hits(form), form)
+        for form in ("if ls | awk '/x/ {exit}'; then :; fi", "if ls | perl -ne 'exit if /x/'; then :; fi",
+                     "if ls | awk '$1 ~ /x/ {exit}'; then :; fi"):
+            self.assertTrue(hits(form), form)
+        for form in ("if ls | awk -v e=exit '{print e}' >/dev/null; then :; fi",
+                     "if ls | awk --assign=e=exit '{print e}' >/dev/null; then :; fi",
+                     'if [ -n "$(git log | grep x)" ]; then :; fi', 'if v="$(git log | grep -c x)"; then :; fi',
+                     'if git log | { cat; } >/dev/null; then :; fi', 'echo "a\\"b" | grep -x a >/dev/null || true',
+                     r'echo a\#b | grep -x a >/dev/null', r'echo a\" # | grep -q x', r"echo 'a\' # | grep -q x", 'echo "a\\" # | grep -q x"', 'x=1 # \\"; ls | grep -q x'):
             self.assertFalse(hits(form), form)
         synthetic = {"jobs": {
             "a": {"steps": [{"name": "custom", "shell": "bash --noprofile --norc -eo pipefail {0}", "run": "x"},
