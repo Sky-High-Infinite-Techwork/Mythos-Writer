@@ -140,7 +140,7 @@ def _grep_early_exit_flag(argv_text, prog="grep"):
 
 
 def _substitutions(line):
-    """The bodies of every $( ... ) in line, nested ones too (outermost first)."""
+    """The bodies of every $( ... ) in line, nested ones too (outermost first), and of every `...`."""
     out, depth, start, i = [], 0, 0, 0
     while i < len(line):
         if line.startswith("$(", i):
@@ -157,6 +157,14 @@ def _substitutions(line):
                 body = line[start:i]
                 out.append(body)
                 out.extend(_substitutions(body))
+        elif not depth and line[i] == "`":
+            j = line.find("`", i + 1)
+            if j != -1:
+                body = line[i + 1:j]
+                out.append(body)
+                out.extend(_substitutions(body))
+                i = j + 1
+                continue
         i += 1
     return out
 
@@ -181,7 +189,7 @@ def _strip_substitutions(line):
 
 
 _ASSIGN_CONDITION = re.compile(
-    r"""(?:^|[;\s])(?:if|elif|while|until)\s+(?:!\s*)?(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*[A-Za-z_][A-Za-z0-9_]*=["']?\$\(""")
+    r"""(?:^|[;\s])(?:if|elif|while|until)\s+(?:!\s*)?(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*[A-Za-z_][A-Za-z0-9_]*=["']?(?:\$\(|`)""")
 # bash / sh -c '<script>' (with -o pipefail or not): the script is a step's code too
 _SHELL_C = re.compile(r"""(?:^|[\s|;&(])(?:bash|sh|dash|zsh)(?:\s+-[A-Za-z]+(?:\s+[a-z]+)?)*?\s+-[A-Za-z]*c\s+(?:'([^']*)'|"((?:[^"\\]|\\.)*)")""")
 _CONDITION = re.compile(r"(?:^|[;\s])(?:if|elif|while|until)\s|&&|\|\||^\s*!\s")
@@ -234,13 +242,61 @@ _WRAPPERS = {"command": (), "builtin": (), "exec": ("-a",), "env": ("-u", "--uns
              "stdbuf": ("-i", "-o", "-e", "--input", "--output", "--error"), "nohup": (), "time": (),
              "sudo": ("-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-h", "--host", "-p",
                       "--prompt", "-r", "--role", "-t", "--type", "-U", "--other-user", "-T", "--command-timeout"),
-             "busybox": (), "doas": ("-u", "-C")}
+             "busybox": (), "doas": ("-a", "-u", "-C"), "eval": (), "coproc": (),
+             "ionice": ("-c", "--class", "-n", "--classdata", "-p", "--pid")}
+
+
+def _decoded_token(words, i):
+    """(plain, next_i) of words[i]: surrounding quotes dropped and interior space trimmed, so a quoted
+    path with a trailing space (`"/usr/bin/doas "`) is the same word as /usr/bin/doas. split() breaks
+    that token; the pieces are rejoined."""
+    if i >= len(words):
+        return "", i
+    w = words[i]
+    q = w[:1]
+    if q in "'\"":
+        if len(w) >= 2 and w[-1] == q:
+            return w[1:-1].strip(), i + 1
+        parts, j = [w[1:]], i + 1
+        while j < len(words):
+            piece = words[j]
+            j += 1
+            if piece.endswith(q):
+                parts.append("" if piece == q else piece[:-1])
+                break
+            parts.append(piece)
+        return " ".join(parts).strip(), j
+    return w.strip("'\"").strip(), i + 1
+
+
+def _after_wrapper_opts(words, i, takes):
+    """Index after a wrapper's options. A short cluster is split: if a letter takes a value, the rest of
+    the cluster is that value (`-nuroot`) or the next word is (`-nu root`, `-a style`). Long options that
+    take a value and have no `=` consume the next word."""
+    while i < len(words) and words[i].startswith("-") and words[i] != "-":
+        opt = words[i]
+        if opt == "--":
+            return i + 1
+        if opt.startswith("--"):
+            name, eq, _ = opt.partition("=")
+            i += 2 if (not eq and name in takes) else 1
+            continue
+        chars = opt[1:]
+        k, take_next = 0, False
+        while k < len(chars):
+            if ("-" + chars[k]) in takes:
+                take_next = not chars[k + 1:]  # attached value if anything remains
+                break
+            k += 1
+        i += 2 if take_next and i + 1 < len(words) else 1
+    return i
 
 
 def _stage_program(stage):
     r"""(program, rest) of a pipeline stage. Leading VAR=val words and wrappers (command, builtin, exec, env, timeout
     with its duration, nice, stdbuf, nohup, time, sudo, busybox, doas) and their options are skipped; a wrapper may be
-    path-prefixed, quoted or backslash-escaped (/usr/bin/sudo, /bin/busybox, /usr/bin/doas, "env", \timeout). The program word loses
+    path-prefixed, quoted or backslash-escaped (/usr/bin/sudo, /bin/busybox, /usr/bin/doas, "env", \timeout), including a quoted
+    path with trailing space. The program word loses
     a leading backslash, quotes and its directory (\grep, "grep", /usr/bin/grep -> grep). ggrep is also grep."""
     words = stage.split()
     i = 0
@@ -254,15 +310,11 @@ def _stage_program(stage):
         if _ASSIGN.match(w):
             i += 1
             continue
-        bare = os.path.basename(w.lstrip("\\").strip("'\""))
+        plain, j = _decoded_token(words, i)
+        bare = os.path.basename(plain.lstrip("\\"))
         if bare in _WRAPPERS:
             takes = _WRAPPERS[bare]
-            i += 1
-            while i < len(words) and words[i].startswith("-") and words[i] != "-":
-                opt = words[i]
-                i += 2 if opt in takes else 1
-                if opt == "--":
-                    break
+            i = _after_wrapper_opts(words, j, takes)
             if bare == "env":
                 while i < len(words) and _ASSIGN.match(words[i]):
                     i += 1
@@ -272,8 +324,8 @@ def _stage_program(stage):
         break
     if i >= len(words):
         return "", ""
-    prog = words[i].lstrip("\\").strip("'\"")
-    return os.path.basename(prog), " ".join(words[i + 1:])
+    plain, j = _decoded_token(words, i)
+    return os.path.basename(plain.lstrip("\\")), " ".join(words[j:])
 
 
 def _awk_code(rest):
@@ -1657,7 +1709,24 @@ class PersistBehaviour(Sandboxed):
                      'if ls | doas grep -q x; then :; fi',
                      'if ls | doas -u root grep -q x; then :; fi',
                      'if ls | /usr/bin/doas grep -q x; then :; fi',
-                     'if ls | /usr/bin/doas -u root grep -q x; then :; fi'):
+                     'if ls | /usr/bin/doas -u root grep -q x; then :; fi',
+                     # S32 (Critic @bff3050d): doas -a style, and clustered shorts whose last letter takes a value
+                     'if ls | doas -a pam grep -q x; then :; fi',
+                     'if ls | doas -a style grep -q x; then :; fi',
+                     'if ls | /usr/bin/doas -a pam grep -q x; then :; fi',
+                     'if ls | doas -apam grep -q x; then :; fi',
+                     'if ls | doas -nu root grep -q x; then :; fi',
+                     'if ls | doas -nuroot grep -q x; then :; fi',
+                     'if ls | sudo -nu root grep -q x; then :; fi',
+                     # Probe @bff3050d: quoted wrapper path with a trailing space; backtick assignment; eval / coproc / ionice
+                     'if ls | "/usr/bin/doas " grep -q x; then :; fi',
+                     'if ls | "/usr/bin/sudo " grep -q x; then :; fi',
+                     "if ls | '/usr/bin/doas ' grep -q x; then :; fi",
+                     'if v="`git log | grep -q x`"; then :; fi',
+                     'if v=`git log | head -1`; then :; fi',
+                     'if ls | eval grep -q x; then :; fi',
+                     'if ls | coproc grep -q x; then :; fi',
+                     'if ls | ionice -c 3 grep -q x; then :; fi'):
             self.assertTrue(hits(form), form)
         for form in ("if ls | awk '/exit/' >/dev/null; then :; fi", "if ls | awk '$1 ~ /exit/' >/dev/null; then :; fi",
                      "if ls | perl -ne 'print if /exit/' >/dev/null; then :; fi",
@@ -1670,7 +1739,9 @@ class PersistBehaviour(Sandboxed):
                      'if ls | /opt/mysudo grep -q x; then :; fi',
                      'if ls | gsudo grep -q x; then :; fi',
                      'if ls | mytimeout 5 grep -q x; then :; fi',
-                     'if ls | /opt/mytimeout 5 grep -q x; then :; fi'):
+                     'if ls | /opt/mytimeout 5 grep -q x; then :; fi',
+                     'if ls | doasedit grep -q x; then :; fi',
+                     'if ls | "/opt/mysudo " grep -q x; then :; fi'):
             self.assertFalse(hits(form), form)
         for form in ("if ls | awk '/x/ {exit}'; then :; fi", "if ls | perl -ne 'exit if /x/'; then :; fi",
                      "if ls | awk '$1 ~ /x/ {exit}'; then :; fi"):
@@ -2041,18 +2112,35 @@ class ThisFile(unittest.TestCase):
         # S29 (Critic / Probe @0149c891): py_compile this file with warnings as errors.
         # S31 (Critic @6b32aabe): also compile a dirty non-raw "\grep" docstring and assert it
         # raises, so dropping py_compile or simplefilter("error") fails the suite.
+        compiled = []
         def compile_as_error(path, cfile):
+            compiled.append(os.path.abspath(path))
             with warnings.catch_warnings():
                 warnings.simplefilter("error")
                 py_compile.compile(path, cfile=cfile, doraise=True)
 
         with tempfile.TemporaryDirectory() as td:
             compile_as_error(__file__, os.path.join(td, "t.pyc"))
+            # S31 residual (Critic @bff3050d): the self-file compile must be this test file, not another clean path
+            self.assertEqual(compiled[0], os.path.abspath(__file__))
             dirty = os.path.join(td, "dirty.py")
             with open(dirty, "w", encoding="utf-8") as f:
                 f.write('def _f():\n    """a path (\\grep -> grep)."""\n')
             with self.assertRaises(py_compile.PyCompileError):
                 compile_as_error(dirty, os.path.join(td, "dirty.pyc"))
+
+    def test_the_compile_guard_requires_a_dirty_invalid_escape_snippet(self):
+        # Probe @bff3050d: dropping only the dirty-snippet assert (keeping the clean-file compile)
+        # must fail the suite, as must weakening assertRaises(PyCompileError) to Exception.
+        # Inspect only that method so these needles cannot self-match.
+        with open(__file__, encoding="utf-8") as f:
+            src = f.read()
+        start = src.index("def test_this_file_compiles_with_no_syntax_warnings")
+        end = src.index("def test_the_compile_guard_requires_a_dirty_invalid_escape_snippet")
+        body = src[start:end]
+        self.assertIn('"""a path (' + "\\" * 2 + 'grep -> grep)."""', body)
+        self.assertIn("assertRaises(py_compile.PyCompileError)", body)
+
 
 
 if __name__ == "__main__":
