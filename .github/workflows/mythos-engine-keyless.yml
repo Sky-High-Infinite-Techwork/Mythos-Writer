@@ -1,0 +1,180 @@
+name: mythos-engine-keyless
+
+# Phase 3. Engine unit tests on public Writer, no model logins.
+# Main, schedule, and manual only. Never a pull-request or pull-request-target event, never forks.
+# Checks out private SkyyPlayz/Mythos-Engine with a read-only token (environment "lanes"
+# so the token is not available to PRs). Public log prints only pass or fail: the suite's full output goes
+# to $LANES_LOG and then the private data repo branch lanes-logs (runs/<YYYY-MM-DD>/<run id>-<attempt>/keyless/), as in
+# mythos-engine-lanes.yml. A missing secret or a failing suite fails the run (red), never a silent skip.
+# This workflow does not depend on MYTHOS_LANES_HOST: tests can run even while
+# the live engine is still on Engine.
+
+on:
+  schedule:
+    # Nightly 07:41 UTC (12:41 AM America/Denver in winter).
+    - cron: "41 7 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  DATA_REPO: ${{ vars.MYTHOS_DATA_REPO || 'SkyyPlayz/Mythos-Ops' }}
+  LOG_BRANCH: lanes-logs
+
+concurrency:
+  group: mythos-engine-keyless
+  cancel-in-progress: false
+
+jobs:
+  admit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
+    steps:
+      - name: Admit a main-branch run only
+        id: gate
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          echo "result=fail" >> "$GITHUB_OUTPUT"
+          if [ "$REPO" != "Sky-High-Infinite-Techwork/Mythos-Writer" ]; then
+            echo "reject: repository" >&2
+            exit 1
+          fi
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "reject: ref is not main" >&2
+            exit 1
+          fi
+          case "$EVENT" in
+            schedule|workflow_dispatch) ;;
+            *) echo "reject: event" >&2; exit 1 ;;
+          esac
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "result=pass" >> "$GITHUB_OUTPUT"
+
+  tests:
+    needs: admit
+    if: needs.admit.result == 'success' && needs.admit.outputs.enabled == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    # Engine's suite (~4.5k tests) has no runner baseline yet: 60 min until a first dispatched run proves less.
+    timeout-minutes: 60
+    environment: lanes
+    permissions:
+      contents: read
+    steps:
+      - name: Confirm the trusted ref before checkout
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$REPO" = "Sky-High-Infinite-Techwork/Mythos-Writer"
+          test "$REF" = "refs/heads/main"
+          # Full script output goes here (never the public log); the job's Private log step saves it.
+          install -d -m 0700 "$RUNNER_TEMP/lanes-log"
+          echo "LANES_LOG=$RUNNER_TEMP/lanes-log" >> "$GITHUB_ENV"
+
+      - name: Secrets present (fail loud, never skip)
+        env:
+          HAS_READ: ${{ secrets.MYTHOS_ENGINE_READ_TOKEN != '' }}
+          HAS_DATA: ${{ secrets.MYTHOS_DATA_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          miss=""
+          [ "$HAS_READ" = true ] || miss="$miss MYTHOS_ENGINE_READ_TOKEN"
+          [ "$HAS_DATA" = true ] || miss="$miss MYTHOS_DATA_TOKEN"
+          if [ -n "$miss" ]; then
+            echo "::error title=Keyless secrets::not set on the lanes environment:$miss; no engine tests ran"
+            exit 1
+          fi
+
+      - name: Check out private Engine (read-only token)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SkyyPlayz/Mythos-Engine
+          ref: main
+          token: ${{ secrets.MYTHOS_ENGINE_READ_TOKEN }}
+          path: code
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Run the engine test suite
+        working-directory: code
+        run: |
+          set -uo pipefail
+          rc=0
+          /usr/bin/python3 scripts/tests/run_suite_clean.py >>"$LANES_LOG/suite.log" 2>&1 || rc=$?
+          echo "engine suite: exit $rc"
+          exit "$rc"
+
+      - name: Private log (full output to the data repo; public shows only a summary)
+        id: privlog
+        if: always()
+        env:
+          JOB: keyless
+          DATA_TOKEN: ${{ secrets.MYTHOS_DATA_TOKEN }}
+          RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -uo pipefail
+          # PRIVLOG-BEGIN (the same text in every job that runs engine scripts; only JOB differs)
+          # Public: the titles of the scripts' own ::error / ::warning lines (short fixed names, nothing else) and
+          # pass or fail. Private: every $LANES_LOG file, at most 5 MiB each (the tail), on the data repo branch
+          # LOG_BRANCH under runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/. Token: this step's env only, through a credential helper.
+          # Growth bound: only non-empty logs are saved (a no-work run commits nothing); each file is capped at 5 MiB.
+          # Dirs are runs/<YYYY-MM-DD>/<run id>-<attempt>/<job>/ so an owner-approved prune can drop old days whole.
+          # Nothing here deletes or rewrites the branch (deletes are an owner call).
+          if [ -z "${LANES_LOG:-}" ] || [ -z "$(find "$LANES_LOG" -maxdepth 1 -type f -size +0 2>/dev/null | head -n 1)" ]; then
+            echo "private log: nothing to save"; exit 0
+          fi
+          for f in "$LANES_LOG"/*.log; do
+            grep -ohE '^::(error|warning) title=[A-Za-z0-9 ()._/-]{1,60}::' "$f" 2>/dev/null || true
+          done | sort -u | sed 's/::$/::details are in the private log/'
+          if [ -z "${DATA_TOKEN:-}" ]; then
+            echo "::error title=Private log::MYTHOS_DATA_TOKEN is not set; this job's full output was not saved"; exit 1
+          fi
+          export GIT_TERMINAL_PROMPT=0
+          repo="$RUNNER_TEMP/lanes-log-repo"
+          dest="runs/$(TZ=America/Denver date +%F)/$RUN_KEY/$JOB"
+          # shellcheck disable=SC2016  # $DATA_TOKEN expands inside the helper's own shell, not here
+          lgit() { git -C "$repo" -c credential.helper= \
+            -c 'credential.helper=!f(){ echo username=x-access-token; echo "password=$DATA_TOKEN"; }; f' "$@"; }
+          for try in 1 2 3 4 5; do
+            if [ "$try" -gt 1 ]; then
+              sleep "$(( try * 3 + RANDOM % 5 ))"  # jittered backoff: gate, plan and fix often finish together
+            fi
+            rm -rf "$repo"; git init -q "$repo"
+            git -C "$repo" remote add origin "https://github.com/$DATA_REPO.git"
+            r=0; lgit ls-remote --exit-code origin "refs/heads/$LOG_BRANCH" >/dev/null 2>&1 || r=$?
+            if [ "$r" -eq 0 ]; then
+              if ! { lgit fetch -q --depth 1 origin "$LOG_BRANCH" && git -C "$repo" reset -q --hard FETCH_HEAD; } >/dev/null 2>&1; then
+                echo "::error title=Private log::cannot fetch $LOG_BRANCH"; exit 1
+              fi
+            elif [ "$r" -eq 2 ]; then
+              git -C "$repo" symbolic-ref HEAD "refs/heads/$LOG_BRANCH"
+            else
+              echo "::error title=Private log::cannot read the data repo"; exit 1
+            fi
+            mkdir -p "$repo/$dest"
+            for f in "$LANES_LOG"/*; do
+              [ -f "$f" ] && [ -s "$f" ] || continue
+              tail -c 5242880 "$f" > "$repo/$dest/$(basename "$f")"
+            done
+            git -C "$repo" add -- "$dest"
+            if git -C "$repo" diff --cached --quiet; then echo "private log: nothing new"; exit 0; fi
+            git -C "$repo" -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "lanes: $JOB log ($RUN_KEY)" >/dev/null || { echo "private log: commit failed"; exit 1; }
+            if lgit push -q origin "HEAD:refs/heads/$LOG_BRANCH" >/dev/null 2>&1; then echo "private log: saved"; exit 0; fi
+          done
+          echo "::error title=Private log::push to $LOG_BRANCH failed 5 times"
+          exit 1
+          # PRIVLOG-END
+      - name: Public result (pass/fail only)
+        if: always()
+        run: echo "result=${{ job.status == 'success' && 'pass' || 'fail' }}"
