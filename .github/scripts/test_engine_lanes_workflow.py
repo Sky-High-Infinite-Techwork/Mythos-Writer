@@ -234,13 +234,13 @@ _WRAPPERS = {"command": (), "builtin": (), "exec": ("-a",), "env": ("-u", "--uns
              "stdbuf": ("-i", "-o", "-e", "--input", "--output", "--error"), "nohup": (), "time": (),
              "sudo": ("-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-h", "--host", "-p",
                       "--prompt", "-r", "--role", "-t", "--type", "-U", "--other-user", "-T", "--command-timeout"),
-             "busybox": ()}
+             "busybox": (), "doas": ("-u", "-C")}
 
 
 def _stage_program(stage):
     r"""(program, rest) of a pipeline stage. Leading VAR=val words and wrappers (command, builtin, exec, env, timeout
-    with its duration, nice, stdbuf, nohup, time, sudo, busybox) and their options are skipped; a wrapper may be
-    path-prefixed, quoted or backslash-escaped (/usr/bin/sudo, /bin/busybox, "env", \timeout). The program word loses
+    with its duration, nice, stdbuf, nohup, time, sudo, busybox, doas) and their options are skipped; a wrapper may be
+    path-prefixed, quoted or backslash-escaped (/usr/bin/sudo, /bin/busybox, /usr/bin/doas, "env", \timeout). The program word loses
     a leading backslash, quotes and its directory (\grep, "grep", /usr/bin/grep -> grep). ggrep is also grep."""
     words = stage.split()
     i = 0
@@ -384,7 +384,7 @@ def early_exit_pipe_grep(line):
     - grep / egrep / fgrep (also wrapped, \grep, "grep", /usr/bin/grep, $GREP) after `|` or `|&` with -q, --quiet,
       --silent, -m, --max-count, -l, -L or the long forms, anywhere in its argv; also inside any $( ) (quoted or
       nested) and as any command of a { } / ( ) group the pipe feeds: (flag, stage). rg too; sudo / busybox are
-      wrappers (path-prefixed too: /usr/bin/sudo, /bin/busybox, /usr/bin/env); ggrep, gegrep, gfgrep and bsdgrep
+      wrappers (path-prefixed too: /usr/bin/sudo, /bin/busybox, /usr/bin/env, /usr/bin/doas); ggrep, gegrep, gfgrep and bsdgrep
       count as grep; a GNU long-option prefix
       (--qui, --max=1) counts; a bash/sh -c '...' script is read the same way.
     - a `| while` / `| until` loop on a line with a break.
@@ -1652,7 +1652,12 @@ class PersistBehaviour(Sandboxed):
                      'if ls | gegrep -q x; then :; fi', 'if ls | gfgrep -q x; then :; fi',
                      'if ls | bsdgrep -q x; then :; fi', 'if ls | /usr/bin/gegrep -q x; then :; fi',
                      'if ls | /usr/bin/env /usr/bin/grep -q x; then :; fi',
-                     'if ls | env /usr/bin/timeout 5 grep -q x; then :; fi'):
+                     'if ls | env /usr/bin/timeout 5 grep -q x; then :; fi',
+                     # S30 leftover (Probe @6b32aabe): doas, including a path prefix
+                     'if ls | doas grep -q x; then :; fi',
+                     'if ls | doas -u root grep -q x; then :; fi',
+                     'if ls | /usr/bin/doas grep -q x; then :; fi',
+                     'if ls | /usr/bin/doas -u root grep -q x; then :; fi'):
             self.assertTrue(hits(form), form)
         for form in ("if ls | awk '/exit/' >/dev/null; then :; fi", "if ls | awk '$1 ~ /exit/' >/dev/null; then :; fi",
                      "if ls | perl -ne 'print if /exit/' >/dev/null; then :; fi",
@@ -1661,7 +1666,11 @@ class PersistBehaviour(Sandboxed):
                      'if ls | rg -E utf8 x >/dev/null; then :; fi', 'if ls | rg -g -q x >/dev/null; then :; fi', 'git log | while read -r l; do echo "$l"; done',
                      'for x in a b; do ls | grep -x "$x" >/dev/null || break; done',
                      "bash -c 'git log | grep -x a >/dev/null'", 'if x=1 v="$(git log | grep -c a)"; then :; fi',
-                     'if ls | /usr/bin/sudoedit grep -q x; then :; fi'):
+                     'if ls | /usr/bin/sudoedit grep -q x; then :; fi',
+                     'if ls | /opt/mysudo grep -q x; then :; fi',
+                     'if ls | gsudo grep -q x; then :; fi',
+                     'if ls | mytimeout 5 grep -q x; then :; fi',
+                     'if ls | /opt/mytimeout 5 grep -q x; then :; fi'):
             self.assertFalse(hits(form), form)
         for form in ("if ls | awk '/x/ {exit}'; then :; fi", "if ls | perl -ne 'exit if /x/'; then :; fi",
                      "if ls | awk '$1 ~ /x/ {exit}'; then :; fi"):
@@ -2029,11 +2038,21 @@ class RedactionBehaviour(Sandboxed):
 
 class ThisFile(unittest.TestCase):
     def test_this_file_compiles_with_no_syntax_warnings(self):
-        # S29 (Critic / Probe @0149c891): py_compile this file with warnings as errors
-        with tempfile.TemporaryDirectory() as td:
+        # S29 (Critic / Probe @0149c891): py_compile this file with warnings as errors.
+        # S31 (Critic @6b32aabe): also compile a dirty non-raw "\grep" docstring and assert it
+        # raises, so dropping py_compile or simplefilter("error") fails the suite.
+        def compile_as_error(path, cfile):
             with warnings.catch_warnings():
                 warnings.simplefilter("error")
-                py_compile.compile(__file__, cfile=os.path.join(td, "t.pyc"), doraise=True)
+                py_compile.compile(path, cfile=cfile, doraise=True)
+
+        with tempfile.TemporaryDirectory() as td:
+            compile_as_error(__file__, os.path.join(td, "t.pyc"))
+            dirty = os.path.join(td, "dirty.py")
+            with open(dirty, "w", encoding="utf-8") as f:
+                f.write('def _f():\n    """a path (\\grep -> grep)."""\n')
+            with self.assertRaises(py_compile.PyCompileError):
+                compile_as_error(dirty, os.path.join(td, "dirty.pyc"))
 
 
 if __name__ == "__main__":
