@@ -7,6 +7,7 @@ remotes (url.insteadOf), so nothing here reaches the network or needs a token.
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import py_compile
@@ -140,25 +141,36 @@ def _grep_early_exit_flag(argv_text, prog="grep"):
 
 
 def _substitutions(line):
-    """The bodies of every $( ... ) in line, nested ones too (outermost first), and of every `...`."""
-    out, depth, start, i = [], 0, 0, 0
+    r"""The bodies of every $( ... ) in line, nested ones too (outermost first), and of every `...`.
+    Single-quoted text and escaped \$( / \` are not substitutions."""
+    out, i, q = [], 0, None
     while i < len(line):
-        if line.startswith("$(", i):
-            if depth == 0:
-                start = i + 2
-            depth += 1
+        c = line[i]
+        if q == "'":
+            if c == "'":
+                q = None
+            i += 1
+            continue
+        if c == "\\" and i + 1 < len(line):
             i += 2
             continue
-        if depth and line[i] == "(":
-            depth += 1
-        elif depth and line[i] == ")":
-            depth -= 1
-            if depth == 0:
-                body = line[start:i]
-                out.append(body)
-                out.extend(_substitutions(body))
-        elif not depth and line[i] == "`":
-            j = line.find("`", i + 1)
+        if q == '"':
+            if c == '"':
+                q = None
+                i += 1
+                continue
+        elif c in "'\"":
+            q = c
+            i += 1
+            continue
+        if line.startswith("$(", i):
+            body, j = _dollar_body(line, i + 2)
+            out.append(body)
+            out.extend(_substitutions(body))
+            i = j
+            continue
+        if c == "`":
+            j = _closing_backtick(line, i + 1)
             if j != -1:
                 body = line[i + 1:j]
                 out.append(body)
@@ -169,23 +181,94 @@ def _substitutions(line):
     return out
 
 
-def _strip_substitutions(line):
-    """line with every $( ... ) and `...` removed (balanced): their exit status is not the line's condition."""
-    out, depth, i = [], 0, 0
+def _dollar_body(line, start):
+    """(body, index after the closing ')') of a $( ... ) opened at start, quote-aware."""
+    depth, q, i = 1, None, start
     while i < len(line):
-        if line.startswith("$(", i):
-            depth += 1
+        c = line[i]
+        if q == "'":
+            if c == "'":
+                q = None
+            i += 1
+            continue
+        if c == "\\" and i + 1 < len(line):
             i += 2
             continue
-        c = line[i]
-        if depth and c == "(":
+        if q == '"':
+            if c == '"':
+                q = None
+            i += 1
+            continue
+        if c in "'\"":
+            q = c
+            i += 1
+            continue
+        if c == "(":
             depth += 1
-        elif depth and c == ")":
+        elif c == ")":
             depth -= 1
-        elif not depth:
-            out.append(c)
+            if depth == 0:
+                return line[start:i], i + 1
         i += 1
-    return re.sub(r"`[^`]*`", "", "".join(out))
+    return line[start:], len(line)
+
+
+def _closing_backtick(line, start):
+    """Index of the next unescaped backtick, or -1."""
+    i = start
+    while i < len(line):
+        if line[i] == "\\" and i + 1 < len(line):
+            i += 2
+            continue
+        if line[i] == "`":
+            return i
+        i += 1
+    return -1
+
+
+def _strip_substitutions(line):
+    """line with every $( ... ) and `...` removed (balanced, quote-aware): their exit status is not the line's condition."""
+    out, i, q = [], 0, None
+    while i < len(line):
+        c = line[i]
+        if q == "'":
+            out.append(c)
+            if c == "'":
+                q = None
+            i += 1
+            continue
+        if c == "\\" and i + 1 < len(line):
+            out.append(line[i:i + 2])
+            i += 2
+            continue
+        if q == '"':
+            if c == '"':
+                q = None
+            elif line.startswith("$(", i):
+                _, i = _dollar_body(line, i + 2)
+                continue
+            elif c == "`":
+                j = _closing_backtick(line, i + 1)
+                i = (j + 1) if j != -1 else i + 1
+                continue
+            out.append(c)
+            i += 1
+            continue
+        if c in "'\"":
+            q = c
+            out.append(c)
+            i += 1
+            continue
+        if line.startswith("$(", i):
+            _, i = _dollar_body(line, i + 2)
+            continue
+        if c == "`":
+            j = _closing_backtick(line, i + 1)
+            i = (j + 1) if j != -1 else i + 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
 
 
 _ASSIGN_CONDITION = re.compile(
@@ -292,6 +375,32 @@ def _after_wrapper_opts(words, i, takes):
     return i
 
 
+def _sudo_edit_mode(words, start, end):
+    """True if sudo's option words include -e / --edit (sudoedit: the rest is a file, not a command)."""
+    takes = _WRAPPERS["sudo"]
+    i = start
+    while i < end:
+        opt = words[i]
+        if opt == "--":
+            return False
+        if opt.startswith("--"):
+            if opt.partition("=")[0] == "--edit":
+                return True
+            i += 1
+            continue
+        if opt.startswith("-") and opt != "-":
+            chars = opt[1:]
+            k = 0
+            while k < len(chars):
+                if ("-" + chars[k]) in takes:
+                    break  # rest of the cluster is that option's value (`-ue` is user e, not -e)
+                if chars[k] == "e":
+                    return True
+                k += 1
+        i += 1
+    return False
+
+
 def _stage_program(stage):
     r"""(program, rest) of a pipeline stage. Leading VAR=val words and wrappers (command, builtin, exec, env, timeout
     with its duration, nice, stdbuf, nohup, time, sudo, busybox, doas) and their options are skipped; a wrapper may be
@@ -320,6 +429,20 @@ def _stage_program(stage):
                     i += 1
             if bare == "timeout" and i < len(words):
                 i += 1  # the duration
+            if bare == "sudo" and _sudo_edit_mode(words, j, i):
+                return "", ""
+            # S33 (Critic @89396cfb): a quoted eval operand is a command string, not one basename
+            if bare == "eval" and i < len(words) and words[i][:1] in "'\"":
+                cmd, k = _decoded_token(words, i)
+                words[i:k] = cmd.split()
+            # optional coproc NAME when the next word is the program (not `coproc grep -q`)
+            if bare == "coproc" and i + 1 < len(words):
+                nxt_plain, _ = _decoded_token(words, i + 1)
+                nxt = os.path.basename(nxt_plain.lstrip("\\"))
+                if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", words[i]) and (
+                        nxt in _WRAPPERS or _is_grep(nxt) or nxt in (
+                            "{", "(", "head", "read", "awk", "gawk", "mawk", "perl", "sed")):
+                    i += 1
             continue
         break
     if i >= len(words):
@@ -1726,7 +1849,15 @@ class PersistBehaviour(Sandboxed):
                      'if v=`git log | head -1`; then :; fi',
                      'if ls | eval grep -q x; then :; fi',
                      'if ls | coproc grep -q x; then :; fi',
-                     'if ls | ionice -c 3 grep -q x; then :; fi'):
+                     'if ls | ionice -c 3 grep -q x; then :; fi',
+                     # S33 (Critic @89396cfb): quoted eval operand re-scanned; optional coproc NAME
+                     "if ls | eval 'grep -q x'; then :; fi",
+                     'if ls | eval "grep -q x"; then :; fi',
+                     "if ls | eval 'command grep -q x'; then :; fi",
+                     'if ls | coproc NAME grep -q x; then :; fi',
+                     'if ls | coproc NAME /usr/bin/grep -q x; then :; fi',
+                     'if ls | coproc NAME { grep -q x; }; then :; fi',
+                     'if ls | sudo -ue grep -q x; then :; fi'):
             self.assertTrue(hits(form), form)
         for form in ("if ls | awk '/exit/' >/dev/null; then :; fi", "if ls | awk '$1 ~ /exit/' >/dev/null; then :; fi",
                      "if ls | perl -ne 'print if /exit/' >/dev/null; then :; fi",
@@ -1741,7 +1872,20 @@ class PersistBehaviour(Sandboxed):
                      'if ls | mytimeout 5 grep -q x; then :; fi',
                      'if ls | /opt/mytimeout 5 grep -q x; then :; fi',
                      'if ls | doasedit grep -q x; then :; fi',
-                     'if ls | "/opt/mysudo " grep -q x; then :; fi'):
+                     'if ls | "/opt/mysudo " grep -q x; then :; fi',
+                     # S33 controls: quoted eval whose command is not an early-exit reader; echo strings
+                     "if ls | eval 'echo grep -q x' >/dev/null; then :; fi",
+                     "if ls | eval 'grep -x x' >/dev/null; then :; fi",
+                     "if ls | echo \"eval 'grep -q x'\" >/dev/null; then :; fi",
+                     'if ls | echo "coproc NAME grep -q x" >/dev/null; then :; fi',
+                     # Probe @89396cfb: single-quoted backticks are not substitutions; sudo -e is sudoedit
+                     "if echo '`git log | grep -q x`' >/dev/null; then :; fi",
+                     "if ls | echo '`git log | grep -q x`' >/dev/null; then :; fi",
+                     r"if echo '\`git log | grep -q x\`' >/dev/null; then :; fi",
+                     'if ls | sudo -e grep -q x; then :; fi',
+                     'if ls | sudo --edit grep -q x; then :; fi',
+                     'if ls | /usr/bin/sudo -e grep -q x; then :; fi',
+                     'if ls | sudo -ne grep -q x; then :; fi'):
             self.assertFalse(hits(form), form)
         for form in ("if ls | awk '/x/ {exit}'; then :; fi", "if ls | perl -ne 'exit if /x/'; then :; fi",
                      "if ls | awk '$1 ~ /x/ {exit}'; then :; fi"):
@@ -2130,16 +2274,88 @@ class ThisFile(unittest.TestCase):
                 compile_as_error(dirty, os.path.join(td, "dirty.pyc"))
 
     def test_the_compile_guard_requires_a_dirty_invalid_escape_snippet(self):
-        # Probe @bff3050d: dropping only the dirty-snippet assert (keeping the clean-file compile)
-        # must fail the suite, as must weakening assertRaises(PyCompileError) to Exception.
-        # Inspect only that method so these needles cannot self-match.
+        # Probe @89396cfb: AST-inspect the compile-guard method. A gutted body that only keeps the
+        # old string literals, or that comments out the dirty compile, must fail; a renamed-equivalent
+        # assertRaises((__import__('py_compile').PyCompileError)) is accepted. compiled[0] == __file__
+        # is pinned here, so dropping that assert (alone or with a /dev/null swap) is red.
         with open(__file__, encoding="utf-8") as f:
-            src = f.read()
-        start = src.index("def test_this_file_compiles_with_no_syntax_warnings")
-        end = src.index("def test_the_compile_guard_requires_a_dirty_invalid_escape_snippet")
-        body = src[start:end]
-        self.assertIn('"""a path (' + "\\" * 2 + 'grep -> grep)."""', body)
-        self.assertIn("assertRaises(py_compile.PyCompileError)", body)
+            tree = ast.parse(f.read(), filename=__file__)
+
+        def dotted(node):
+            if isinstance(node, ast.Name):
+                return node.id
+            if isinstance(node, ast.Attribute):
+                base = dotted(node.value)
+                return f"{base}.{node.attr}" if base else node.attr
+            if isinstance(node, ast.Call):
+                fn = dotted(node.func)
+                if fn in ("__import__", "importlib.import_module") and node.args:
+                    arg0 = node.args[0]
+                    if isinstance(arg0, ast.Constant) and isinstance(arg0.value, str):
+                        return arg0.value
+                return fn
+            return None
+
+        func = None
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and node.name == "ThisFile":
+                for item in node.body:
+                    if isinstance(item, ast.FunctionDef) and item.name == "test_this_file_compiles_with_no_syntax_warnings":
+                        func = item
+        self.assertIsNotNone(func, "test_this_file_compiles_with_no_syntax_warnings is missing")
+
+        wrote_dirty = False
+        needle = "\\" + "grep"
+        for node in ast.walk(func):
+            if isinstance(node, ast.Call) and (dotted(node.func) or "").split(".")[-1] == "write":
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Constant) and isinstance(sub.value, str) and needle in sub.value:
+                        wrote_dirty = True
+        self.assertTrue(wrote_dirty, "compile-guard must write a dirty invalid-escape snippet")
+
+        def raises_pycompile(expr):
+            if not isinstance(expr, ast.Call):
+                return False
+            fn = dotted(expr.func) or ""
+            if not fn.endswith("assertRaises") and not fn.endswith("assertRaisesRegex"):
+                return False
+            if not expr.args:
+                return False
+            return (dotted(expr.args[0]) or "").endswith("PyCompileError")
+
+        dirty_compile = False
+        for node in ast.walk(func):
+            if isinstance(node, ast.With) and any(raises_pycompile(it.context_expr) for it in node.items):
+                for sub in ast.walk(ast.Module(body=list(node.body), type_ignores=[])):
+                    if isinstance(sub, ast.Call):
+                        fn = (dotted(sub.func) or "").split(".")[-1]
+                        if "compile" in fn:
+                            dirty_compile = True
+        self.assertTrue(dirty_compile, "compile-guard must compile the dirty snippet under assertRaises(PyCompileError)")
+
+        compiles_self = False
+        for node in ast.walk(func):
+            if isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Name) and node.args[0].id == "__file__":
+                compiles_self = True
+        self.assertTrue(compiles_self, "compile-guard must py_compile this file (__file__)")
+
+        def is_abspath_file(node):
+            if isinstance(node, ast.Name) and node.id == "__file__":
+                return True
+            return (isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Name)
+                    and node.args[0].id == "__file__")
+
+        def is_compiled_0(node):
+            return (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant)
+                    and node.slice.value == 0)
+
+        pinned = False
+        for node in ast.walk(func):
+            if isinstance(node, ast.Call) and (dotted(node.func) or "").endswith("assertEqual") and len(node.args) >= 2:
+                a, b = node.args[0], node.args[1]
+                if (is_compiled_0(a) and is_abspath_file(b)) or (is_compiled_0(b) and is_abspath_file(a)):
+                    pinned = True
+        self.assertTrue(pinned, "compile-guard must assert compiled[0] == abspath(__file__)")
 
 
 
