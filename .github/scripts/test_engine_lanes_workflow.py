@@ -327,6 +327,12 @@ _WRAPPERS = {"command": (), "builtin": (), "exec": ("-a",), "env": ("-u", "--uns
                       "--prompt", "-r", "--role", "-t", "--type", "-U", "--other-user", "-T", "--command-timeout"),
              "busybox": (), "doas": ("-a", "-u", "-C"), "eval": (), "coproc": (),
              "ionice": ("-c", "--class", "-n", "--classdata", "-p", "--pid")}
+# A coproc NAME is not a known command or builtin (`coproc echo grep -q` runs echo).
+_COPROC_NOT_NAME = frozenset(_WRAPPERS) | frozenset(_GREPS) | {
+    "echo", "printf", "test", "true", "false", "cd", "pwd", "export", "unset",
+    "read", "wait", "shift", "set", "source", "alias", "type", "hash", "kill",
+    "let", "local", "declare", "typeset", "readonly", "getopts", "umask",
+    "head", "awk", "gawk", "mawk", "perl", "sed", "cat", "tee"}
 
 
 def _decoded_token(words, i):
@@ -336,6 +342,21 @@ def _decoded_token(words, i):
     if i >= len(words):
         return "", i
     w = words[i]
+    # ANSI-C / locale quoting: $'...' or $"..." (split() breaks these the same way as '...')
+    if w.startswith("$'") or w.startswith('$"'):
+        q = w[1]
+        rest = w[2:]
+        if len(w) >= 3 and rest.endswith(q):
+            return rest[:-1], i + 1
+        parts, j = [rest], i + 1
+        while j < len(words):
+            piece = words[j]
+            j += 1
+            if piece.endswith(q):
+                parts.append("" if piece == q else piece[:-1])
+                break
+            parts.append(piece)
+        return " ".join(parts), j
     q = w[:1]
     if q in "'\"":
         if len(w) >= 2 and w[-1] == q:
@@ -431,17 +452,27 @@ def _stage_program(stage):
                 i += 1  # the duration
             if bare == "sudo" and _sudo_edit_mode(words, j, i):
                 return "", ""
-            # S33 (Critic @89396cfb): a quoted eval operand is a command string, not one basename
-            if bare == "eval" and i < len(words) and words[i][:1] in "'\"":
-                cmd, k = _decoded_token(words, i)
-                words[i:k] = cmd.split()
-            # optional coproc NAME when the next word is the program (not `coproc grep -q`)
+            # S33 / S34: re-scan every decoded eval operand (quoted, ANSI-C $'...', or 'grep' '-q' x)
+            if bare == "eval" and i < len(words):
+                parts, k = [], i
+                while k < len(words):
+                    nxt = k
+                    plain, k = _decoded_token(words, k)
+                    if k <= nxt:
+                        k = nxt + 1
+                    parts.append(plain)
+                words[i:] = " ".join(parts).split()
+            # optional coproc NAME when the next word is the program, and this word is not a command
+            # (not `coproc grep -q`, and not `coproc echo grep -q`, which runs echo)
             if bare == "coproc" and i + 1 < len(words):
+                name_plain, _ = _decoded_token(words, i)
+                name = os.path.basename(name_plain.lstrip("\\"))
                 nxt_plain, _ = _decoded_token(words, i + 1)
                 nxt = os.path.basename(nxt_plain.lstrip("\\"))
-                if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", words[i]) and (
-                        nxt in _WRAPPERS or _is_grep(nxt) or nxt in (
-                            "{", "(", "head", "read", "awk", "gawk", "mawk", "perl", "sed")):
+                if (re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+                        and name not in _COPROC_NOT_NAME and not _is_grep(name)
+                        and (nxt in _WRAPPERS or _is_grep(nxt) or nxt in (
+                            "{", "(", "head", "read", "awk", "gawk", "mawk", "perl", "sed"))):
                     i += 1
             continue
         break
@@ -1857,7 +1888,11 @@ class PersistBehaviour(Sandboxed):
                      'if ls | coproc NAME grep -q x; then :; fi',
                      'if ls | coproc NAME /usr/bin/grep -q x; then :; fi',
                      'if ls | coproc NAME { grep -q x; }; then :; fi',
-                     'if ls | sudo -ue grep -q x; then :; fi'):
+                     'if ls | sudo -ue grep -q x; then :; fi',
+                     # S34 (Critic @26703d88): ANSI-C eval; joined eval operands
+                     "if ls | eval $'grep -q x'; then :; fi",
+                     "if ls | eval $'command grep -q x'; then :; fi",
+                     "if ls | eval 'grep' '-q' x; then :; fi"):
             self.assertTrue(hits(form), form)
         for form in ("if ls | awk '/exit/' >/dev/null; then :; fi", "if ls | awk '$1 ~ /exit/' >/dev/null; then :; fi",
                      "if ls | perl -ne 'print if /exit/' >/dev/null; then :; fi",
@@ -1885,7 +1920,12 @@ class PersistBehaviour(Sandboxed):
                      'if ls | sudo -e grep -q x; then :; fi',
                      'if ls | sudo --edit grep -q x; then :; fi',
                      'if ls | /usr/bin/sudo -e grep -q x; then :; fi',
-                     'if ls | sudo -ne grep -q x; then :; fi'):
+                     'if ls | sudo -ne grep -q x; then :; fi',
+                     # S34: coproc echo/printf are the command, not a NAME; eval of a variable stays a miss
+                     'if ls | coproc echo grep -q x; then :; fi',
+                     'if ls | coproc printf grep -q x; then :; fi',
+                     'if ls | eval "$x" >/dev/null; then :; fi',
+                     "if ls | eval \"echo 'grep -q x'\" >/dev/null; then :; fi"):
             self.assertFalse(hits(form), form)
         for form in ("if ls | awk '/x/ {exit}'; then :; fi", "if ls | perl -ne 'exit if /x/'; then :; fi",
                      "if ls | awk '$1 ~ /x/ {exit}'; then :; fi"):
@@ -2274,10 +2314,11 @@ class ThisFile(unittest.TestCase):
                 compile_as_error(dirty, os.path.join(td, "dirty.pyc"))
 
     def test_the_compile_guard_requires_a_dirty_invalid_escape_snippet(self):
-        # Probe @89396cfb: AST-inspect the compile-guard method. A gutted body that only keeps the
-        # old string literals, or that comments out the dirty compile, must fail; a renamed-equivalent
-        # assertRaises((__import__('py_compile').PyCompileError)) is accepted. compiled[0] == __file__
-        # is pinned here, so dropping that assert (alone or with a /dev/null swap) is red.
+        # Probe @89396cfb / @26703d88: AST-inspect the compile-guard method. A gutted body that only
+        # keeps the old literals must fail; a renamed-equivalent assertRaises(PyCompileError) is
+        # accepted; compiled[0] == __file__ is pinned. The dirty compile and the __file__ compile
+        # must be reachable top-level work (not under `if False:` and not after return/raise), and
+        # compiled entries must come from a real py_compile.compile (not compiled.append(__file__)).
         with open(__file__, encoding="utf-8") as f:
             tree = ast.parse(f.read(), filename=__file__)
 
@@ -2296,22 +2337,74 @@ class ThisFile(unittest.TestCase):
                 return fn
             return None
 
-        func = None
-        for node in tree.body:
-            if isinstance(node, ast.ClassDef) and node.name == "ThisFile":
-                for item in node.body:
-                    if isinstance(item, ast.FunctionDef) and item.name == "test_this_file_compiles_with_no_syntax_warnings":
-                        func = item
-        self.assertIsNotNone(func, "test_this_file_compiles_with_no_syntax_warnings is missing")
+        def const_truth(node):
+            if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+                inner = const_truth(node.operand)
+                return None if inner is None else (not inner)
+            if isinstance(node, ast.Constant):
+                try:
+                    return bool(node.value)
+                except Exception:
+                    return None
+            return None
 
-        wrote_dirty = False
-        needle = "\\" + "grep"
-        for node in ast.walk(func):
-            if isinstance(node, ast.Call) and (dotted(node.func) or "").split(".")[-1] == "write":
-                for sub in ast.walk(node):
-                    if isinstance(sub, ast.Constant) and isinstance(sub.value, str) and needle in sub.value:
-                        wrote_dirty = True
-        self.assertTrue(wrote_dirty, "compile-guard must write a dirty invalid-escape snippet")
+        def walk_block(stmts, alive):
+            """Yield (node, reachable) for statements and their parts; skip nested def/class bodies."""
+            still = alive
+            for stmt in stmts:
+                if isinstance(stmt, ast.If):
+                    yield stmt, still
+                    for n in ast.walk(stmt.test):
+                        yield n, still
+                    cond = const_truth(stmt.test)
+                    yield from walk_block(stmt.body, still and cond is not False)
+                    yield from walk_block(stmt.orelse, still and cond is not True)
+                elif isinstance(stmt, ast.While):
+                    yield stmt, still
+                    for n in ast.walk(stmt.test):
+                        yield n, still
+                    yield from walk_block(stmt.body, still and const_truth(stmt.test) is not False)
+                    yield from walk_block(stmt.orelse, still)
+                elif isinstance(stmt, (ast.For, ast.AsyncFor)):
+                    yield stmt, still
+                    for n in ast.walk(stmt.target):
+                        yield n, still
+                    for n in ast.walk(stmt.iter):
+                        yield n, still
+                    yield from walk_block(stmt.body, still)
+                    yield from walk_block(stmt.orelse, still)
+                elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+                    yield stmt, still
+                    for item in stmt.items:
+                        for n in ast.walk(item.context_expr):
+                            yield n, still
+                        if item.optional_vars is not None:
+                            for n in ast.walk(item.optional_vars):
+                                yield n, still
+                    yield from walk_block(stmt.body, still)
+                elif isinstance(stmt, ast.Try):
+                    yield stmt, still
+                    yield from walk_block(stmt.body, still)
+                    for h in stmt.handlers:
+                        if h.type is not None:
+                            for n in ast.walk(h.type):
+                                yield n, still
+                        yield from walk_block(h.body, still)
+                    yield from walk_block(stmt.orelse, still)
+                    yield from walk_block(stmt.finalbody, still)
+                elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    yield stmt, still
+                else:
+                    yield stmt, still
+                    for n in ast.walk(stmt):
+                        if n is not stmt:
+                            yield n, still
+                if still and isinstance(stmt, (ast.Return, ast.Raise)):
+                    still = False
+
+        def is_py_compile_call(call):
+            fn = dotted(call.func) or ""
+            return fn.split(".")[-1] == "compile" and not fn.endswith("compile_as_error")
 
         def raises_pycompile(expr):
             if not isinstance(expr, ast.Call):
@@ -2323,22 +2416,6 @@ class ThisFile(unittest.TestCase):
                 return False
             return (dotted(expr.args[0]) or "").endswith("PyCompileError")
 
-        dirty_compile = False
-        for node in ast.walk(func):
-            if isinstance(node, ast.With) and any(raises_pycompile(it.context_expr) for it in node.items):
-                for sub in ast.walk(ast.Module(body=list(node.body), type_ignores=[])):
-                    if isinstance(sub, ast.Call):
-                        fn = (dotted(sub.func) or "").split(".")[-1]
-                        if "compile" in fn:
-                            dirty_compile = True
-        self.assertTrue(dirty_compile, "compile-guard must compile the dirty snippet under assertRaises(PyCompileError)")
-
-        compiles_self = False
-        for node in ast.walk(func):
-            if isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Name) and node.args[0].id == "__file__":
-                compiles_self = True
-        self.assertTrue(compiles_self, "compile-guard must py_compile this file (__file__)")
-
         def is_abspath_file(node):
             if isinstance(node, ast.Name) and node.id == "__file__":
                 return True
@@ -2349,12 +2426,75 @@ class ThisFile(unittest.TestCase):
             return (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant)
                     and node.slice.value == 0)
 
+        func = None
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and node.name == "ThisFile":
+                for item in node.body:
+                    if isinstance(item, ast.FunctionDef) and item.name == "test_this_file_compiles_with_no_syntax_warnings":
+                        func = item
+        self.assertIsNotNone(func, "test_this_file_compiles_with_no_syntax_warnings is missing")
+
+        helpers = set()
+        for node in func.body:
+            if isinstance(node, ast.FunctionDef) and node.args.args:
+                path_param = node.args.args[0].arg
+                for n in ast.walk(node):
+                    if isinstance(n, ast.Call) and is_py_compile_call(n) and n.args:
+                        arg0 = n.args[0]
+                        if isinstance(arg0, ast.Name) and arg0.id == path_param:
+                            helpers.add(node.name)
+                            break
+
+        reached = list(walk_block(func.body, True))
+
+        wrote_dirty = False
+        needle = "\\" + "grep"
+        for node, alive in reached:
+            if not alive or not isinstance(node, ast.Call):
+                continue
+            if (dotted(node.func) or "").split(".")[-1] != "write":
+                continue
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Constant) and isinstance(sub.value, str) and needle in sub.value:
+                    wrote_dirty = True
+        self.assertTrue(wrote_dirty, "compile-guard must write a dirty invalid-escape snippet")
+
+        dirty_compile = False
+        for node, alive in reached:
+            if not alive or not isinstance(node, ast.With):
+                continue
+            if not any(raises_pycompile(it.context_expr) for it in node.items):
+                continue
+            for inner, inner_alive in walk_block(node.body, True):
+                if not inner_alive or not isinstance(inner, ast.Call):
+                    continue
+                fn = dotted(inner.func) or ""
+                tail = fn.split(".")[-1]
+                if is_py_compile_call(inner) or tail in helpers:
+                    dirty_compile = True
+        self.assertTrue(dirty_compile, "compile-guard must reachably compile the dirty snippet under assertRaises(PyCompileError)")
+
+        compiles_self = False
+        for node, alive in reached:
+            if not alive or not isinstance(node, ast.Call) or not node.args:
+                continue
+            if not (isinstance(node.args[0], ast.Name) and node.args[0].id == "__file__"):
+                continue
+            fn = dotted(node.func) or ""
+            tail = fn.split(".")[-1]
+            if is_py_compile_call(node) or tail in helpers:
+                compiles_self = True
+        self.assertTrue(compiles_self, "compile-guard must reachably py_compile this file (__file__)")
+
         pinned = False
-        for node in ast.walk(func):
-            if isinstance(node, ast.Call) and (dotted(node.func) or "").endswith("assertEqual") and len(node.args) >= 2:
-                a, b = node.args[0], node.args[1]
-                if (is_compiled_0(a) and is_abspath_file(b)) or (is_compiled_0(b) and is_abspath_file(a)):
-                    pinned = True
+        for node, alive in reached:
+            if not alive or not isinstance(node, ast.Call):
+                continue
+            if not (dotted(node.func) or "").endswith("assertEqual") or len(node.args) < 2:
+                continue
+            a, b = node.args[0], node.args[1]
+            if (is_compiled_0(a) and is_abspath_file(b)) or (is_compiled_0(b) and is_abspath_file(a)):
+                pinned = True
         self.assertTrue(pinned, "compile-guard must assert compiled[0] == abspath(__file__)")
 
 
