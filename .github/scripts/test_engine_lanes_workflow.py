@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import py_compile
 import re
 import shutil
 import subprocess
@@ -17,6 +18,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+import warnings
 
 try:
     import yaml
@@ -87,7 +89,7 @@ def logical_lines(run):
         out.append(cur)
     return out
 
-_GREPS = ("grep", "egrep", "fgrep", "rg")
+_GREPS = ("grep", "egrep", "fgrep", "rg", "ggrep", "gegrep", "gfgrep", "bsdgrep")
 _GREP_ARG_OPTS = ("-e", "-f", "-A", "-B", "-C", "-d", "-D", "--regexp", "--file", "--context", "--after-context",
                   "--before-context", "--directories", "--devices", "--label", "--include", "--exclude",
                   "--exclude-dir", "--color", "--colour", "--binary-files")
@@ -237,8 +239,9 @@ _WRAPPERS = {"command": (), "builtin": (), "exec": ("-a",), "env": ("-u", "--uns
 
 def _stage_program(stage):
     r"""(program, rest) of a pipeline stage. Leading VAR=val words and wrappers (command, builtin, exec, env, timeout
-    with its duration, nice, stdbuf, nohup, time) and their options are skipped; the program word loses a leading
-    backslash, quotes and its directory (\grep, "grep", /usr/bin/grep -> grep)."""
+    with its duration, nice, stdbuf, nohup, time, sudo, busybox) and their options are skipped; a wrapper may be
+    path-prefixed, quoted or backslash-escaped (/usr/bin/sudo, /bin/busybox, "env", \timeout). The program word loses
+    a leading backslash, quotes and its directory (\grep, "grep", /usr/bin/grep -> grep). ggrep is also grep."""
     words = stage.split()
     i = 0
     while i < len(words):
@@ -251,18 +254,19 @@ def _stage_program(stage):
         if _ASSIGN.match(w):
             i += 1
             continue
-        if w in _WRAPPERS:
-            takes = _WRAPPERS[w]
+        bare = os.path.basename(w.lstrip("\\").strip("'\""))
+        if bare in _WRAPPERS:
+            takes = _WRAPPERS[bare]
             i += 1
             while i < len(words) and words[i].startswith("-") and words[i] != "-":
                 opt = words[i]
                 i += 2 if opt in takes else 1
                 if opt == "--":
                     break
-            if w == "env":
+            if bare == "env":
                 while i < len(words) and _ASSIGN.match(words[i]):
                     i += 1
-            if w == "timeout" and i < len(words):
+            if bare == "timeout" and i < len(words):
                 i += 1  # the duration
             continue
         break
@@ -289,7 +293,7 @@ def _sed_code(rest):
 
 
 def _is_grep(prog):
-    """grep / egrep / fgrep, or a variable holding one ($GREP, ${GREP}, $grep_cmd: any name with grep in it)."""
+    """grep / egrep / fgrep / ggrep / gegrep / gfgrep / bsdgrep / rg, or a variable holding one ($GREP, ${GREP}, $grep_cmd: any name with grep in it)."""
     if prog in _GREPS:
         return True
     m = re.fullmatch(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", prog)
@@ -380,7 +384,9 @@ def early_exit_pipe_grep(line):
     - grep / egrep / fgrep (also wrapped, \grep, "grep", /usr/bin/grep, $GREP) after `|` or `|&` with -q, --quiet,
       --silent, -m, --max-count, -l, -L or the long forms, anywhere in its argv; also inside any $( ) (quoted or
       nested) and as any command of a { } / ( ) group the pipe feeds: (flag, stage). rg too; sudo / busybox are
-      wrappers; a GNU long-option prefix (--qui, --max=1) counts; a bash/sh -c '...' script is read the same way.
+      wrappers (path-prefixed too: /usr/bin/sudo, /bin/busybox, /usr/bin/env); ggrep, gegrep, gfgrep and bsdgrep
+      count as grep; a GNU long-option prefix
+      (--qui, --max=1) counts; a bash/sh -c '...' script is read the same way.
     - a `| while` / `| until` loop on a line with a break.
     - head, read, `awk`/`perl ... exit` or `sed ... q` in a pipeline that is a condition (if / elif / while / until,
       !, && / ||), outside $( ) or inside one (nested too) assigned in the condition: (program, line)."""
@@ -1626,7 +1632,27 @@ class PersistBehaviour(Sandboxed):
                      'sh -c "if v=\\"\\$(git log | head -1)\\"; then :; fi"',
                      'if ls | builtin read -r v; then :; fi', 'if ls | nohup grep -q x; then :; fi',
                      'if ls | time -p grep -q x; then :; fi', 'if ls | time grep -q x; then :; fi',
-                     'if ls | exec grep -q x; then :; fi'):
+                     'if ls | exec grep -q x; then :; fi',
+                     # S30 (Critic @0149c891): path-prefixed wrappers, and ggrep
+                     'if ls | /usr/bin/sudo grep -q x; then :; fi',
+                     'if ls | /usr/bin/sudo -u root grep -q x; then :; fi',
+                     'if ls | /bin/busybox grep -q x; then :; fi',
+                     'if ls | ggrep -q x; then :; fi', 'if ls | /usr/bin/ggrep -q x; then :; fi',
+                     'if ls | /usr/bin/env grep -q x; then :; fi',
+                     'if ls | /usr/bin/env LC_ALL=C grep -q x; then :; fi',
+                     'if ls | /usr/bin/timeout 5 grep -q x; then :; fi',
+                     # S30 (Probe @0149c891): more path-prefixed wrappers, and gegrep / gfgrep / bsdgrep
+                     'if ls | /bin/sudo grep -q x; then :; fi',
+                     'if ls | /usr/bin/busybox grep -q x; then :; fi',
+                     'if ls | /usr/bin/nice grep -q x; then :; fi',
+                     'if ls | /usr/bin/stdbuf -oL grep -q x; then :; fi',
+                     'if ls | /usr/bin/nohup grep -q x; then :; fi',
+                     'if ls | /usr/bin/time -p grep -q x; then :; fi',
+                     'if ls | command -p /usr/bin/sudo grep -q x; then :; fi',
+                     'if ls | gegrep -q x; then :; fi', 'if ls | gfgrep -q x; then :; fi',
+                     'if ls | bsdgrep -q x; then :; fi', 'if ls | /usr/bin/gegrep -q x; then :; fi',
+                     'if ls | /usr/bin/env /usr/bin/grep -q x; then :; fi',
+                     'if ls | env /usr/bin/timeout 5 grep -q x; then :; fi'):
             self.assertTrue(hits(form), form)
         for form in ("if ls | awk '/exit/' >/dev/null; then :; fi", "if ls | awk '$1 ~ /exit/' >/dev/null; then :; fi",
                      "if ls | perl -ne 'print if /exit/' >/dev/null; then :; fi",
@@ -1634,7 +1660,8 @@ class PersistBehaviour(Sandboxed):
                      'if ls | grep --fi=p x >/dev/null; then :; fi', 'if ls | grep --line x >/dev/null; then :; fi',
                      'if ls | rg -E utf8 x >/dev/null; then :; fi', 'if ls | rg -g -q x >/dev/null; then :; fi', 'git log | while read -r l; do echo "$l"; done',
                      'for x in a b; do ls | grep -x "$x" >/dev/null || break; done',
-                     "bash -c 'git log | grep -x a >/dev/null'", 'if x=1 v="$(git log | grep -c a)"; then :; fi'):
+                     "bash -c 'git log | grep -x a >/dev/null'", 'if x=1 v="$(git log | grep -c a)"; then :; fi',
+                     'if ls | /usr/bin/sudoedit grep -q x; then :; fi'):
             self.assertFalse(hits(form), form)
         for form in ("if ls | awk '/x/ {exit}'; then :; fi", "if ls | perl -ne 'exit if /x/'; then :; fi",
                      "if ls | awk '$1 ~ /x/ {exit}'; then :; fi"):
@@ -1998,6 +2025,15 @@ class RedactionBehaviour(Sandboxed):
             self.assertIn("::error title=Keyless secrets::", r.stdout)
         r = self.box.run_step(st, {"HAS_READ": "true", "HAS_DATA": "true"})
         self.assertEqual(r.returncode, 0)
+
+
+class ThisFile(unittest.TestCase):
+    def test_this_file_compiles_with_no_syntax_warnings(self):
+        # S29 (Critic / Probe @0149c891): py_compile this file with warnings as errors
+        with tempfile.TemporaryDirectory() as td:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                py_compile.compile(__file__, cfile=os.path.join(td, "t.pyc"), doraise=True)
 
 
 if __name__ == "__main__":
